@@ -1,8 +1,2 @@
 # fuzzy
 アプリデザイン総合演習
-
-
-iyadaaaaaaaaaaaaaaaaaaaaaaaa
-tasuketeeeeeeeeeeeeeeeeeeeee
-競合競合競合競合
-死刑死刑死刑死刑
