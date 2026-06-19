@@ -7,3 +7,11 @@ nananan
 manmamfp@
 fkjopfjfw
 uooooooooooooooooooooooooooooooooooooooooooo
+NaN
+NaN 
+Error              Error
+Error     Error
+Error                              Error
+Error
+Error
+Error
