@@ -1,0 +1,18 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = tab
+indent_size = 2
+
+# YAML はタブ不可（スペース必須）
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# Markdown は行末スペース（改行）を保持
+[*.md]
+trim_trailing_whitespace = false

@@ -1,0 +1,40 @@
+# 依存関係
+node_modules/
+
+# ビルド成果物
+dist/
+build/
+.output/
+.wxt/
+stats.html
+
+# Tauri / Rust
+target/
+**/*.rs.bk
+apps/desktop/src-tauri/gen/
+
+# 環境変数・秘密情報
+.env
+.env.*
+!.env.example
+
+# 実行時データ（アプリが作る実データはコミットしない）
+*.db
+*.sqlite
+*.sqlite3
+/data/
+
+# ログ
+*.log
+bun-debug.log*
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# VS Code は共有設定のみコミット
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json

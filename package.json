@@ -1,0 +1,25 @@
+{
+	"name": "fuzzy",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"workspaces": ["packages/*"],
+	"engines": { "bun": ">=1.1.0" },
+	"scripts": {
+		"format": "biome format --write . && prettier --write \"**/*.svelte\"",
+		"lint": "biome lint --write .",
+		"check": "biome check --write . && prettier --write \"**/*.svelte\"",
+		"check:ci": "biome ci . && prettier --check \"**/*.svelte\"",
+		"typecheck": "tsc --noEmit -p packages/shared/tsconfig.json",
+		"build": "bun run check && bun run typecheck",
+		"fmt:rust": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all",
+		"lint:rust": "cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "1.9.4",
+		"prettier": "^3.3.3",
+		"prettier-plugin-svelte": "^3.2.6",
+		"svelte": "^4.2.19",
+		"typescript": "^5.6.2"
+	}
+}
