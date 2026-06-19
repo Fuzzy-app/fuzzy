@@ -1,0 +1,5 @@
+# チーム規約：インデントはタブで統一（Rust 標準はスペースだが本PJはタブに合わせる）
+hard_tabs = true
+edition = "2021"
+max_width = 100
+newline_style = "Unix"
