@@ -1,0 +1,38 @@
+[
+	{
+		"id": 1,
+		"moodleCourseId": "course-350",
+		"name": "情報アーキテクチャ",
+		"term": "2026前期"
+	},
+	{
+		"id": 2,
+		"moodleCourseId": "course-412",
+		"name": "データベース",
+		"term": "2026前期"
+	},
+	{
+		"id": 3,
+		"moodleCourseId": "course-318",
+		"name": "離散数学",
+		"term": "2026前期"
+	},
+	{
+		"id": 4,
+		"moodleCourseId": "course-350-app",
+		"name": "アプリ演習",
+		"term": "2026前期"
+	},
+	{
+		"id": 5,
+		"moodleCourseId": "course-274",
+		"name": "認知科学概論",
+		"term": "2026前期"
+	},
+	{
+		"id": 6,
+		"moodleCourseId": "course-501",
+		"name": "英語IIB",
+		"term": "2026前期"
+	}
+]

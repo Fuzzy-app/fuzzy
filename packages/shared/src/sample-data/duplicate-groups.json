@@ -1,0 +1,18 @@
+[
+	{
+		"groupId": 1,
+		"method": "exact",
+		"members": [
+			{
+				"fileId": 3,
+				"fileName": "第4回_正規化.pdf",
+				"similarity": 1.0
+			},
+			{
+				"fileId": 9,
+				"fileName": "第4回_正規化(1).pdf",
+				"similarity": 1.0
+			}
+		]
+	}
+]

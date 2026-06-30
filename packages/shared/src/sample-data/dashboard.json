@@ -1,0 +1,49 @@
+{
+	"courses": [
+		{
+			"courseId": 1,
+			"courseName": "情報アーキテクチャ",
+			"fileCount": 2,
+			"violationCount": 0,
+			"nextDueAt": "2026-07-03T17:00:00"
+		},
+		{
+			"courseId": 2,
+			"courseName": "データベース",
+			"fileCount": 3,
+			"violationCount": 2,
+			"nextDueAt": "2026-07-04T23:59:00"
+		},
+		{
+			"courseId": 3,
+			"courseName": "離散数学",
+			"fileCount": 1,
+			"violationCount": 0,
+			"nextDueAt": null
+		},
+		{
+			"courseId": 4,
+			"courseName": "アプリ演習",
+			"fileCount": 1,
+			"violationCount": 0,
+			"nextDueAt": null
+		},
+		{
+			"courseId": 5,
+			"courseName": "認知科学概論",
+			"fileCount": 1,
+			"violationCount": 0,
+			"nextDueAt": "2027-05-10T23:59:00"
+		},
+		{
+			"courseId": 6,
+			"courseName": "英語IIB",
+			"fileCount": 1,
+			"violationCount": 0,
+			"nextDueAt": null
+		}
+	],
+	"totalFiles": 9,
+	"totalViolations": 2,
+	"upcomingDeadlineCount": 3
+}

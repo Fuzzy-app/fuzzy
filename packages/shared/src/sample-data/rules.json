@@ -1,0 +1,12 @@
+{
+	"globalPatternTemplate": "{year}/{term}/{course}/第{section}回",
+	"courseOverrides": [
+		{
+			"courseId": 4,
+			"courseName": "アプリ演習",
+			"splitBySection": false,
+			"patternTemplate": "{year}/{term}/{course}",
+			"note": "実習課題はまとめて1フォルダで管理したいため回ごとに分けない"
+		}
+	]
+}

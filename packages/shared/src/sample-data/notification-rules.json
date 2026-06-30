@@ -1,0 +1,26 @@
+[
+	{
+		"id": 1,
+		"offsetMinutes": 4320,
+		"label": "3日前",
+		"enabled": true
+	},
+	{
+		"id": 2,
+		"offsetMinutes": 1440,
+		"label": "1日前",
+		"enabled": true
+	},
+	{
+		"id": 3,
+		"offsetMinutes": 540,
+		"label": "当日 9:00",
+		"enabled": true
+	},
+	{
+		"id": 4,
+		"offsetMinutes": 60,
+		"label": "1時間前",
+		"enabled": false
+	}
+]

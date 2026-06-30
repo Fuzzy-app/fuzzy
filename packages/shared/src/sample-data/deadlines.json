@@ -1,0 +1,68 @@
+[
+	{
+		"id": 1,
+		"courseId": 2,
+		"courseName": "データベース",
+		"title": "正規化レポート提出",
+		"source": "moodle_dashboard",
+		"dueAt": "2026-07-04T23:59:00",
+		"dueAtStatus": "normal",
+		"submissionMode": "moodle_auto",
+		"submitted": false
+	},
+	{
+		"id": 2,
+		"courseId": 1,
+		"courseName": "情報アーキテクチャ",
+		"title": "第9回 演習課題",
+		"source": "file_content",
+		"dueAt": "2026-07-03T17:00:00",
+		"dueAtStatus": "normal",
+		"submissionMode": "manual",
+		"submitted": false
+	},
+	{
+		"id": 3,
+		"courseId": 4,
+		"courseName": "アプリ演習",
+		"title": "中間プレゼン資料の提出",
+		"source": "moodle_text",
+		"dueAt": "2026-07-02T12:00:00",
+		"dueAtStatus": "normal",
+		"submissionMode": "moodle_auto",
+		"submitted": true
+	},
+	{
+		"id": 4,
+		"courseId": 3,
+		"courseName": "離散数学",
+		"title": "離散数学 小テスト範囲確認",
+		"source": "moodle_dashboard",
+		"dueAt": "2026-06-29T23:59:00",
+		"dueAtStatus": "normal",
+		"submissionMode": "notify_only",
+		"submitted": false
+	},
+	{
+		"id": 5,
+		"courseId": 5,
+		"courseName": "認知科学概論",
+		"title": "認知科学概論 期末レポート",
+		"source": "moodle_dashboard",
+		"dueAt": "2027-05-10T23:59:00",
+		"dueAtStatus": "needs_review",
+		"submissionMode": "moodle_auto",
+		"submitted": false
+	},
+	{
+		"id": 6,
+		"courseId": 6,
+		"courseName": "英語IIB",
+		"title": "英語IIB 単語テスト",
+		"source": "moodle_dashboard",
+		"dueAt": "2026-06-20T23:59:00",
+		"dueAtStatus": "normal",
+		"submissionMode": "notify_only",
+		"submitted": false
+	}
+]
