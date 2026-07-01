@@ -58,9 +58,9 @@ docs/*      ドキュメント
 ## 担当（機能＝担当。README.mdが正）
 
 - subaru: API定義・DB定義・`crates/engine-core`・`apps/native-host`・`packages/shared`・`docs/api/contract.md`
-- okaji: `apps/extension` の資料保存UI
-- hirase: `apps/desktop`、`apps/extension` のルール管理・整合性チェック画面
-- matoba: `apps/extension` の活用UI（検索・締切ハブ・ダッシュボード・カレンダー連携・通知）
+- matoba: `apps/extension` の資料保存UI（保存先サジェスト・一括DL・ZIP提案）
+- okaji: `apps/desktop`（初期セットアップ画面）、`apps/extension` のルール管理・整合性チェック画面
+- hirase: `apps/extension` の活用UI（検索・締切ハブ・ダッシュボード・カレンダー連携・通知）
 
 ## AIが作業する際の注意
 

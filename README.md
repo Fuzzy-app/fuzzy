@@ -68,9 +68,9 @@ docs/
 ## 担当（機能＝担当）
 
 - subaru: API定義（Native Messaging・Tauriコマンド・ts-rs型方針）、DB定義、`crates/engine-core`、`apps/native-host`、`packages/shared`、`docs/api/contract.md`
-- okaji: `apps/extension` の資料保存UI（保存先サジェスト・一括DL・ZIP提案）
-- hirase: `apps/desktop`（初期セットアップ画面）、`apps/extension` のルール管理・整合性チェック画面（カスタムルール・コース別例外・違反警告）
-- matoba: `apps/extension` の活用UI（横断検索・締切ハブ・ダッシュボード・カレンダー連携・通知）
+- matoba: `apps/extension` の資料保存UI（保存先サジェスト・一括DL・ZIP提案）
+- okaji: `apps/desktop`（初期セットアップ画面）、`apps/extension` のルール管理・整合性チェック画面（カスタムルール・コース別例外・違反警告）
+- hirase: `apps/extension` の活用UI（横断検索・締切ハブ・ダッシュボード・カレンダー連携・通知）
 - 接点: 拡張⇄ホスト間のAPI（`packages/shared` の型と `docs/api/contract.md`）。変更は PR で相談
 
 ## GitHub運用
