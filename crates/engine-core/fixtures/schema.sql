@@ -94,3 +94,27 @@ CREATE TABLE search_index_meta (
 	indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
 	page_count INTEGER
 );
+
+-- Moodleからの課題・締切データ取得（同期）1回ごとの記録。データ取得通知の元データ
+CREATE TABLE sync_events (
+	id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+	synced_at                TEXT NOT NULL DEFAULT (datetime('now')),
+	trigger                  TEXT NOT NULL DEFAULT 'auto' CHECK (trigger IN ('manual', 'auto')),
+	new_assignment_count     INTEGER NOT NULL DEFAULT 0,
+	changed_assignment_count INTEGER NOT NULL DEFAULT 0,
+	removed_assignment_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_sync_events_synced_at ON sync_events(synced_at);
+
+-- 同期ごとに検出された課題の変更点（変更点表示の元データ）。1課題1フィールド1行
+CREATE TABLE assignment_changes (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	sync_event_id INTEGER NOT NULL REFERENCES sync_events(id) ON DELETE CASCADE,
+	assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+	field         TEXT NOT NULL CHECK (field IN ('due_at', 'title', 'submission_mode', 'due_at_status', 'submitted')),
+	old_value     TEXT,
+	new_value     TEXT,
+	detected_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
+CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);

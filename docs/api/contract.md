@@ -43,12 +43,22 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `getDuplicateGroups`       | 重複ファイル一覧                | `{}` → `DuplicateGroup[]`                           |
 | `getNotificationRules`     | 通知タイミング設定取得             | `{}` → `NotificationRule[]`                         |
 | `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules[] }` → `{ ok }`                            |
+| `getLatestSyncEvent`       | 直近の同期結果取得（データ取得通知用）     | `{}` → `DataSyncEvent \| null`                      |
+| `getAssignmentChanges`     | 同期で検出された課題の変更点一覧（変更点表示用） | `{ sinceSyncEventId? }` → `AssignmentChange[]`      |
 | `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 
 ### 1.3 起動・接続方針
 
 `docs/仕様書.md` 3.3節のとおり、Moodleドメインのタブが存在する間 `connectNative` で接続を維持する。拡張機能側は `ping` にタイムアウト（目安800ms）を設定し、応答がなければサンプルデータへのモック動作にフォールバックする（`packages/shared/src/api/`）。単発のコマンド（ルール更新など）は `sendNativeMessage` でも構わない。
+
+### 1.4 データ取得通知・変更点表示のフロー
+
+Moodleから課題・締切データを取得（同期）した直後、拡張機能は次の手順で「データ取得通知」と「変更点の表示」を行う（`docs/仕様書.md` 1.3節）。
+
+1. native-host側は同期完了ごとに `sync_events` に1行追加し、変更を検出した課題ごとに `assignment_changes` へ差分を記録する（`データベース設計.md` 参照）
+2. 拡張機能は同期完了を検知したら `getLatestSyncEvent` を呼び、`new/changed/removed_assignment_count` を使ってブラウザ通知を出す（例:「Moodleからデータを取得しました（変更2件）」）。変更が0件でも取得したこと自体は通知する
+3. 通知または締切ハブから「変更点を見る」操作をした際は `getAssignmentChanges({ sinceSyncEventId })` で対象同期以降の差分一覧を取得し、`field` ごとに変更前後の値（`oldValue` → `newValue`）を表示する
 
 ---
 

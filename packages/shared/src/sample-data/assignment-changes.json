@@ -1,0 +1,20 @@
+[
+	{
+		"assignmentId": 5,
+		"courseName": "認知科学概論",
+		"title": "認知科学概論 期末レポート",
+		"field": "dueAtStatus",
+		"oldValue": "normal",
+		"newValue": "needs_review",
+		"detectedAt": "2026-07-01T08:00:00"
+	},
+	{
+		"assignmentId": 1,
+		"courseName": "データベース",
+		"title": "正規化レポート提出",
+		"field": "dueAt",
+		"oldValue": "2026-07-03T23:59:00",
+		"newValue": "2026-07-04T23:59:00",
+		"detectedAt": "2026-07-01T08:00:00"
+	}
+]

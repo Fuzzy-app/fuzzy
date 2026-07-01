@@ -1,3 +1,4 @@
+import assignmentChanges from "../sample-data/assignment-changes.json" with {type: "json"};
 import courses from "../sample-data/courses.json" with {type: "json"};
 import dashboard from "../sample-data/dashboard.json" with {type: "json"};
 import deadlines from "../sample-data/deadlines.json" with {type: "json"};
@@ -6,10 +7,13 @@ import notificationRules from "../sample-data/notification-rules.json" with {typ
 import ruleViolations from "../sample-data/rule-violations.json" with {type: "json"};
 import rules from "../sample-data/rules.json" with {type: "json"};
 import searchResults from "../sample-data/search-results.json" with {type: "json"};
+import syncEvents from "../sample-data/sync-events.json" with {type: "json"};
 import type {FuzzyApiClient} from "./client";
 import type {
 	Assignment,
+	AssignmentChange,
 	DashboardSummary,
+	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
 	NotificationRule,
@@ -95,5 +99,21 @@ export class MockApiClient implements FuzzyApiClient {
 	async updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
 		this.notificationRules = rules;
 		return delay({ok: true});
+	}
+
+	async getLatestSyncEvent(): Promise<DataSyncEvent | null> {
+		const events = syncEvents as DataSyncEvent[];
+		return delay(events[events.length - 1] ?? null);
+	}
+
+	async getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]> {
+		// サンプルデータは直近の同期（sync_events末尾）1回分の変更点のみを保持している。
+		// sinceSyncEventIdがそれより新しい同期を指す場合は差分なしとして扱う
+		const events = syncEvents as DataSyncEvent[];
+		const latestId = events[events.length - 1]?.id;
+		if (sinceSyncEventId !== undefined && latestId !== undefined && sinceSyncEventId >= latestId) {
+			return delay([]);
+		}
+		return delay(assignmentChanges as AssignmentChange[]);
 	}
 }

@@ -49,4 +49,21 @@ describe("MockApiClient（サンプルデータ）", () => {
 		const result = await client.getNotificationRules();
 		expect(result).toEqual(updated);
 	});
+
+	test("getLatestSyncEvent: 直近の同期結果（データ取得通知用）が返る", async () => {
+		const event = await client.getLatestSyncEvent();
+		expect(event?.changedAssignmentCount).toBe(2);
+	});
+
+	test("getAssignmentChanges: 直近の同期で検出された変更点が返る", async () => {
+		const changes = await client.getAssignmentChanges();
+		expect(changes.length).toBe(2);
+		expect(changes.some((c) => c.field === "dueAtStatus" && c.newValue === "needs_review")).toBe(true);
+	});
+
+	test("getAssignmentChanges: 最新の同期ID以降を指定すると差分なしになる", async () => {
+		const latest = await client.getLatestSyncEvent();
+		const changes = await client.getAssignmentChanges(latest?.id);
+		expect(changes.length).toBe(0);
+	});
 });

@@ -60,3 +60,16 @@ INSERT INTO notification_rules (offset_minutes, label, enabled) VALUES
 
 INSERT INTO search_index_meta (file_id, page_count) VALUES
 	(1, 32), (2, 4), (3, 18), (4, 2), (5, 27), (6, 22), (7, 14), (8, 9);
+
+-- 直近の同期イベント（データ取得通知・変更点表示のサンプル）
+INSERT INTO sync_events (id, synced_at, trigger, new_assignment_count, changed_assignment_count, removed_assignment_count) VALUES
+	(1, '2026-06-30T08:00:00', 'auto', 0, 0, 0),
+	(2, '2026-07-01T08:00:00', 'auto', 1, 2, 0);
+-- sync_event 2 が最新の取得。app_settings.last_full_scan_at と揃えている
+
+INSERT INTO assignment_changes (sync_event_id, assignment_id, field, old_value, new_value, detected_at) VALUES
+	-- 認知科学概論 期末レポート：締切そのものは変わっていないが、学期範囲チェックにより要確認へ変化した例
+	(2, 5, 'due_at_status', 'normal', 'needs_review', '2026-07-01T08:00:00'),
+	-- 正規化レポート提出：Moodle側で締切が延長された例
+	(2, 1, 'due_at', '2026-07-03T23:59:00', '2026-07-04T23:59:00', '2026-07-01T08:00:00');
+-- assignments.id=1（正規化レポート提出）は上記変更を反映した最新の due_at で登録済み

@@ -2,7 +2,9 @@ import type {FuzzyApiClient} from "./client";
 import {ApiError} from "./client";
 import type {
 	Assignment,
+	AssignmentChange,
 	DashboardSummary,
+	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
 	NotificationRule,
@@ -107,5 +109,13 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
 		return this.send("updateNotificationRules", {rules});
+	}
+
+	getLatestSyncEvent(): Promise<DataSyncEvent | null> {
+		return this.send("getLatestSyncEvent", {});
+	}
+
+	getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]> {
+		return this.send("getAssignmentChanges", {sinceSyncEventId});
 	}
 }

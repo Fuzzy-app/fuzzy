@@ -73,6 +73,8 @@ docs/
 - matoba: `apps/extension` の活用UI（横断検索・締切ハブ・ダッシュボード・カレンダー連携・通知）
 - 接点: 拡張⇄ホスト間のAPI（`packages/shared` の型と `docs/api/contract.md`）。変更は PR で相談
 
-## ブランチ運用
+## GitHub運用
 
-main は保護。作業は `feature/担当-内容` ブランチ → PR → 1人レビュー → CI 通過後にマージ。
+- gitフローで開発
+- main は保護。作業は `feat/担当-内容` ブランチ → PR → 1人レビュー → CI 通過後にマージ。
+- コミットメッセージは [`.github/COMMIT_MESSAGE_TEMPLATE.md`](.github/COMMIT_MESSAGE_TEMPLATE.md) に従ってください。

@@ -94,3 +94,26 @@ export interface DeadlineFilter {
 	includePast?: boolean;
 	needsReviewOnly?: boolean;
 }
+
+/** Moodleからの課題・締切データ取得（同期）1回分の結果。データ取得通知に使う */
+export interface DataSyncEvent {
+	id: number;
+	syncedAt: string; // ISO8601
+	trigger: "manual" | "auto";
+	newAssignmentCount: number;
+	changedAssignmentCount: number;
+	removedAssignmentCount: number;
+}
+
+export type AssignmentChangeField = "dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted";
+
+/** 同期のたびに検出された課題1件・1フィールド分の変更点。変更点表示に使う */
+export interface AssignmentChange {
+	assignmentId: number;
+	courseName: string;
+	title: string;
+	field: AssignmentChangeField;
+	oldValue: string | null;
+	newValue: string | null;
+	detectedAt: string; // ISO8601
+}

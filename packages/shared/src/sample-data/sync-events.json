@@ -1,0 +1,18 @@
+[
+	{
+		"id": 1,
+		"syncedAt": "2026-06-30T08:00:00",
+		"trigger": "auto",
+		"newAssignmentCount": 0,
+		"changedAssignmentCount": 0,
+		"removedAssignmentCount": 0
+	},
+	{
+		"id": 2,
+		"syncedAt": "2026-07-01T08:00:00",
+		"trigger": "auto",
+		"newAssignmentCount": 1,
+		"changedAssignmentCount": 2,
+		"removedAssignmentCount": 0
+	}
+]

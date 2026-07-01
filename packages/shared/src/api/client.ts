@@ -1,6 +1,8 @@
 import type {
 	Assignment,
+	AssignmentChange,
 	DashboardSummary,
+	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
 	NotificationRule,
@@ -43,6 +45,12 @@ export interface FuzzyApiClient {
 	getNotificationRules(): Promise<NotificationRule[]>;
 
 	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }>;
+
+	/** 直近の同期（Moodleからのデータ取得）結果。データ取得通知の表示に使う。同期実績が無ければnull */
+	getLatestSyncEvent(): Promise<DataSyncEvent | null>;
+
+	/** 同期で検出された課題の変更点一覧。sinceSyncEventId省略時は直近の同期分を返す */
+	getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]>;
 }
 
 export class ApiError extends Error {
