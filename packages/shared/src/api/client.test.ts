@@ -1,10 +1,10 @@
-import {describe, expect, test} from "bun:test";
-import {createApiClient} from "./index";
-import {MockApiClient} from "./mockClient";
+import { describe, expect, test } from "bun:test";
+import { createApiClient } from "./index";
+import { MockApiClient } from "./mockClient";
 
 describe("createApiClient フォールバック機構", () => {
 	test("native-hostが存在しない環境ではmockモードにフォールバックする", async () => {
-		const api = await createApiClient({timeoutMs: 100, verbose: false});
+		const api = await createApiClient({ timeoutMs: 100, verbose: false });
 		expect(api.mode).toBe("mock");
 	});
 });
@@ -20,7 +20,7 @@ describe("MockApiClient（サンプルデータ）", () => {
 	});
 
 	test("getDeadlines: needsReviewOnlyフィルタで異常検知の締切のみ返る", async () => {
-		const result = await client.getDeadlines({needsReviewOnly: true});
+		const result = await client.getDeadlines({ needsReviewOnly: true });
 		expect(result.length).toBe(1);
 		expect(result[0]?.title).toBe("認知科学概論 期末レポート");
 	});
@@ -38,13 +38,15 @@ describe("MockApiClient（サンプルデータ）", () => {
 
 	test("getRules: アプリ演習のコース別例外ルールが含まれる", async () => {
 		const rules = await client.getRules();
-		expect(rules.courseOverrides.some((o) => o.courseName === "アプリ演習" && o.splitBySection === false)).toBe(
-			true,
-		);
+		expect(
+			rules.courseOverrides.some(
+				(o) => o.courseName === "アプリ演習" && o.splitBySection === false,
+			),
+		).toBe(true);
 	});
 
 	test("updateNotificationRules → getNotificationRules: 更新内容が反映される", async () => {
-		const updated = [{id: 1, offsetMinutes: 4320, label: "3日前", enabled: false}];
+		const updated = [{ id: 1, offsetMinutes: 4320, label: "3日前", enabled: false }];
 		await client.updateNotificationRules(updated);
 		const result = await client.getNotificationRules();
 		expect(result).toEqual(updated);
@@ -58,7 +60,9 @@ describe("MockApiClient（サンプルデータ）", () => {
 	test("getAssignmentChanges: 直近の同期で検出された変更点が返る", async () => {
 		const changes = await client.getAssignmentChanges();
 		expect(changes.length).toBe(2);
-		expect(changes.some((c) => c.field === "dueAtStatus" && c.newValue === "needs_review")).toBe(true);
+		expect(changes.some((c) => c.field === "dueAtStatus" && c.newValue === "needs_review")).toBe(
+			true,
+		);
 	});
 
 	test("getAssignmentChanges: 最新の同期ID以降を指定すると差分なしになる", async () => {

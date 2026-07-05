@@ -105,7 +105,12 @@ export interface DataSyncEvent {
 	removedAssignmentCount: number;
 }
 
-export type AssignmentChangeField = "dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted";
+export type AssignmentChangeField =
+	| "dueAt"
+	| "title"
+	| "submissionMode"
+	| "dueAtStatus"
+	| "submitted";
 
 /** 同期のたびに検出された課題1件・1フィールド分の変更点。変更点表示に使う */
 export interface AssignmentChange {
