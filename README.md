@@ -76,5 +76,5 @@ docs/
 ## GitHub運用
 
 - gitフローで開発
-- main は保護。作業は `feat/担当-内容` ブランチ → PR → 1人レビュー → CI 通過後にマージ。
+- main は保護。作業は `issue<番号>` ブランチ（例: `issue33`。対応するissueの番号を付ける） → PR → 1人レビュー → CI 通過後にマージ。
 - コミットメッセージは [`.github/COMMIT_MESSAGE_TEMPLATE.md`](.github/COMMIT_MESSAGE_TEMPLATE.md) に従ってください。
