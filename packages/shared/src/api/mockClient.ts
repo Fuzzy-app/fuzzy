@@ -15,6 +15,8 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
+	ExtractZipRequest,
+	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
@@ -95,6 +97,16 @@ export class MockApiClient implements FuzzyApiClient {
 	async saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
 		return delay({
 			savedFileIds: request.files.map((file, index) => file.moodleFileId ?? `${index + 1}`),
+		});
+	}
+
+	async extractZip(request: ExtractZipRequest): Promise<ExtractZipResult> {
+		const basePath = request.zipPath.replace(/\.zip$/i, "");
+		return delay({
+			extractedPaths: [
+				request.flatten ? `${basePath}\\第1回_資料.pdf` : `${basePath}\\contents\\第1回_資料.pdf`,
+				request.flatten ? `${basePath}\\演習データ.csv` : `${basePath}\\contents\\演習データ.csv`,
+			],
 		});
 	}
 

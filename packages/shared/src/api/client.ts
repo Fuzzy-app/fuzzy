@@ -5,6 +5,8 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
+	ExtractZipRequest,
+	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
@@ -40,6 +42,8 @@ export interface FuzzyApiClient {
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]>;
 
 	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult>;
+
+	extractZip(request: ExtractZipRequest): Promise<ExtractZipResult>;
 
 	getRules(): Promise<RuleSet>;
 

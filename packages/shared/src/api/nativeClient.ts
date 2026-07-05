@@ -5,6 +5,8 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
+	ExtractZipRequest,
+	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
@@ -100,6 +102,10 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
 		return this.send("saveFiles", request);
+	}
+
+	extractZip(request: ExtractZipRequest): Promise<ExtractZipResult> {
+		return this.send("extractZip", request);
 	}
 
 	getRules(): Promise<RuleSet> {

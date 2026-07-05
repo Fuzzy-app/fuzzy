@@ -44,6 +44,15 @@ export interface SaveFilesResult {
 	savedFileIds: string[];
 }
 
+export interface ExtractZipRequest {
+	zipPath: string;
+	flatten: boolean;
+}
+
+export interface ExtractZipResult {
+	extractedPaths: string[];
+}
+
 export interface SearchResult {
 	fileId: number;
 	fileName: string;

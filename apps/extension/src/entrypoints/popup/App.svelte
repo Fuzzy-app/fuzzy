@@ -23,6 +23,8 @@
 	let selectedFileIds: string[] = [];
 	let selectedPath = "";
 	let manualPath = "";
+	let zipMode: "keep" | "extract" = "extract";
+	let flattenZip = true;
 	let resultMessage: string | null = null;
 	let saving = false;
 	let state: LoadState = { loading: true, error: null };
@@ -31,6 +33,7 @@
 	$: selectedFiles = files.filter((file) =>
 		selectedFileIds.includes(fileId(file)),
 	);
+	$: selectedZipFiles = selectedFiles.filter(isZipFile);
 	$: effectivePath = manualPath.trim() || selectedPath;
 	$: canSave = selectedFiles.length > 0 && effectivePath.length > 0 && !saving;
 
@@ -123,7 +126,14 @@
 				files: selectedFiles,
 				targetPath: effectivePath,
 			});
-			resultMessage = `${result.savedFileIds.length}件の資料を保存しました。`;
+			const extractedPaths =
+				zipMode === "extract"
+					? await extractSelectedZipFiles(selectedZipFiles)
+					: [];
+			resultMessage =
+				extractedPaths.length > 0
+					? `${result.savedFileIds.length}件の資料を保存し、ZIPから${extractedPaths.length}件を展開しました。`
+					: `${result.savedFileIds.length}件の資料を保存しました。`;
 		} catch (error) {
 			resultMessage =
 				error instanceof Error
@@ -134,6 +144,27 @@
 		}
 	}
 
+	async function extractSelectedZipFiles(
+		zipFiles: MoodleFileLink[],
+	): Promise<string[]> {
+		if (!api || zipFiles.length === 0) return [];
+
+		const results = await Promise.all(
+			zipFiles.map((file) =>
+				api?.extractZip({
+					zipPath: buildSavedZipPath(file),
+					flatten: flattenZip,
+				}),
+			),
+		);
+
+		return results.flatMap((result) => result?.extractedPaths ?? []);
+	}
+
+	function buildSavedZipPath(file: MoodleFileLink): string {
+		return `${effectivePath}\\${file.title}`;
+	}
+
 	function fileId(file: MoodleFileLink): string {
 		return file.moodleFileId ?? file.url;
 	}
@@ -142,6 +173,10 @@
 		return (
 			file.mimeHint ?? file.title.split(".").pop()?.toLowerCase() ?? "file"
 		);
+	}
+
+	function isZipFile(file: MoodleFileLink): boolean {
+		return fileType(file) === "zip" || /\.zip(?:$|[?#])/i.test(file.url);
 	}
 
 	function confidencePercent(suggestion: SaveSuggestion): number {
@@ -284,12 +319,57 @@
 					/>
 				</label>
 
+				{#if selectedZipFiles.length > 0}
+					<section class="zip-panel" aria-label="ZIPファイルの扱い">
+						<div class="zip-panel-header">
+							<h2>ZIPファイルの扱い</h2>
+							<span>{selectedZipFiles.length}件</span>
+						</div>
+						<label class="zip-option">
+							<input
+								type="radio"
+								name="zipMode"
+								value="extract"
+								checked={zipMode === "extract"}
+								on:change={() => (zipMode = "extract")}
+							/>
+							<span>
+								<strong>保存後に展開する</strong>
+								<small>授業資料として中身をすぐ使える形にします。</small>
+							</span>
+						</label>
+						<label class="zip-option">
+							<input
+								type="radio"
+								name="zipMode"
+								value="keep"
+								checked={zipMode === "keep"}
+								on:change={() => (zipMode = "keep")}
+							/>
+							<span>
+								<strong>ZIPのまま保存する</strong>
+								<small>圧縮ファイルをそのまま残します。</small>
+							</span>
+						</label>
+						<label class="zip-flatten">
+							<input
+								type="checkbox"
+								bind:checked={flattenZip}
+								disabled={zipMode === "keep"}
+							/>
+							<span>無駄な二重フォルダがあれば簡略化する</span>
+						</label>
+					</section>
+				{/if}
+
 				<div class="action-panel">
 					<p class="save-summary">
 						{#if selectedFiles.length === 0}
 							保存する資料を選択してください。
 						{:else if !effectivePath}
 							保存先を選択してください。
+						{:else if selectedZipFiles.length > 0 && zipMode === "extract"}
+							{selectedFiles.length}件を保存し、ZIP {selectedZipFiles.length}件を展開します。
 						{:else}
 							{selectedFiles.length}件を {effectivePath} に保存します。
 						{/if}
@@ -537,6 +617,7 @@
 	}
 
 	.manual-box,
+	.zip-panel,
 	.action-panel {
 		display: grid;
 		gap: 8px;
@@ -552,6 +633,49 @@
 		border-radius: 8px;
 		padding: 0 10px;
 		color: #202537;
+	}
+
+	.zip-panel-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.zip-panel-header span {
+		border-radius: 999px;
+		background: #fff4d8;
+		padding: 4px 8px;
+		color: #9a6700;
+		font-size: 11px;
+		font-weight: 900;
+	}
+
+	.zip-option,
+	.zip-flatten {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 8px;
+		align-items: start;
+		border: 1px solid #dfe4f0;
+		border-radius: 8px;
+		padding: 9px;
+	}
+
+	.zip-option span {
+		display: grid;
+		gap: 3px;
+	}
+
+	.zip-option strong,
+	.zip-flatten span {
+		font-size: 12px;
+	}
+
+	.zip-option small {
+		color: #687083;
+		font-size: 11px;
+		font-weight: 700;
 	}
 
 	.save-summary,

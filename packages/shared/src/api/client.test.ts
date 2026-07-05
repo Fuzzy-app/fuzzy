@@ -66,6 +66,15 @@ describe("MockApiClient（サンプルデータ）", () => {
 		expect(result.savedFileIds).toEqual(["1234"]);
 	});
 
+	test("extractZip: ZIPを展開し、簡略化後のパス一覧を返す", async () => {
+		const result = await client.extractZip({
+			zipPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回\\正規化_メモ.zip",
+			flatten: true,
+		});
+		expect(result.extractedPaths.length).toBe(2);
+		expect(result.extractedPaths[0]).not.toContain("\\contents\\");
+	});
+
 	test("getRuleViolations: ルール違反ファイルが2件返る", async () => {
 		const violations = await client.getRuleViolations();
 		expect(violations.length).toBe(2);
