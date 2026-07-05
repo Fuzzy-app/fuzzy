@@ -1,5 +1,3 @@
-import type {FuzzyApiClient} from "./client";
-import {ApiError} from "./client";
 import type {
 	Assignment,
 	AssignmentChange,
@@ -13,14 +11,18 @@ import type {
 	SaveSuggestion,
 	SearchResult,
 } from "../types";
+import type { FuzzyApiClient } from "./client";
+import { ApiError } from "./client";
 
 const NATIVE_HOST_NAME = "jp.ac.wakayama_u.fuzzy.native_host";
 
-type Envelope<T> = { id: string; ok: true; data: T } | {
-	id: string;
-	ok: false;
-	error: { code: string; message: string }
-};
+type Envelope<T> =
+	| { id: string; ok: true; data: T }
+	| {
+			id: string;
+			ok: false;
+			error: { code: string; message: string };
+	  };
 
 /**
  * Native Messaging 経由で native-host（Rustエンジン）と通信する本番実装。
@@ -40,7 +42,9 @@ export class NativeApiClient implements FuzzyApiClient {
 	private send<T>(command: string, payload: unknown): Promise<T> {
 		const runtime = this.getChromeRuntime();
 		if (!runtime?.connectNative) {
-			return Promise.reject(new ApiError("NO_NATIVE_HOST", "拡張機能環境ではないため native-host に接続できません"));
+			return Promise.reject(
+				new ApiError("NO_NATIVE_HOST", "拡張機能環境ではないため native-host に接続できません"),
+			);
 		}
 		const id = crypto.randomUUID();
 		return new Promise<T>((resolve, reject) => {
@@ -56,7 +60,7 @@ export class NativeApiClient implements FuzzyApiClient {
 				if (msg.ok) resolve(msg.data);
 				else reject(new ApiError(msg.error.code, msg.error.message));
 			});
-			port.postMessage({id, command, payload});
+			port.postMessage({ id, command, payload });
 		});
 	}
 
@@ -76,19 +80,19 @@ export class NativeApiClient implements FuzzyApiClient {
 	}
 
 	getDeadlines(filter?: DeadlineFilter): Promise<Assignment[]> {
-		return this.send("getDeadlines", {filter});
+		return this.send("getDeadlines", { filter });
 	}
 
 	updateSubmissionStatus(assignmentId: number, submitted: boolean): Promise<{ ok: boolean }> {
-		return this.send("updateSubmissionStatus", {assignmentId, submitted});
+		return this.send("updateSubmissionStatus", { assignmentId, submitted });
 	}
 
 	search(query: string): Promise<SearchResult[]> {
-		return this.send("search", {query});
+		return this.send("search", { query });
 	}
 
 	suggestSavePath(courseId: number): Promise<SaveSuggestion[]> {
-		return this.send("suggestSavePath", {courseId});
+		return this.send("suggestSavePath", { courseId });
 	}
 
 	getRules(): Promise<RuleSet> {
@@ -108,7 +112,7 @@ export class NativeApiClient implements FuzzyApiClient {
 	}
 
 	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
-		return this.send("updateNotificationRules", {rules});
+		return this.send("updateNotificationRules", { rules });
 	}
 
 	getLatestSyncEvent(): Promise<DataSyncEvent | null> {
@@ -116,6 +120,6 @@ export class NativeApiClient implements FuzzyApiClient {
 	}
 
 	getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]> {
-		return this.send("getAssignmentChanges", {sinceSyncEventId});
+		return this.send("getAssignmentChanges", { sinceSyncEventId });
 	}
 }
