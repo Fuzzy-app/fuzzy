@@ -52,7 +52,7 @@ docs/*      ドキュメント
 
 ## 開発フロー
 
-- `main` は保護ブランチ。作業は `feature/担当-内容` ブランチを切り、PR → 1人レビュー → CI通過後にマージ
+- `main` は保護ブランチ。作業は `issue<番号>` 形式のブランチ（例: `issue33`。対応するissueの番号を付ける）を切り、PR → 1人レビュー → CI通過後にマージ
 - 拡張⇄ホスト間API（`packages/shared`の型・`docs/api/contract.md`）を変更する場合はPRで相談（README記載の「接点」ルール）
 
 ## 担当（機能＝担当。README.mdが正）
