@@ -16,6 +16,34 @@ export interface SaveSuggestion {
 	similarMatches?: { fileId: number; originalName: string; similarity: number }[];
 }
 
+export interface MoodleCourseContext {
+	name: string | null;
+	sectionTitle: string | null;
+	breadcrumbs: string[];
+}
+
+export interface MoodleFileMeta {
+	title: string;
+	url: string;
+	moodleFileId: string | null;
+	sectionTitle: string | null;
+	mimeHint: string | null;
+}
+
+export interface SuggestSavePathRequest {
+	course: MoodleCourseContext;
+	fileMeta: MoodleFileMeta | null;
+}
+
+export interface SaveFilesRequest {
+	files: MoodleFileMeta[];
+	targetPath: string;
+}
+
+export interface SaveFilesResult {
+	savedFileIds: string[];
+}
+
 export interface SearchResult {
 	fileId: number;
 	fileName: string;

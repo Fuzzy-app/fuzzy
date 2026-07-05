@@ -8,8 +8,11 @@ import type {
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
+	SaveFilesRequest,
+	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SuggestSavePathRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
 import { ApiError } from "./client";
@@ -91,8 +94,12 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("search", { query });
 	}
 
-	suggestSavePath(courseId: number): Promise<SaveSuggestion[]> {
-		return this.send("suggestSavePath", { courseId });
+	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
+		return this.send("suggestSavePath", request);
+	}
+
+	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
+		return this.send("saveFiles", request);
 	}
 
 	getRules(): Promise<RuleSet> {

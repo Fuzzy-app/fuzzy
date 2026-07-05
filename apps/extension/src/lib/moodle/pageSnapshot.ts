@@ -24,6 +24,8 @@ export interface MoodlePageSnapshot {
 	collectedAt: string;
 }
 
+export const MOODLE_PAGE_SNAPSHOT_MESSAGE = "fuzzy:getMoodlePageSnapshot";
+
 const FILE_EXTENSION_PATTERN =
 	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|png|jpe?g|gif)(?:$|[?#])/i;
 const MOODLE_FILE_PATTERN =

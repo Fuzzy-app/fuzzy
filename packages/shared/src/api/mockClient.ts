@@ -18,8 +18,11 @@ import type {
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
+	SaveFilesRequest,
+	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SuggestSavePathRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
 
@@ -74,16 +77,25 @@ export class MockApiClient implements FuzzyApiClient {
 		return delay(table[query] ?? []);
 	}
 
-	async suggestSavePath(courseId: number): Promise<SaveSuggestion[]> {
-		const course = (courses as { id: number; name: string }[]).find((c) => c.id === courseId);
-		const courseLabel = course?.name ?? "不明なコース";
+	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
+		const knownCourse = (courses as { id: number; name: string }[]).find(
+			(c) => c.name === request.course.name,
+		);
+		const courseLabel = knownCourse?.name ?? request.course.name ?? "不明なコース";
+		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
 		return delay([
 			{
-				path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\第10回`,
+				path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\${sectionLabel ?? "資料"}`,
 				confidence: 0.92,
 			},
 			{ path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`, confidence: 0.6 },
 		]);
+	}
+
+	async saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
+		return delay({
+			savedFileIds: request.files.map((file, index) => file.moodleFileId ?? `${index + 1}`),
+		});
 	}
 
 	async getRules(): Promise<RuleSet> {

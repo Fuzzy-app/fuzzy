@@ -8,8 +8,11 @@ import type {
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
+	SaveFilesRequest,
+	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SuggestSavePathRequest,
 } from "../types";
 
 /**
@@ -34,7 +37,9 @@ export interface FuzzyApiClient {
 
 	search(query: string): Promise<SearchResult[]>;
 
-	suggestSavePath(courseId: number): Promise<SaveSuggestion[]>;
+	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]>;
+
+	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult>;
 
 	getRules(): Promise<RuleSet>;
 

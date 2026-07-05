@@ -31,6 +31,41 @@ describe("MockApiClient（サンプルデータ）", () => {
 		expect(result[0]?.page).toBe(12);
 	});
 
+	test("suggestSavePath: Moodleのコース・ファイル情報から保存先候補を返す", async () => {
+		const result = await client.suggestSavePath({
+			course: {
+				name: "データベース",
+				sectionTitle: "第4回",
+				breadcrumbs: ["マイコース", "データベース", "第4回"],
+			},
+			fileMeta: {
+				title: "第4回_正規化.pdf",
+				url: "https://moodle.example/pluginfile.php/1234/mod_resource/content/1/file.pdf",
+				moodleFileId: "1234",
+				sectionTitle: "第4回",
+				mimeHint: "pdf",
+			},
+		});
+		expect(result[0]?.path).toContain("データベース");
+		expect(result[0]?.path).toContain("第4回");
+	});
+
+	test("saveFiles: ユーザーが選んだファイルの保存結果を返す", async () => {
+		const result = await client.saveFiles({
+			targetPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+			files: [
+				{
+					title: "第4回_正規化.pdf",
+					url: "https://moodle.example/pluginfile.php/1234/mod_resource/content/1/file.pdf",
+					moodleFileId: "1234",
+					sectionTitle: "第4回",
+					mimeHint: "pdf",
+				},
+			],
+		});
+		expect(result.savedFileIds).toEqual(["1234"]);
+	});
+
 	test("getRuleViolations: ルール違反ファイルが2件返る", async () => {
 		const violations = await client.getRuleViolations();
 		expect(violations.length).toBe(2);
