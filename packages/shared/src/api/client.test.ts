@@ -50,6 +50,20 @@ describe("MockApiClient（サンプルデータ）", () => {
 		expect(result[0]?.path).toContain("第4回");
 	});
 
+	test("checkSimilarFiles: 保存前に似ている保存済みファイルを返す", async () => {
+		const result = await client.checkSimilarFiles({
+			fileMeta: {
+				title: "第4回_正規化.pdf",
+				url: "https://moodle.example/pluginfile.php/1234/mod_resource/content/1/file.pdf",
+				moodleFileId: "1234",
+				sectionTitle: "第4回",
+				mimeHint: "pdf",
+			},
+		});
+		expect(result.length).toBe(1);
+		expect(result[0]?.similarity).toBeGreaterThan(0.8);
+	});
+
 	test("saveFiles: ユーザーが選んだファイルの保存結果を返す", async () => {
 		const result = await client.saveFiles({
 			targetPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",

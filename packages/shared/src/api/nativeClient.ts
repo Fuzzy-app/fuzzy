@@ -1,6 +1,7 @@
 import type {
 	Assignment,
 	AssignmentChange,
+	CheckSimilarFilesRequest,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
@@ -14,6 +15,7 @@ import type {
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SimilarFileMatch,
 	SuggestSavePathRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
@@ -98,6 +100,10 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
 		return this.send("suggestSavePath", request);
+	}
+
+	checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
+		return this.send("checkSimilarFiles", request);
 	}
 
 	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {

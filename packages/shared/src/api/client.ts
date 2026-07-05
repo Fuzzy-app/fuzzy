@@ -1,6 +1,7 @@
 import type {
 	Assignment,
 	AssignmentChange,
+	CheckSimilarFilesRequest,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
@@ -14,6 +15,7 @@ import type {
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SimilarFileMatch,
 	SuggestSavePathRequest,
 } from "../types";
 
@@ -40,6 +42,8 @@ export interface FuzzyApiClient {
 	search(query: string): Promise<SearchResult[]>;
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]>;
+
+	checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]>;
 
 	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult>;
 

@@ -4,6 +4,7 @@
 		createApiClient,
 		type FuzzyApiClient,
 		type SaveSuggestion,
+		type SimilarFileMatch,
 	} from "@fuzzy/shared";
 	import {
 		MOODLE_PAGE_SNAPSHOT_MESSAGE,
@@ -25,6 +26,8 @@
 	let manualPath = "";
 	let zipMode: "keep" | "extract" = "extract";
 	let flattenZip = true;
+	let checkingSimilarFiles = false;
+	let similarMatchesByFileId: Record<string, SimilarFileMatch[]> = {};
 	let resultMessage: string | null = null;
 	let saving = false;
 	let state: LoadState = { loading: true, error: null };
@@ -34,6 +37,12 @@
 		selectedFileIds.includes(fileId(file)),
 	);
 	$: selectedZipFiles = selectedFiles.filter(isZipFile);
+	$: selectedSimilarWarnings = selectedFiles.flatMap((file) =>
+		(similarMatchesByFileId[fileId(file)] ?? []).map((match) => ({
+			file,
+			match,
+		})),
+	);
 	$: effectivePath = manualPath.trim() || selectedPath;
 	$: canSave = selectedFiles.length > 0 && effectivePath.length > 0 && !saving;
 
@@ -68,6 +77,7 @@
 				fileMeta: snapshot.files[0] ?? null,
 			});
 			selectedPath = suggestions[0]?.path ?? "";
+			await checkSimilarFilesFor(snapshot.files);
 			state = { loading: false, error: null };
 		} catch (error) {
 			state = {
@@ -114,6 +124,20 @@
 		selectedPath = path;
 		manualPath = "";
 		resultMessage = null;
+	}
+
+	async function checkSimilarFilesFor(filesToCheck: MoodleFileLink[]) {
+		if (!api || filesToCheck.length === 0) return;
+
+		checkingSimilarFiles = true;
+		const entries = await Promise.all(
+			filesToCheck.map(async (file) => {
+				const matches = await api?.checkSimilarFiles({ fileMeta: file });
+				return [fileId(file), matches ?? []] as const;
+			}),
+		);
+		similarMatchesByFileId = Object.fromEntries(entries);
+		checkingSimilarFiles = false;
 	}
 
 	async function saveSelectedFiles() {
@@ -359,6 +383,35 @@
 							/>
 							<span>無駄な二重フォルダがあれば簡略化する</span>
 						</label>
+					</section>
+				{/if}
+
+				{#if checkingSimilarFiles || selectedSimilarWarnings.length > 0}
+					<section class="similar-panel" aria-label="類似ファイルの確認">
+						<div class="similar-panel-header">
+							<h2>似ている保存済み資料</h2>
+							<span>
+								{checkingSimilarFiles
+									? "確認中"
+									: `${selectedSimilarWarnings.length}件`}
+							</span>
+						</div>
+						{#if checkingSimilarFiles}
+							<p class="similar-note">保存済み資料と照合しています。</p>
+						{:else}
+							<div class="similar-list">
+								{#each selectedSimilarWarnings as warning (`${fileId(warning.file)}-${warning.match.fileId}`)}
+									<div class="similar-row">
+										<strong>{warning.file.title}</strong>
+										<span>{warning.match.originalName}</span>
+										<small>{Math.round(warning.match.similarity * 100)}%</small>
+									</div>
+								{/each}
+							</div>
+							<p class="similar-note">
+								保存はできます。重複しそうな資料だけ確認してください。
+							</p>
+						{/if}
 					</section>
 				{/if}
 
@@ -618,6 +671,7 @@
 
 	.manual-box,
 	.zip-panel,
+	.similar-panel,
 	.action-panel {
 		display: grid;
 		gap: 8px;
@@ -640,6 +694,66 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
+	}
+
+	.similar-panel-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.similar-panel-header span {
+		border-radius: 999px;
+		background: #fff1f2;
+		padding: 4px 8px;
+		color: #b4233c;
+		font-size: 11px;
+		font-weight: 900;
+	}
+
+	.similar-list {
+		display: grid;
+		gap: 8px;
+	}
+
+	.similar-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 3px 8px;
+		border: 1px solid #f2ccd3;
+		border-radius: 8px;
+		background: #fff8f9;
+		padding: 9px;
+	}
+
+	.similar-row strong,
+	.similar-row span {
+		overflow-wrap: anywhere;
+		font-size: 12px;
+	}
+
+	.similar-row span {
+		color: #687083;
+	}
+
+	.similar-row small {
+		grid-row: 1 / span 2;
+		grid-column: 2;
+		align-self: center;
+		border-radius: 999px;
+		background: #ffe4e8;
+		padding: 4px 7px;
+		color: #b4233c;
+		font-size: 11px;
+		font-weight: 900;
+	}
+
+	.similar-note {
+		color: #7a3140;
+		font-size: 11px;
+		font-weight: 800;
+		line-height: 1.5;
 	}
 
 	.zip-panel-header span {

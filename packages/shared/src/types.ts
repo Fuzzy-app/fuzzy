@@ -10,10 +10,16 @@ export interface Course {
 	term: string | null;
 }
 
+export interface SimilarFileMatch {
+	fileId: number;
+	originalName: string;
+	similarity: number;
+}
+
 export interface SaveSuggestion {
 	path: string;
 	confidence: number; // 0.0〜1.0、確からしさ順の表示に使う
-	similarMatches?: { fileId: number; originalName: string; similarity: number }[];
+	similarMatches?: SimilarFileMatch[];
 }
 
 export interface MoodleCourseContext {
@@ -33,6 +39,10 @@ export interface MoodleFileMeta {
 export interface SuggestSavePathRequest {
 	course: MoodleCourseContext;
 	fileMeta: MoodleFileMeta | null;
+}
+
+export interface CheckSimilarFilesRequest {
+	fileMeta: MoodleFileMeta;
 }
 
 export interface SaveFilesRequest {

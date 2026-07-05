@@ -11,6 +11,7 @@ import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
 import type {
 	Assignment,
 	AssignmentChange,
+	CheckSimilarFilesRequest,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
@@ -24,6 +25,7 @@ import type {
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SimilarFileMatch,
 	SuggestSavePathRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
@@ -92,6 +94,29 @@ export class MockApiClient implements FuzzyApiClient {
 			},
 			{ path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`, confidence: 0.6 },
 		]);
+	}
+
+	async checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
+		const title = request.fileMeta.title;
+		if (/正規化|第4回|normal/i.test(title)) {
+			return delay([
+				{
+					fileId: 204,
+					originalName: "第04回_正規化.pdf",
+					similarity: 0.88,
+				},
+			]);
+		}
+		if (/演習|exercise/i.test(title)) {
+			return delay([
+				{
+					fileId: 317,
+					originalName: "演習問題_解答例.docx",
+					similarity: 0.74,
+				},
+			]);
+		}
+		return delay([]);
 	}
 
 	async saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
