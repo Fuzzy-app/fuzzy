@@ -1,8 +1,7 @@
 # Rustワークスペース定義。
-# apps/desktop/src-tauri は雛形生成後（issue #35）に members へ追加する。
 [workspace]
 resolver = "2"
-members = ["crates/engine-core", "apps/native-host"]
+members = ["crates/engine-core", "apps/native-host", "apps/desktop/src-tauri"]
 
 [workspace.package]
 edition = "2021"

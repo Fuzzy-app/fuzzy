@@ -1,14 +1,13 @@
-import assignmentChanges from "../sample-data/assignment-changes.json" with {type: "json"};
-import courses from "../sample-data/courses.json" with {type: "json"};
-import dashboard from "../sample-data/dashboard.json" with {type: "json"};
-import deadlines from "../sample-data/deadlines.json" with {type: "json"};
-import duplicateGroups from "../sample-data/duplicate-groups.json" with {type: "json"};
-import notificationRules from "../sample-data/notification-rules.json" with {type: "json"};
-import ruleViolations from "../sample-data/rule-violations.json" with {type: "json"};
-import rules from "../sample-data/rules.json" with {type: "json"};
-import searchResults from "../sample-data/search-results.json" with {type: "json"};
-import syncEvents from "../sample-data/sync-events.json" with {type: "json"};
-import type {FuzzyApiClient} from "./client";
+import assignmentChanges from "../sample-data/assignment-changes.json" with { type: "json" };
+import courses from "../sample-data/courses.json" with { type: "json" };
+import dashboard from "../sample-data/dashboard.json" with { type: "json" };
+import deadlines from "../sample-data/deadlines.json" with { type: "json" };
+import duplicateGroups from "../sample-data/duplicate-groups.json" with { type: "json" };
+import notificationRules from "../sample-data/notification-rules.json" with { type: "json" };
+import ruleViolations from "../sample-data/rule-violations.json" with { type: "json" };
+import rules from "../sample-data/rules.json" with { type: "json" };
+import searchResults from "../sample-data/search-results.json" with { type: "json" };
+import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
 import type {
 	Assignment,
 	AssignmentChange,
@@ -22,9 +21,11 @@ import type {
 	SaveSuggestion,
 	SearchResult,
 } from "../types";
+import type { FuzzyApiClient } from "./client";
 
 const LATENCY_MS = 30;
-const delay = <T>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), LATENCY_MS));
+const delay = <T>(value: T) =>
+	new Promise<T>((resolve) => setTimeout(() => resolve(value), LATENCY_MS));
 
 /**
  * native-host が起動していない場合に使うモック実装。
@@ -56,14 +57,16 @@ export class MockApiClient implements FuzzyApiClient {
 		}
 		if (!filter?.includePast) {
 			const now = Date.now();
-			result = result.filter((a) => !a.dueAt || new Date(a.dueAt).getTime() >= now || a.submitted === false);
+			result = result.filter(
+				(a) => !a.dueAt || new Date(a.dueAt).getTime() >= now || a.submitted === false,
+			);
 		}
 		return delay(result);
 	}
 
 	async updateSubmissionStatus(assignmentId: number, submitted: boolean): Promise<{ ok: boolean }> {
-		this.deadlines = this.deadlines.map((a) => (a.id === assignmentId ? {...a, submitted} : a));
-		return delay({ok: true});
+		this.deadlines = this.deadlines.map((a) => (a.id === assignmentId ? { ...a, submitted } : a));
+		return delay({ ok: true });
 	}
 
 	async search(query: string): Promise<SearchResult[]> {
@@ -75,8 +78,11 @@ export class MockApiClient implements FuzzyApiClient {
 		const course = (courses as { id: number; name: string }[]).find((c) => c.id === courseId);
 		const courseLabel = course?.name ?? "不明なコース";
 		return delay([
-			{path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\第10回`, confidence: 0.92},
-			{path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`, confidence: 0.6},
+			{
+				path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\第10回`,
+				confidence: 0.92,
+			},
+			{ path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`, confidence: 0.6 },
 		]);
 	}
 
@@ -98,7 +104,7 @@ export class MockApiClient implements FuzzyApiClient {
 
 	async updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
 		this.notificationRules = rules;
-		return delay({ok: true});
+		return delay({ ok: true });
 	}
 
 	async getLatestSyncEvent(): Promise<DataSyncEvent | null> {

@@ -1,11 +1,11 @@
-import type {FuzzyApiClient} from "./client";
-import {MockApiClient} from "./mockClient";
-import {NativeApiClient} from "./nativeClient";
+import type { FuzzyApiClient } from "./client";
+import { MockApiClient } from "./mockClient";
+import { NativeApiClient } from "./nativeClient";
 
-export type {FuzzyApiClient} from "./client";
-export {ApiError} from "./client";
-export {MockApiClient} from "./mockClient";
-export {NativeApiClient} from "./nativeClient";
+export type { FuzzyApiClient } from "./client";
+export { ApiError } from "./client";
+export { MockApiClient } from "./mockClient";
+export { NativeApiClient } from "./nativeClient";
 
 export interface CreateApiClientOptions {
 	/** ping応答を待つ上限時間(ms)。超えたらサンプルデータにフォールバックする */
@@ -22,8 +22,10 @@ export interface CreateApiClientOptions {
  *   const api = await createApiClient();
  *   const dashboard = await api.getDashboard(); // native-host未起動でもサンプルデータが返る
  */
-export async function createApiClient(options: CreateApiClientOptions = {}): Promise<FuzzyApiClient> {
-	const {timeoutMs = 800, verbose = true} = options;
+export async function createApiClient(
+	options: CreateApiClientOptions = {},
+): Promise<FuzzyApiClient> {
+	const { timeoutMs = 800, verbose = true } = options;
 	const native = new NativeApiClient();
 
 	const pingWithTimeout = Promise.race([
@@ -39,7 +41,9 @@ export async function createApiClient(options: CreateApiClientOptions = {}): Pro
 	}
 
 	if (verbose) {
-		console.warn("[fuzzy] native-host に接続できませんでした。サンプルデータにフォールバックします（mode=mock）");
+		console.warn(
+			"[fuzzy] native-host に接続できませんでした。サンプルデータにフォールバックします（mode=mock）",
+		);
 	}
 	return new MockApiClient();
 }
