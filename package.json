@@ -12,8 +12,8 @@
 		"check:ci": "biome ci . && prettier --check \"**/*.svelte\"",
 		"typecheck": "tsc --noEmit -p packages/shared/tsconfig.json",
 		"build": "bun run check && bun run typecheck",
-		"fmt:rust": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all",
-		"lint:rust": "cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings"
+		"fmt:rust": "cargo fmt --all",
+		"lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
