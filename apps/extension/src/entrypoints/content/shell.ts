@@ -44,7 +44,7 @@ const placeholderCopy: Record<Exclude<ScreenId, "search">, { title: string; copy
 	dashboard: { title: "ダッシュボード", copy: "issue57 で実装する予定です。" },
 	deadlines: {
 		title: "締切ハブ",
-		copy: "issue55 でこのメニューが有効になり、課題一覧と提出状況の切り替えが追加されます。",
+		copy: "課題一覧と提出状況を、この画面でまとめて確認できます。",
 	},
 	courses: { title: "コース一覧", copy: "今後の画面としてここへ統合していきます。" },
 	organize: { title: "重複の整理", copy: "保存済み資料の整理UIをここへ追加する予定です。" },
@@ -56,7 +56,7 @@ interface SearchState {
 	/** 直近に実行した検索語（件数表示に使う） */
 	executedQuery: string;
 	results: SearchResult[];
-	selectedResultId: number | null;
+	selectedResultKey: string | null;
 	loading: boolean;
 	error: string | null;
 }
@@ -71,36 +71,47 @@ interface SearchScreen {
 }
 
 function getNow(): number {
-	return new Date("2026-07-08T00:00:00+09:00").getTime();
+	return Date.now();
+}
+
+function parseDueAt(dueAt: string | null): number | null {
+	if (!dueAt) return null;
+	const time = Date.parse(dueAt);
+	return Number.isNaN(time) ? null : time;
 }
 
 function isNeedsReview(assignment: Assignment): boolean {
-	return assignment.dueAtStatus === "needs_review";
-}
-
-function isOverdue(assignment: Assignment): boolean {
-	return Boolean(
-		assignment.dueAt &&
-			!assignment.submitted &&
-			new Date(assignment.dueAt).getTime() < getNow(),
+	return (
+		assignment.dueAtStatus === "needs_review" ||
+		(assignment.dueAt !== null && parseDueAt(assignment.dueAt) === null)
 	);
 }
 
+function isOverdue(assignment: Assignment): boolean {
+	const dueTime = parseDueAt(assignment.dueAt);
+	return Boolean(dueTime !== null && !assignment.submitted && dueTime < getNow());
+}
+
 function isUpcoming(assignment: Assignment): boolean {
+	const dueTime = parseDueAt(assignment.dueAt);
 	return (
 		!assignment.submitted &&
-		(!assignment.dueAt || new Date(assignment.dueAt).getTime() >= getNow())
+		(assignment.dueAt === null || dueTime !== null) &&
+		(dueTime === null || dueTime >= getNow()) &&
+		!isNeedsReview(assignment)
 	);
 }
 
 function formatDate(dueAt: string | null): string {
 	if (!dueAt) return "期限未設定";
+	const time = parseDueAt(dueAt);
+	if (time === null) return "期限要確認";
 	return new Intl.DateTimeFormat("ja-JP", {
 		month: "numeric",
 		day: "numeric",
 		hour: "2-digit",
 		minute: "2-digit",
-	}).format(new Date(dueAt));
+	}).format(new Date(time));
 }
 
 function submissionLabel(assignment: Assignment): string {
@@ -184,11 +195,14 @@ export function mountFuzzyShell(): void {
 	let assignments: Assignment[] = [];
 	let assignmentsLoaded = false;
 	let loadingDeadlines = false;
+	let deadlineError: string | null = null;
+	let submissionError: string | null = null;
+	let searchRequestId = 0;
 	const searchState: SearchState = {
 		query: "",
 		executedQuery: "",
 		results: [],
-		selectedResultId: null,
+		selectedResultKey: null,
 		loading: false,
 		error: null,
 	};
@@ -216,17 +230,22 @@ export function mountFuzzyShell(): void {
 	// --- 検索画面 ---
 
 	/** 選択中の候補パネルと結果行のハイライトだけを更新する（一覧は作り直さない） */
+	const getResultKey = (result: SearchResult, index: number): string =>
+		`${result.fileId}:${result.page ?? "none"}:${index}`;
+
 	const renderSelection = () => {
 		if (!searchScreen) return;
 		const selected =
-			searchState.results.find((result) => result.fileId === searchState.selectedResultId) ?? null;
+			searchState.results.find(
+				(result, index) => getResultKey(result, index) === searchState.selectedResultKey,
+			) ?? null;
 
 		for (const row of searchScreen.resultsHost.querySelectorAll<HTMLButtonElement>(
 			".fuzzy-result-row",
 		)) {
 			row.classList.toggle(
 				"is-selected",
-				selected !== null && Number(row.dataset.fileId) === selected.fileId,
+				selected !== null && row.dataset.resultKey === searchState.selectedResultKey,
 			);
 		}
 
@@ -268,10 +287,10 @@ export function mountFuzzyShell(): void {
 		);
 	};
 
-	const createResultRow = (result: SearchResult): HTMLButtonElement => {
+	const createResultRow = (result: SearchResult, index: number): HTMLButtonElement => {
 		const row = el("button", "fuzzy-result-row");
 		row.type = "button";
-		row.dataset.fileId = String(result.fileId);
+		row.dataset.resultKey = getResultKey(result, index);
 
 		const kindClass = fileKindClass(result.fileName);
 		const kind = el(
@@ -289,7 +308,7 @@ export function mountFuzzyShell(): void {
 		const side = el("div", "fuzzy-result-side");
 		side.append(
 			el("p", "", result.page === null ? "—" : `p.${result.page}`),
-			el("span", "", result.page === null ? "ファイルを開く" : "ページへ"),
+			el("span", "", "候補を見る"),
 		);
 
 		row.append(kind, main, el("p", "fuzzy-result-snippet", result.snippet), side);
@@ -337,12 +356,14 @@ export function mountFuzzyShell(): void {
 	};
 
 	const runSearch = async () => {
+		const requestId = ++searchRequestId;
 		const query = searchState.query.trim();
 		if (!query) {
+			searchState.loading = false;
 			searchState.error = "検索したいワードを入力してください。";
 			searchState.executedQuery = "";
 			searchState.results = [];
-			searchState.selectedResultId = null;
+			searchState.selectedResultKey = null;
 			renderSearchResults();
 			return;
 		}
@@ -353,18 +374,23 @@ export function mountFuzzyShell(): void {
 
 		try {
 			const api = await apiPromise;
-			searchState.results = await api.search(query);
+			const results = await api.search(query);
+			if (requestId !== searchRequestId) return;
+			searchState.results = results;
 			searchState.executedQuery = query;
-			searchState.selectedResultId = searchState.results[0]?.fileId ?? null;
+			searchState.selectedResultKey = results[0] ? getResultKey(results[0], 0) : null;
 			setTopMode(api.mode);
 		} catch (error) {
+			if (requestId !== searchRequestId) return;
 			searchState.error = error instanceof Error ? error.message : String(error);
 			searchState.executedQuery = query;
 			searchState.results = [];
-			searchState.selectedResultId = null;
+			searchState.selectedResultKey = null;
 		} finally {
-			searchState.loading = false;
-			renderSearchResults();
+			if (requestId === searchRequestId) {
+				searchState.loading = false;
+				renderSearchResults();
+			}
 		}
 	};
 
@@ -428,8 +454,8 @@ export function mountFuzzyShell(): void {
 		resultsHost.addEventListener("click", (event) => {
 			if (!(event.target instanceof Element)) return;
 			const row = event.target.closest<HTMLButtonElement>(".fuzzy-result-row");
-			if (!row?.dataset.fileId) return;
-			searchState.selectedResultId = Number(row.dataset.fileId);
+			if (!row?.dataset.resultKey) return;
+			searchState.selectedResultKey = row.dataset.resultKey;
 			renderSelection();
 		});
 
@@ -446,10 +472,16 @@ export function mountFuzzyShell(): void {
 
 	const loadAssignments = async () => {
 		if (assignmentsLoaded) return;
-		const api = await apiPromise;
-		assignments = await api.getDeadlines({ includePast: true });
-		assignmentsLoaded = true;
-		setTopMode(api.mode);
+		try {
+			const api = await apiPromise;
+			assignments = await api.getDeadlines({ includePast: true });
+			assignmentsLoaded = true;
+			deadlineError = null;
+			setTopMode(api.mode);
+		} catch (error) {
+			deadlineError = error instanceof Error ? error.message : String(error);
+			assignmentsLoaded = false;
+		}
 	};
 
 	const filterAssignments = (): Assignment[] => {
@@ -469,8 +501,8 @@ export function mountFuzzyShell(): void {
 		[...list].sort((a, b) => {
 			if (a.submitted !== b.submitted) return a.submitted ? 1 : -1;
 			if (isNeedsReview(a) !== isNeedsReview(b)) return isNeedsReview(a) ? -1 : 1;
-			const aTime = a.dueAt ? new Date(a.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
-			const bTime = b.dueAt ? new Date(b.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+			const aTime = parseDueAt(a.dueAt) ?? Number.MAX_SAFE_INTEGER;
+			const bTime = parseDueAt(b.dueAt) ?? Number.MAX_SAFE_INTEGER;
 			return aTime - bTime;
 		});
 
@@ -514,14 +546,23 @@ export function mountFuzzyShell(): void {
 		checkbox.dataset.id = String(assignment.id);
 		checkbox.checked = assignment.submitted;
 		checkbox.addEventListener("change", async () => {
+			const previous = assignment.submitted;
 			const submitted = checkbox.checked;
 			checkbox.disabled = true;
 			try {
 				const api = await apiPromise;
 				await api.updateSubmissionStatus(assignment.id, submitted);
+				submissionError = null;
 				assignments = assignments.map((item) =>
 					item.id === assignment.id ? { ...item, submitted } : item,
 				);
+				renderScreen();
+			} catch (error) {
+				checkbox.checked = previous;
+				submissionError =
+					error instanceof Error
+						? `提出状態の更新に失敗しました: ${error.message}`
+						: "提出状態の更新に失敗しました。";
 				renderScreen();
 			} finally {
 				checkbox.disabled = false;
@@ -537,9 +578,39 @@ export function mountFuzzyShell(): void {
 		const screen = el("div", "fuzzy-screen");
 		screen.append(buildScreenHeader("締切ハブ", "課題と提出状況をまとめて確認"));
 
+		if (deadlineError) {
+			const errorPanel = el("section", "fuzzy-error-panel");
+			const retryButton = el("button", "fuzzy-primary-button", "再読み込み");
+			retryButton.type = "button";
+			retryButton.addEventListener("click", () => {
+				deadlineError = null;
+				renderScreen();
+			});
+			errorPanel.append(
+				el("p", "", `締切データの取得に失敗しました: ${deadlineError}`),
+				retryButton,
+			);
+			screen.append(errorPanel);
+			return screen;
+		}
+
 		if (loadingDeadlines && !assignmentsLoaded) {
 			screen.append(el("section", "fuzzy-placeholder", "締切データを読み込んでいます…"));
 			return screen;
+		}
+
+		if (submissionError) {
+			const errorPanel = el("section", "fuzzy-error-panel");
+			const errorHead = el("div", "fuzzy-error-panel-head");
+			const closeButton = el("button", "fuzzy-error-close", "閉じる");
+			closeButton.type = "button";
+			closeButton.addEventListener("click", () => {
+				submissionError = null;
+				renderScreen();
+			});
+			errorHead.append(el("p", "", submissionError), closeButton);
+			errorPanel.append(errorHead);
+			screen.append(errorPanel);
 		}
 
 		const metricGrid = el("section", "fuzzy-metric-grid");
@@ -625,7 +696,7 @@ export function mountFuzzyShell(): void {
 			mainEl.replaceChildren(getSearchScreen().root);
 		} else if (activeScreen === "deadlines") {
 			mainEl.replaceChildren(buildDeadlineScreen());
-			if (!assignmentsLoaded && !loadingDeadlines) {
+			if (!assignmentsLoaded && !loadingDeadlines && !deadlineError) {
 				loadingDeadlines = true;
 				void loadAssignments().finally(() => {
 					loadingDeadlines = false;
@@ -706,6 +777,10 @@ export function mountFuzzyShell(): void {
 			(api) => setTopMode(api.mode),
 			() => setTopMode("checking"),
 		);
+
+		if (activeScreen === "search") {
+			getSearchScreen().input.focus();
+		}
 	};
 
 	navButton.addEventListener("click", () => {
@@ -1477,10 +1552,46 @@ function ensureStyle(): void {
 			color: #c84833;
 		}
 
+		.fuzzy-error-panel {
+			padding: 16px;
+			border-radius: 14px;
+			background: #fff0ec;
+			color: #b43d24;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			font-size: 0.9rem;
+			font-weight: 800;
+			line-height: 1.7;
+		}
+
+		.fuzzy-error-panel-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 12px;
+		}
+
+		.fuzzy-error-panel-head p {
+			margin: 0;
+		}
+
+		.fuzzy-error-close {
+			border: 0;
+			border-radius: 999px;
+			padding: 6px 12px;
+			background: rgba(180, 61, 36, 0.12);
+			color: #b43d24;
+			font: inherit;
+			font-size: 0.78rem;
+			font-weight: 800;
+			cursor: pointer;
+			flex: 0 0 auto;
+		}
+
 		.fuzzy-nav-button:focus,
 		.fuzzy-side-link:focus,
 		.fuzzy-close-button:focus,
 		.fuzzy-primary-button:focus,
+		.fuzzy-error-close:focus,
 		.fuzzy-result-row:focus,
 		.fuzzy-filter-chip:focus,
 		.fuzzy-checkline input:focus,
