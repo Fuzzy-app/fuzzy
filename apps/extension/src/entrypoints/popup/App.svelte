@@ -24,6 +24,7 @@
 	let selectedFileIds: string[] = [];
 	let selectedPath = "";
 	let manualPath = "";
+	let extractDestinationPath = "";
 	let zipMode: "keep" | "extract" = "extract";
 	let flattenZip = true;
 	let checkingSimilarFiles = false;
@@ -44,6 +45,8 @@
 		})),
 	);
 	$: effectivePath = manualPath.trim() || selectedPath;
+	$: effectiveExtractDestinationPath =
+		extractDestinationPath.trim() || effectivePath;
 	$: canSave = selectedFiles.length > 0 && effectivePath.length > 0 && !saving;
 
 	onMount(() => {
@@ -176,7 +179,9 @@
 		const results = await Promise.all(
 			zipFiles.map((file) =>
 				api?.extractZip({
-					zipPath: buildSavedZipPath(file),
+					fileMeta: file,
+					targetPath: effectivePath,
+					destinationPath: effectiveExtractDestinationPath,
 					flatten: flattenZip,
 				}),
 			),
@@ -185,12 +190,8 @@
 		return results.flatMap((result) => result?.extractedPaths ?? []);
 	}
 
-	function buildSavedZipPath(file: MoodleFileLink): string {
-		return `${effectivePath}\\${file.title}`;
-	}
-
 	function fileId(file: MoodleFileLink): string {
-		return file.moodleFileId ?? file.url;
+		return file.url;
 	}
 
 	function fileType(file: MoodleFileLink): string {
@@ -383,6 +384,15 @@
 							/>
 							<span>無駄な二重フォルダがあれば簡略化する</span>
 						</label>
+						<label class="zip-destination">
+							<span>展開先フォルダ</span>
+							<input
+								bind:value={extractDestinationPath}
+								type="text"
+								disabled={zipMode === "keep"}
+								placeholder={effectivePath || "保存先と同じフォルダ"}
+							/>
+						</label>
 					</section>
 				{/if}
 
@@ -422,7 +432,9 @@
 						{:else if !effectivePath}
 							保存先を選択してください。
 						{:else if selectedZipFiles.length > 0 && zipMode === "extract"}
-							{selectedFiles.length}件を保存し、ZIP {selectedZipFiles.length}件を展開します。
+							{selectedFiles.length}件を保存し、ZIP {selectedZipFiles.length}件を
+							{effectiveExtractDestinationPath}
+							に展開します。
 						{:else}
 							{selectedFiles.length}件を {effectivePath} に保存します。
 						{/if}
@@ -680,6 +692,26 @@
 	}
 
 	.manual-box input {
+		width: 100%;
+		min-height: 40px;
+		box-sizing: border-box;
+		border: 1px solid #dfe4f0;
+		border-radius: 8px;
+		padding: 0 10px;
+		color: #202537;
+	}
+
+	.zip-destination {
+		display: grid;
+		gap: 6px;
+	}
+
+	.zip-destination span {
+		font-size: 12px;
+		font-weight: 800;
+	}
+
+	.zip-destination input {
 		width: 100%;
 		min-height: 40px;
 		box-sizing: border-box;

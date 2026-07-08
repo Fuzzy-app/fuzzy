@@ -82,7 +82,15 @@ describe("MockApiClient（サンプルデータ）", () => {
 
 	test("extractZip: ZIPを展開し、簡略化後のパス一覧を返す", async () => {
 		const result = await client.extractZip({
-			zipPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回\\正規化_メモ.zip",
+			fileMeta: {
+				title: "正規化_メモ.zip",
+				url: "https://moodle.example/pluginfile.php/1234/mod_resource/content/1/file.zip",
+				moodleFileId: "1234",
+				sectionTitle: "第4回",
+				mimeHint: "zip",
+			},
+			targetPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+			destinationPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回\\展開",
 			flatten: true,
 		});
 		expect(result.extractedPaths.length).toBe(2);

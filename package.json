@@ -9,8 +9,8 @@
 	"scripts": {
 		"format": "biome format --write . && prettier --write \"**/*.svelte\"",
 		"lint": "biome lint --write .",
-		"check": "biome check --write . && prettier --write \"**/*.svelte\"",
-		"check:ci": "biome ci . && prettier --check \"**/*.svelte\"",
+		"check": "biome check --write . && bunx prettier --write \"**/*.svelte\"",
+		"check:ci": "biome ci . && bunx prettier --check \"**/*.svelte\"",
 		"typecheck": "tsc --noEmit -p packages/shared/tsconfig.json",
 		"build": "bun run check && bun run typecheck",
 		"fmt:rust": "cargo fmt --all",

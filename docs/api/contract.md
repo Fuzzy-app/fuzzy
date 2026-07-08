@@ -30,7 +30,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `ping`                     | 疎通確認（フォールバック判定に使用）      | `{}` → `{ version }`                                |
 | `suggestSavePath`          | 保存先候補の提案                | `{ course, fileMeta }` → `SaveSuggestion[]`         |
 | `saveFiles`                | 一括保存実行                  | `{ files[], targetPath }` → `{ savedFileIds }`      |
-| `extractZip`               | ZIP展開要否の提案・実行           | `{ zipPath, flatten }` → `{ extractedPaths }`       |
+| `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
 | `checkSimilarFiles`        | 保存前の類似ファイル検知            | `{ fileMeta }` → `SaveSuggestion["similarMatches"]` |
 | `search`                   | 全文検索（該当箇所ジャンプ用のページ情報含む） | `{ query }` → `SearchResult[]`                      |
 | `getDashboard`             | コース別ダッシュボード集計           | `{}` → `DashboardSummary`                           |

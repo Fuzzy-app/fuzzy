@@ -55,7 +55,9 @@ export interface SaveFilesResult {
 }
 
 export interface ExtractZipRequest {
-	zipPath: string;
+	fileMeta: MoodleFileMeta;
+	targetPath: string;
+	destinationPath: string;
 	flatten: boolean;
 }
 

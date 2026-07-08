@@ -126,7 +126,7 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async extractZip(request: ExtractZipRequest): Promise<ExtractZipResult> {
-		const basePath = request.zipPath.replace(/\.zip$/i, "");
+		const basePath = request.destinationPath || request.targetPath;
 		return delay({
 			extractedPaths: [
 				request.flatten ? `${basePath}\\第1回_資料.pdf` : `${basePath}\\contents\\第1回_資料.pdf`,
