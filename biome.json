@@ -6,6 +6,7 @@
 		"ignore": [
 			"**/dist",
 			"**/build",
+			"**/.svelte-kit",
 			"**/.output",
 			"**/.wxt",
 			"**/gen",

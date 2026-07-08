@@ -1,5 +1,6 @@
 :root {
-	color-scheme: light;
+	color: #151515;
+	background: #fffdf6;
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
 	-webkit-font-smoothing: antialiased;
@@ -7,9 +8,79 @@
 	-webkit-text-size-adjust: 100%;
 }
 
+* {
+	box-sizing: border-box;
+}
+
 body {
 	margin: 0;
-	min-width: 760px;
-	min-height: 560px;
-	background: #f6f7fb;
+	min-width: 360px;
+	min-height: 300px;
+	font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+	background: linear-gradient(135deg, rgba(255, 224, 123, 0.24), transparent 45%), #fffdf6;
+}
+
+#app {
+	min-height: 300px;
+}
+
+.fuzzy-popup {
+	padding: 24px 22px;
+}
+
+.fuzzy-popup-kicker {
+	margin: 0 0 10px;
+	color: #4b4b4b;
+	font-size: 0.82rem;
+	font-weight: 800;
+	letter-spacing: 0.06em;
+}
+
+.fuzzy-popup h1 {
+	margin: 0 0 14px;
+	font-size: 1.55rem;
+	font-weight: 900;
+	line-height: 1.2;
+}
+
+.fuzzy-popup-body {
+	margin: 0 0 18px;
+	padding-left: 12px;
+	border-left: 6px solid #ffd54f;
+	font-size: 0.95rem;
+	font-weight: 700;
+	line-height: 1.8;
+}
+
+.fuzzy-popup-steps {
+	display: grid;
+	gap: 10px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	counter-reset: step;
+}
+
+.fuzzy-popup-steps li {
+	display: grid;
+	grid-template-columns: 32px 1fr;
+	gap: 12px;
+	align-items: start;
+	padding: 12px 14px;
+	border: 1px solid #1c1c1c;
+	background: #ffffff;
+	font-size: 0.93rem;
+	font-weight: 700;
+	line-height: 1.6;
+}
+
+.fuzzy-popup-steps li::before {
+	counter-increment: step;
+	content: counter(step);
+	display: inline-grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	background: #ffd54f;
+	font-weight: 900;
 }

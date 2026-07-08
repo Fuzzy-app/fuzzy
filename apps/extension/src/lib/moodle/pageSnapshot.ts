@@ -1,10 +1,10 @@
-export interface MoodleFileLink {
-	title: string;
-	url: string;
-	moodleFileId: string | null;
-	sectionTitle: string | null;
-	mimeHint: string | null;
-}
+import type { MoodleFileMeta } from "@fuzzy/shared";
+
+/**
+ * ページから抽出したファイルリンク。保存API（saveFiles等）へそのまま渡すため、
+ * 共有API型 MoodleFileMeta と定義を共有し、二重定義を避ける。
+ */
+export type MoodleFileLink = MoodleFileMeta;
 
 export interface MoodleFolderLink {
 	title: string;
@@ -257,7 +257,7 @@ function extractMimeHint(link: HTMLAnchorElement, url: string): string | null {
 	const fromMoodleActivity = extractMoodleActivityMimeHint(link);
 	if (fromMoodleActivity) return fromMoodleActivity;
 
-	const pathname = decodeURIComponent(safeUrl(url)?.pathname ?? url);
+	const pathname = safeDecodeURIComponent(safeUrl(url)?.pathname ?? url);
 	const fileName = pathname.split("/").pop() ?? pathname;
 	const match = fileName.match(/\.([a-z0-9]{2,5})$/i);
 	const extension = match?.[1]?.toLowerCase() ?? null;
@@ -322,6 +322,16 @@ function normalizeUrl(url: string, root: Document | Element): string {
 		return new URL(url, getBaseUri(root)).toString();
 	} catch {
 		return url;
+	}
+}
+
+function safeDecodeURIComponent(value: string): string {
+	// Moodleが不正な%エンコードを含むリンクを出すと decodeURIComponent は例外を投げるため、
+	// 失敗時は元の文字列をそのまま使い、スナップショット収集全体が落ちないようにする。
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
 	}
 }
 

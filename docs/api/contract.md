@@ -31,7 +31,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `suggestSavePath`          | 保存先候補の提案                | `{ course, fileMeta }` → `SaveSuggestion[]`         |
 | `saveFiles`                | 一括保存実行                  | `{ files[], targetPath }` → `{ savedFileIds }`      |
 | `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
-| `checkSimilarFiles`        | 保存前の類似ファイル検知            | `{ fileMeta }` → `SaveSuggestion["similarMatches"]` |
+| `checkSimilarFiles`        | 保存前の類似ファイル検知            | `{ fileMeta }` → `SimilarFileMatch[]` |
 | `search`                   | 全文検索（該当箇所ジャンプ用のページ情報含む） | `{ query }` → `SearchResult[]`                      |
 | `getDashboard`             | コース別ダッシュボード集計           | `{}` → `DashboardSummary`                           |
 | `getDeadlines`             | 締切一覧取得（フィルタ可）           | `{ filter? }` → `Assignment[]`                      |

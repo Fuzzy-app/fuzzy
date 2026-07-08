@@ -1,12 +1,21 @@
-import { mount } from "svelte";
-import App from "./App.svelte";
 import "./app.css";
 
 const target = document.getElementById("app");
 if (!target) {
-	throw new Error("ポップアップのマウント先 #app が見つかりません");
+	throw new Error("ポップアップの描画先 #app が見つかりません");
 }
 
-const app = mount(App, { target });
-
-export default app;
+target.innerHTML = `
+	<main class="fuzzy-popup">
+		<p class="fuzzy-popup-kicker">Fuzzy</p>
+		<h1>Moodle上で確認してください</h1>
+		<p class="fuzzy-popup-body">
+			Fuzzyの画面は拡張機能のポップアップではなく、Moodleのページ内に表示されます。
+		</p>
+		<ol class="fuzzy-popup-steps">
+			<li>Moodleを開く</li>
+			<li>資料の保存は、授業ページ右側の保存パネルから行う</li>
+			<li>横断検索・締切ハブは、上部ナビの「Fuzzy」タブから開く</li>
+		</ol>
+	</main>
+`;

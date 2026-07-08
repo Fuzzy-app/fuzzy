@@ -4,13 +4,12 @@
 	"private": true,
 	"type": "module",
 	"workspaces": ["packages/*", "apps/*"],
-	"trustedDependencies": ["@fuzzy/extension"],
 	"engines": { "bun": ">=1.1.0" },
 	"scripts": {
-		"format": "biome format --write . && prettier --write \"**/*.svelte\"",
+		"format": "biome format --write . && prettier --plugin prettier-plugin-svelte --write \"**/*.svelte\"",
 		"lint": "biome lint --write .",
-		"check": "biome check --write . && bunx prettier --write \"**/*.svelte\"",
-		"check:ci": "biome ci . && bunx prettier --check \"**/*.svelte\"",
+		"check": "biome check --write . && prettier --plugin prettier-plugin-svelte --write \"**/*.svelte\"",
+		"check:ci": "biome ci . && prettier --plugin prettier-plugin-svelte --check \"**/*.svelte\"",
 		"typecheck": "tsc --noEmit -p packages/shared/tsconfig.json",
 		"build": "bun run check && bun run typecheck",
 		"fmt:rust": "cargo fmt --all",
@@ -20,7 +19,7 @@
 		"@biomejs/biome": "1.9.4",
 		"prettier": "^3.3.3",
 		"prettier-plugin-svelte": "^3.2.6",
-		"svelte": "^5.53.7",
+		"svelte": "5.55.6",
 		"typescript": "^5.6.2"
 	}
 }
