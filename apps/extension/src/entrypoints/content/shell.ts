@@ -1,8 +1,14 @@
-import {
-	createApiClient,
-	type FuzzyApiClient,
-	type SearchResult,
-} from "@fuzzy/shared";
+// Fuzzyシェル本体（issue54: 横断検索UIの土台）。
+// Moodleの上部ナビに「Fuzzy」タブを追加し、開くと本文領域をFuzzyの画面
+// （左サイドバー＋各機能画面）へ差し替える。閉じると元のMoodle本文を復元する。
+//
+// 【XSS対策の方針】
+// ファイル名・スニペット・授業名などの動的な文字列は、Moodleから保存した資料に
+// 由来する「外部データ」なので信用しない。DOMへ入れる際は必ず textContent /
+// dataset を経由し、HTML文字列の組み立て（innerHTML等）には一切混ぜないこと。
+// このモジュールでは動的データを含むHTML文字列を組み立てる箇所を意図的に無くしている。
+
+import { type FuzzyApiClient, type SearchResult, createApiClient } from "@fuzzy/shared";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -13,20 +19,14 @@ const STASH_ID = "fuzzy-shell-stash";
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
 type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "organize";
 
-interface SearchState {
-	query: string;
-	results: SearchResult[];
-	selectedResultId: number | null;
-	loading: boolean;
-	error: string | null;
-}
-
-const menuItems: {
+interface MenuItem {
 	id: ScreenId;
 	label: string;
 	enabled: boolean;
 	description: string;
-}[] = [
+}
+
+const menuItems: readonly MenuItem[] = [
 	{ id: "dashboard", label: "ダッシュボード", enabled: false, description: "issue57 で実装" },
 	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
 	{ id: "deadlines", label: "締切ハブ", enabled: false, description: "issue55 で有効化" },
@@ -34,14 +34,37 @@ const menuItems: {
 	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
 ];
 
-export default defineContentScript({
-	matches: ["*://*.wakayama-u.ac.jp/*"],
-	main() {
-		void mountFuzzyShell();
+const placeholderCopy: Record<Exclude<ScreenId, "search">, { title: string; copy: string }> = {
+	dashboard: { title: "ダッシュボード", copy: "issue57 で実装する予定です。" },
+	deadlines: {
+		title: "締切ハブ",
+		copy: "issue55 でこのメニューが有効になり、課題一覧と提出状況の切り替えが追加されます。",
 	},
-});
+	courses: { title: "コース一覧", copy: "今後の画面としてここへ統合していきます。" },
+	organize: { title: "重複の整理", copy: "保存済み資料の整理UIをここへ追加する予定です。" },
+};
 
-async function mountFuzzyShell(): Promise<void> {
+interface SearchState {
+	/** 入力欄の現在値（inputイベントで随時同期） */
+	query: string;
+	/** 直近に実行した検索語（件数表示に使う） */
+	executedQuery: string;
+	results: SearchResult[];
+	selectedResultId: number | null;
+	loading: boolean;
+	error: string | null;
+}
+
+interface SearchScreen {
+	root: HTMLElement;
+	input: HTMLInputElement;
+	submitButton: HTMLButtonElement;
+	countLabel: HTMLElement;
+	resultsHost: HTMLElement;
+	noteHost: HTMLElement;
+}
+
+export function mountFuzzyShell(): void {
 	if (document.getElementById(ROOT_ID)) return;
 
 	const navHost = findNavHost();
@@ -53,31 +76,37 @@ async function mountFuzzyShell(): Promise<void> {
 
 	ensureStyle();
 
-	const root = document.createElement("div");
+	// --- ナビボタン ---
+	const navButton = el("button", "fuzzy-nav-button");
+	navButton.id = BUTTON_ID;
+	navButton.type = "button";
+	navButton.setAttribute("aria-pressed", "false");
+	navButton.append(el("span", "fuzzy-nav-mark", "F"), el("span", "", "Fuzzy"));
+
+	const root = el("div");
 	root.id = ROOT_ID;
-	root.innerHTML = `
-		<button id="${BUTTON_ID}" type="button" class="fuzzy-nav-button" aria-pressed="false">
-			<span class="fuzzy-nav-mark">F</span>
-			<span>Fuzzy</span>
-		</button>
-	`;
+	root.append(navButton);
 	navHost.append(root);
 
-	const navButton = root.querySelector<HTMLButtonElement>(`#${BUTTON_ID}`);
-	if (!navButton) return;
-
-	const stash = document.createElement("div");
+	// シェルを開いている間、Moodle本文の退避先になる要素
+	const stash = el("div");
 	stash.id = STASH_ID;
 	stash.hidden = true;
 	mainHost.after(stash);
 
+	// --- 状態 ---
 	const apiPromise = createApiClient();
 	let page: HTMLElement | null = null;
+	let mainEl: HTMLElement | null = null;
+	let statusBadge: HTMLElement | null = null;
+	let searchScreen: SearchScreen | null = null;
+	const sideLinks: HTMLButtonElement[] = [];
 	let isOpen = false;
 	let activeScreen: ScreenId = "search";
 	let mode: ConnectionMode = "checking";
 	const searchState: SearchState = {
-		query: "正規化",
+		query: "",
+		executedQuery: "",
 		results: [],
 		selectedResultId: null,
 		loading: false,
@@ -85,57 +114,279 @@ async function mountFuzzyShell(): Promise<void> {
 	};
 
 	const moveMainContentToStash = () => {
-		while (mainHost.firstChild) {
-			stash.append(mainHost.firstChild);
-		}
+		while (mainHost.firstChild) stash.append(mainHost.firstChild);
 	};
 
 	const restoreMainContent = () => {
-		while (stash.firstChild) {
-			mainHost.append(stash.firstChild);
-		}
+		while (stash.firstChild) mainHost.append(stash.firstChild);
 	};
 
-	const setModeLabel = (label: HTMLElement, nextMode: ConnectionMode) => {
+	const setTopMode = (nextMode: ConnectionMode) => {
 		mode = nextMode;
-		label.dataset.mode = nextMode;
-		label.textContent =
-			nextMode === "native"
+		if (!statusBadge) return;
+		statusBadge.dataset.mode = mode;
+		statusBadge.textContent =
+			mode === "native"
 				? "完全ローカル・実データ接続"
-				: nextMode === "mock"
+				: mode === "mock"
 					? "完全ローカル・サンプル表示"
 					: "接続確認中";
 	};
 
-	const getSearchSelection = () =>
-		searchState.results.find((result) => result.fileId === searchState.selectedResultId) ?? null;
+	// --- 検索画面 ---
+
+	/** 選択中の候補パネルと結果行のハイライトだけを更新する（一覧は作り直さない） */
+	const renderSelection = () => {
+		if (!searchScreen) return;
+		const selected =
+			searchState.results.find((result) => result.fileId === searchState.selectedResultId) ?? null;
+
+		for (const row of searchScreen.resultsHost.querySelectorAll<HTMLButtonElement>(
+			".fuzzy-result-row",
+		)) {
+			row.classList.toggle(
+				"is-selected",
+				selected !== null && Number(row.dataset.fileId) === selected.fileId,
+			);
+		}
+
+		const note = searchScreen.noteHost;
+		if (!selected) {
+			note.replaceChildren(
+				el("p", "fuzzy-section-label", "検索のメモ"),
+				el("h2", "", "資料の所在を見つける"),
+				el(
+					"p",
+					"fuzzy-note-copy",
+					"スニペットは検索語の前後だけを短く抜き出した本文です。まずは「正規化」で確認できます。",
+				),
+			);
+			return;
+		}
+
+		const grid = el("dl", "fuzzy-note-grid");
+		const addNoteRow = (term: string, detail: string) => {
+			const rowEl = el("div");
+			rowEl.append(el("dt", "", term), el("dd", "", detail));
+			grid.append(rowEl);
+		};
+		addNoteRow("授業", selected.courseName ?? "未設定");
+		addNoteRow("ページ", selected.page === null ? "ページ情報なし" : `${selected.page}ページ`);
+		addNoteRow("一致度", `${Math.round(selected.score * 100)}%`);
+
+		note.replaceChildren(
+			el("p", "fuzzy-section-label", "選択中の候補"),
+			el("h2", "", selected.fileName),
+			el(
+				"p",
+				"fuzzy-note-copy",
+				selected.page === null
+					? "該当箇所を見つけました。ページ情報は未登録です。"
+					: `${selected.page}ページ付近に該当箇所があります。`,
+			),
+			grid,
+		);
+	};
+
+	const createResultRow = (result: SearchResult): HTMLButtonElement => {
+		const row = el("button", "fuzzy-result-row");
+		row.type = "button";
+		row.dataset.fileId = String(result.fileId);
+
+		const kindClass = fileKindClass(result.fileName);
+		const kind = el(
+			"div",
+			kindClass ? `fuzzy-result-kind ${kindClass}` : "fuzzy-result-kind",
+			fileKindLabel(result.fileName),
+		);
+
+		const main = el("div", "fuzzy-result-main");
+		main.append(
+			el("p", "fuzzy-result-title", result.fileName),
+			el("p", "fuzzy-result-sub", result.courseName ?? "授業名なし"),
+		);
+
+		const side = el("div", "fuzzy-result-side");
+		side.append(
+			el("p", "", result.page === null ? "—" : `p.${result.page}`),
+			el("span", "", result.page === null ? "ファイルを開く" : "ページへ"),
+		);
+
+		row.append(kind, main, el("p", "fuzzy-result-snippet", result.snippet), side);
+		return row;
+	};
+
+	/** 検索結果まわり（件数・一覧・選択パネル）だけを更新する。入力欄には触らない */
+	const renderSearchResults = () => {
+		if (!searchScreen) return;
+		const { submitButton, countLabel, resultsHost } = searchScreen;
+
+		submitButton.textContent = searchState.loading ? "検索中…" : "検索";
+		submitButton.disabled = searchState.loading;
+		countLabel.textContent = searchState.executedQuery
+			? `「${searchState.executedQuery}」に一致: ${searchState.results.length}ファイル`
+			: "キーワードを入力してください";
+
+		if (searchState.error) {
+			resultsHost.replaceChildren(
+				el("p", "fuzzy-error", `検索に失敗しました: ${searchState.error}`),
+			);
+		} else if (searchState.loading) {
+			resultsHost.replaceChildren(el("p", "fuzzy-loading", "検索中…"));
+		} else if (searchState.results.length === 0) {
+			const empty = el("section", "fuzzy-empty");
+			empty.append(
+				el(
+					"h2",
+					"",
+					searchState.executedQuery ? "一致する資料がありません" : "まだ結果がありません",
+				),
+				el("p", "", "サンプルでは「正規化」で結果が表示されます。"),
+			);
+			resultsHost.replaceChildren(empty);
+		} else {
+			const list = el("div", "fuzzy-result-list");
+			list.append(...searchState.results.map(createResultRow));
+			resultsHost.replaceChildren(
+				el("p", "fuzzy-section-label", "該当箇所順（関連が高い順）"),
+				list,
+			);
+		}
+
+		renderSelection();
+	};
 
 	const runSearch = async () => {
 		const query = searchState.query.trim();
 		if (!query) {
 			searchState.error = "検索したいワードを入力してください。";
+			searchState.executedQuery = "";
 			searchState.results = [];
 			searchState.selectedResultId = null;
-			renderScreen();
+			renderSearchResults();
 			return;
 		}
 
 		searchState.loading = true;
 		searchState.error = null;
-		renderScreen();
+		renderSearchResults();
 
 		try {
 			const api = await apiPromise;
 			searchState.results = await api.search(query);
+			searchState.executedQuery = query;
 			searchState.selectedResultId = searchState.results[0]?.fileId ?? null;
 			setTopMode(api.mode);
 		} catch (error) {
 			searchState.error = error instanceof Error ? error.message : String(error);
+			searchState.executedQuery = query;
 			searchState.results = [];
 			searchState.selectedResultId = null;
 		} finally {
 			searchState.loading = false;
-			renderScreen();
+			renderSearchResults();
+		}
+	};
+
+	const buildSearchScreen = (): SearchScreen => {
+		const screen = el("div", "fuzzy-screen");
+		screen.append(buildScreenHeader("横断検索", "どのファイルに載っているか"));
+
+		const panel = el("section", "fuzzy-search-panel");
+
+		const tabs = el("div", "fuzzy-search-tabs");
+		const keywordTab = el("button", "fuzzy-chip is-active", "キーワード");
+		keywordTab.type = "button";
+		const courseTab = el("button", "fuzzy-chip", "講義で検索");
+		courseTab.type = "button";
+		courseTab.disabled = true;
+		tabs.append(keywordTab, courseTab);
+
+		const form = el("form", "fuzzy-search-form");
+		const inputWrap = el("div", "fuzzy-search-input-wrap");
+		const input = el("input");
+		input.id = "fuzzy-search-input";
+		input.type = "search";
+		input.placeholder = "調べたい単語を入力";
+		inputWrap.append(el("span", "fuzzy-search-dot"), input);
+		const submitButton = el("button", "fuzzy-primary-button", "検索");
+		submitButton.type = "submit";
+		form.append(inputWrap, submitButton);
+
+		const meta = el("div", "fuzzy-search-meta");
+		const countLabel = el("p", "", "キーワードを入力してください");
+		const toggle = el("label", "fuzzy-toggle");
+		const toggleInput = el("input");
+		toggleInput.type = "checkbox";
+		toggleInput.disabled = true;
+		toggle.append(
+			el("span", "", "AIで要約（任意・実験的）"),
+			toggleInput,
+			el("span", "fuzzy-toggle-ui"),
+		);
+		meta.append(countLabel, toggle);
+
+		panel.append(tabs, form, meta);
+
+		const layout = el("section", "fuzzy-search-layout");
+		const resultsHost = el("div", "fuzzy-search-results");
+		const noteHost = el("div", "fuzzy-search-note");
+		layout.append(resultsHost, noteHost);
+
+		screen.append(panel, layout);
+
+		// 入力値は状態へ随時同期する。再描画するのは結果領域だけなので入力途中の文字は消えない
+		input.addEventListener("input", () => {
+			searchState.query = input.value;
+		});
+		form.addEventListener("submit", (event) => {
+			event.preventDefault();
+			void runSearch();
+		});
+		// 結果行のクリックはイベント委譲で受け、選択まわりだけを更新する
+		resultsHost.addEventListener("click", (event) => {
+			if (!(event.target instanceof Element)) return;
+			const row = event.target.closest<HTMLButtonElement>(".fuzzy-result-row");
+			if (!row?.dataset.fileId) return;
+			searchState.selectedResultId = Number(row.dataset.fileId);
+			renderSelection();
+		});
+
+		return { root: screen, input, submitButton, countLabel, resultsHost, noteHost };
+	};
+
+	const getSearchScreen = (): SearchScreen => {
+		if (!searchScreen) {
+			searchScreen = buildSearchScreen();
+			renderSearchResults();
+		}
+		return searchScreen;
+	};
+
+	const buildPlaceholderScreen = (screenId: Exclude<ScreenId, "search">): HTMLElement => {
+		const { title, copy } = placeholderCopy[screenId];
+		const screen = el("div", "fuzzy-screen");
+		screen.append(buildScreenHeader("準備中", title));
+		const section = el("section", "fuzzy-placeholder");
+		section.append(el("p", "", copy));
+		screen.append(section);
+		return screen;
+	};
+
+	const renderScreen = () => {
+		for (const link of sideLinks) {
+			const isActive = link.dataset.screen === activeScreen;
+			link.classList.toggle("is-active", isActive);
+			if (isActive) link.setAttribute("aria-current", "page");
+			else link.removeAttribute("aria-current");
+		}
+
+		if (!mainEl) return;
+		if (activeScreen === "search") {
+			// 検索画面はキャッシュして使い回す（入力値・結果・選択状態を保持する）
+			mainEl.replaceChildren(getSearchScreen().root);
+		} else {
+			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
 	};
 
@@ -148,226 +399,54 @@ async function mountFuzzyShell(): Promise<void> {
 		restoreMainContent();
 	};
 
-	const setTopMode = (nextMode: ConnectionMode) => {
-		mode = nextMode;
-		const badge = page?.querySelector<HTMLElement>(".fuzzy-top-status");
-		if (badge) setModeLabel(badge, nextMode);
-	};
-
-	const renderSidebarState = () => {
-		page?.querySelectorAll<HTMLButtonElement>(".fuzzy-side-link").forEach((button) => {
-			const isActive = button.dataset.screen === activeScreen;
-			button.classList.toggle("is-active", isActive);
-			button.setAttribute("aria-current", isActive ? "page" : "false");
-		});
-	};
-
-	const renderSearchScreen = (host: HTMLElement) => {
-		const selected = getSearchSelection();
-		host.innerHTML = `
-			<header class="fuzzy-screen-header">
-				<div>
-					<p class="fuzzy-screen-kicker">横断検索</p>
-					<h1>どのファイルに載っているか</h1>
-				</div>
-			</header>
-			<section class="fuzzy-search-panel">
-				<div class="fuzzy-search-tabs">
-					<button type="button" class="fuzzy-chip is-active">キーワード</button>
-					<button type="button" class="fuzzy-chip" disabled>講義で検索</button>
-				</div>
-				<form class="fuzzy-search-form">
-					<div class="fuzzy-search-input-wrap">
-						<span class="fuzzy-search-dot"></span>
-						<input id="fuzzy-search-input" type="search" value="${escapeHtml(searchState.query)}" placeholder="調べたい単語を入力" />
-					</div>
-					<button type="submit" class="fuzzy-primary-button">${searchState.loading ? "検索中…" : "検索"}</button>
-				</form>
-				<div class="fuzzy-search-meta">
-					<p>${searchState.query ? `「${escapeHtml(searchState.query)}」に一致: ${searchState.results.length}ファイル` : "キーワードを入力してください"}</p>
-					<label class="fuzzy-toggle">
-						<span>AIで要約（任意・実験的）</span>
-						<input type="checkbox" disabled />
-						<span class="fuzzy-toggle-ui"></span>
-					</label>
-				</div>
-			</section>
-			<section class="fuzzy-search-layout">
-				<div class="fuzzy-search-results">
-					${
-						searchState.error
-							? `<p class="fuzzy-error">検索に失敗しました: ${escapeHtml(searchState.error)}</p>`
-							: searchState.loading
-								? '<p class="fuzzy-loading">検索中…</p>'
-								: searchState.results.length === 0
-									? '<section class="fuzzy-empty"><h2>まだ結果がありません</h2><p>サンプルでは「正規化」で結果が表示されます。</p></section>'
-									: `
-										<p class="fuzzy-section-label">該当箇所順（関連が高い順）</p>
-										<div class="fuzzy-result-list">
-											${searchState.results
-												.map(
-													(result) => `
-													<button type="button" class="fuzzy-result-row ${result.fileId === searchState.selectedResultId ? "is-selected" : ""}" data-file-id="${result.fileId}">
-														<div class="fuzzy-result-kind ${fileKindClass(result.fileName)}">${fileKindLabel(result.fileName)}</div>
-														<div class="fuzzy-result-main">
-															<p class="fuzzy-result-title">${escapeHtml(result.fileName)}</p>
-															<p class="fuzzy-result-sub">${escapeHtml(result.courseName ?? "授業名なし")}</p>
-														</div>
-														<p class="fuzzy-result-snippet">${escapeHtml(result.snippet)}</p>
-														<div class="fuzzy-result-side">
-															<p>${result.page === null ? "—" : `p.${result.page}`}</p>
-															<span>${result.page === null ? "ファイルを開く" : "ページへ"}</span>
-														</div>
-													</button>
-												`,
-												)
-												.join("")}
-										</div>
-									`
-					}
-				</div>
-				<div class="fuzzy-search-note">
-					${
-						selected
-							? `
-								<p class="fuzzy-section-label">選択中の候補</p>
-								<h2>${escapeHtml(selected.fileName)}</h2>
-								<p class="fuzzy-note-copy">${selected.page === null ? "該当箇所を見つけました。ページ情報は未登録です。" : `${selected.page}ページ付近に該当箇所があります。`}</p>
-								<dl class="fuzzy-note-grid">
-									<div><dt>授業</dt><dd>${escapeHtml(selected.courseName ?? "未設定")}</dd></div>
-									<div><dt>ページ</dt><dd>${selected.page === null ? "ページ情報なし" : `${selected.page}ページ`}</dd></div>
-									<div><dt>一致度</dt><dd>${Math.round(selected.score * 100)}%</dd></div>
-								</dl>
-							`
-							: `
-								<p class="fuzzy-section-label">検索のメモ</p>
-								<h2>資料の所在を見つける</h2>
-								<p class="fuzzy-note-copy">スニペットは検索語の前後だけを短く抜き出した本文です。まずは「正規化」で確認できます。</p>
-							`
-					}
-				</div>
-			</section>
-		`;
-
-		host.querySelector<HTMLFormElement>(".fuzzy-search-form")?.addEventListener("submit", (event) => {
-			event.preventDefault();
-			const input = host.querySelector<HTMLInputElement>("#fuzzy-search-input");
-			searchState.query = input?.value ?? "";
-			void runSearch();
-		});
-
-		host.querySelectorAll<HTMLButtonElement>(".fuzzy-result-row").forEach((button) => {
-			button.addEventListener("click", () => {
-				searchState.selectedResultId = Number(button.dataset.fileId);
-				renderScreen();
-			});
-		});
-	};
-
-	const renderPlaceholderScreen = (host: HTMLElement, title: string, copy: string) => {
-		host.innerHTML = `
-			<header class="fuzzy-screen-header">
-				<div>
-					<p class="fuzzy-screen-kicker">準備中</p>
-					<h1>${escapeHtml(title)}</h1>
-				</div>
-			</header>
-			<section class="fuzzy-placeholder">
-				<p>${escapeHtml(copy)}</p>
-			</section>
-		`;
-	};
-
-	const renderScreen = () => {
-		if (!page) return;
-		renderSidebarState();
-		const host = page.querySelector<HTMLElement>(".fuzzy-main");
-		const badge = page.querySelector<HTMLElement>(".fuzzy-top-status");
-		if (!host || !badge) return;
-		setModeLabel(badge, mode);
-
-		switch (activeScreen) {
-			case "search":
-				renderSearchScreen(host);
-				break;
-			case "dashboard":
-				renderPlaceholderScreen(host, "ダッシュボード", "issue57 で実装する予定です。");
-				break;
-			case "deadlines":
-				renderPlaceholderScreen(host, "締切ハブ", "issue55 でこのメニューが有効になり、課題一覧と提出状況の切り替えが追加されます。");
-				break;
-			case "courses":
-				renderPlaceholderScreen(host, "コース一覧", "今後の画面としてここへ統合していきます。");
-				break;
-			case "organize":
-				renderPlaceholderScreen(host, "重複の整理", "保存済み資料の整理UIをここへ追加する予定です。");
-				break;
-		}
-	};
-
-	const buildPage = () => {
+	const buildPage = (): HTMLElement => {
 		if (page) return page;
 
-		page = document.createElement("section");
+		page = el("section", "fuzzy-shell");
 		page.id = PAGE_ID;
-		page.className = "fuzzy-shell";
-		page.innerHTML = `
-			<div class="fuzzy-sidebar">
-				<div class="fuzzy-brand">
-					<span class="fuzzy-brand-mark">F</span>
-					<span>Fuzzy</span>
-				</div>
-				<nav class="fuzzy-side-nav" aria-label="Fuzzy menu">
-					${menuItems
-						.map(
-							(item) => `
-								<button
-									type="button"
-									class="fuzzy-side-link ${item.enabled ? "" : "is-disabled"}"
-									data-screen="${item.id}"
-									${item.enabled ? "" : "disabled"}
-									title="${escapeHtml(item.description)}"
-								>
-									<span class="fuzzy-side-dot"></span>
-									<span>${escapeHtml(item.label)}</span>
-								</button>
-							`,
-						)
-						.join("")}
-				</nav>
-				<div class="fuzzy-sidebar-footer">
-					<p>検索を実装中</p>
-					<span>issue54 / mock search</span>
-				</div>
-			</div>
-			<div class="fuzzy-content">
-				<header class="fuzzy-topbar">
-					<p class="fuzzy-top-status" data-mode="checking">接続確認中</p>
-					<button type="button" class="fuzzy-close-button">Moodleに戻る</button>
-				</header>
-				<main class="fuzzy-main"></main>
-			</div>
-		`;
 
-		page.querySelector<HTMLButtonElement>(".fuzzy-close-button")?.addEventListener("click", () => {
-			closeShell();
-		});
+		const sidebar = el("div", "fuzzy-sidebar");
+		const brand = el("div", "fuzzy-brand");
+		brand.append(el("span", "fuzzy-brand-mark", "F"), el("span", "", "Fuzzy"));
 
-		page.querySelectorAll<HTMLButtonElement>(".fuzzy-side-link").forEach((button) => {
-			button.addEventListener("click", () => {
-				activeScreen = button.dataset.screen as ScreenId;
-				if (activeScreen === "search" && searchState.results.length === 0 && !searchState.loading) {
-					void runSearch();
-				}
+		const nav = el("nav", "fuzzy-side-nav");
+		nav.setAttribute("aria-label", "Fuzzy menu");
+		for (const item of menuItems) {
+			const link = el("button", item.enabled ? "fuzzy-side-link" : "fuzzy-side-link is-disabled");
+			link.type = "button";
+			link.dataset.screen = item.id;
+			link.disabled = !item.enabled;
+			link.title = item.description;
+			link.append(el("span", "fuzzy-side-dot"), el("span", "", item.label));
+			link.addEventListener("click", () => {
+				activeScreen = item.id;
 				renderScreen();
 			});
-		});
+			sideLinks.push(link);
+			nav.append(link);
+		}
 
+		const footer = el("div", "fuzzy-sidebar-footer");
+		footer.append(el("p", "", "検索を実装中"), el("span", "", "issue54 / mock search"));
+		sidebar.append(brand, nav, footer);
+
+		const content = el("div", "fuzzy-content");
+		const topbar = el("header", "fuzzy-topbar");
+		statusBadge = el("p", "fuzzy-top-status");
+		setTopMode(mode);
+		const closeButton = el("button", "fuzzy-close-button", "Moodleに戻る");
+		closeButton.type = "button";
+		closeButton.addEventListener("click", closeShell);
+		topbar.append(statusBadge, closeButton);
+		mainEl = el("main", "fuzzy-main");
+		content.append(topbar, mainEl);
+
+		page.append(sidebar, content);
 		renderScreen();
 		return page;
 	};
 
-	const openShell = async () => {
+	const openShell = () => {
 		if (isOpen) return;
 		isOpen = true;
 		navButton.classList.add("is-active");
@@ -375,33 +454,48 @@ async function mountFuzzyShell(): Promise<void> {
 		moveMainContentToStash();
 		mainHost.append(buildPage());
 
-		try {
-			const api = await apiPromise;
-			setTopMode(api.mode);
-		} catch {
-			setTopMode("checking");
-		}
-
-		if (activeScreen === "search" && searchState.results.length === 0 && !searchState.loading) {
-			void runSearch();
-		}
+		// 接続モードの表示だけ非同期で更新する（検索は自動では実行しない）
+		void apiPromise.then(
+			(api) => setTopMode(api.mode),
+			() => setTopMode("checking"),
+		);
 	};
 
 	navButton.addEventListener("click", () => {
-		if (isOpen) {
-			closeShell();
-			return;
-		}
-		void openShell();
+		if (isOpen) closeShell();
+		else openShell();
 	});
 
+	// Moodle側の別タブ（Home等）を押したときはFuzzyを閉じて本文を戻す
 	navHost.addEventListener("click", (event) => {
-		const target = event.target;
-		if (!(target instanceof Element)) return;
-		const otherNavItem = target.closest("a, button");
+		if (!(event.target instanceof Element)) return;
+		const otherNavItem = event.target.closest("a, button");
 		if (!otherNavItem || otherNavItem === navButton) return;
 		closeShell();
 	});
+}
+
+/**
+ * createElement の薄いラッパー。動的な文字列は textContent 経由でのみDOMへ入れる
+ * （HTML文字列の組み立てを避けることで、エスケープ漏れによるXSSを構造的に防ぐ）。
+ */
+function el<K extends keyof HTMLElementTagNameMap>(
+	tag: K,
+	className = "",
+	textContent = "",
+): HTMLElementTagNameMap[K] {
+	const node = document.createElement(tag);
+	if (className) node.className = className;
+	if (textContent) node.textContent = textContent;
+	return node;
+}
+
+function buildScreenHeader(kicker: string, title: string): HTMLElement {
+	const header = el("header", "fuzzy-screen-header");
+	const wrap = el("div");
+	wrap.append(el("p", "fuzzy-screen-kicker", kicker), el("h1", "", title));
+	header.append(wrap);
+	return header;
 }
 
 function fileKindLabel(fileName: string): string {
@@ -643,7 +737,7 @@ function ensureStyle(): void {
 			cursor: pointer;
 		}
 
-		.fuzzy-main {
+		.fuzzy-screen {
 			display: grid;
 			gap: 18px;
 		}
@@ -681,17 +775,10 @@ function ensureStyle(): void {
 		.fuzzy-search-note,
 		.fuzzy-placeholder,
 		.fuzzy-empty {
+			padding: 16px;
 			border-radius: 14px;
 			background: #ffffff;
 			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
-		}
-
-		.fuzzy-search-panel,
-		.fuzzy-search-results,
-		.fuzzy-search-note,
-		.fuzzy-placeholder,
-		.fuzzy-empty {
-			padding: 16px;
 		}
 
 		.fuzzy-search-tabs {
@@ -947,6 +1034,10 @@ function ensureStyle(): void {
 			line-height: 1.8;
 		}
 
+		.fuzzy-placeholder p {
+			margin: 0;
+		}
+
 		.fuzzy-loading,
 		.fuzzy-error {
 			margin: 0;
@@ -1009,13 +1100,4 @@ function ensureStyle(): void {
 	`;
 
 	document.head.append(style);
-}
-
-function escapeHtml(value: string): string {
-	return value
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&#39;");
 }
