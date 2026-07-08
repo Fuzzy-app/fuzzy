@@ -17,9 +17,7 @@ body {
 	min-width: 360px;
 	min-height: 300px;
 	font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
-	background:
-		linear-gradient(135deg, rgba(255, 224, 123, 0.24), transparent 45%),
-		#fffdf6;
+	background: linear-gradient(135deg, rgba(255, 224, 123, 0.24), transparent 45%), #fffdf6;
 }
 
 #app {
