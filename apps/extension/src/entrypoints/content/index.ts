@@ -6,7 +6,8 @@ import { mountFuzzyShell } from "./shell";
 export default defineContentScript({
 	// 年度で変わるホスト名（moodle2026.wakayama-u.ac.jp 等）を
 	// matches だけでは細かく絞り込めないため、
-	// main() 内部の正規表現で moodle数字.wakayama-u.ac.jp の形式だけに限定する。
+	// main() 内部の正規表現で moodle[数字].wakayama-u.ac.jp の形式だけに限定する。
+	// 数字部分は任意（\d*）なので、年度なしの moodle.wakayama-u.ac.jp も許可する。
 	matches: ["*://*.wakayama-u.ac.jp/*"],
 	main() {
 		if (!/^moodle\d*\.wakayama-u\.ac\.jp$/.test(location.hostname)) return;

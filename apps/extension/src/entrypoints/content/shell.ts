@@ -23,7 +23,9 @@ const STASH_ID = "fuzzy-shell-stash";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
 type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "organize";
-type DeadlineFilter = "all" | "upcoming" | "overdue" | "review";
+// 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
+// import 時の衝突・混同を避けるため View 用として別名にしている。
+type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
 
 interface MenuItem {
 	id: ScreenId;
@@ -80,6 +82,21 @@ function parseDueAt(dueAt: string | null): number | null {
 	return Number.isNaN(time) ? null : time;
 }
 
+// 和歌山大学のセメスター区分。締切ハブではクオーター単位ではなくセメスター単位で扱う。
+// 夏季集中などの特別授業も前期側に取り込めるよう、前期=4〜9月（[4,10)）／
+// 後期=10〜3月（[10,4)）と年間を隙間なく二分する。壊れた日付の締切は具体的な日付を
+// 出せないため、この区分を「おおよその所属セメスター」の目安として表示に使う。
+type Semester = "first" | "second";
+
+function semesterOf(time: number): Semester {
+	const month = new Date(time).getMonth() + 1; // 1〜12
+	return month >= 4 && month < 10 ? "first" : "second";
+}
+
+function semesterLabel(semester: Semester): string {
+	return semester === "first" ? "前期" : "後期";
+}
+
 function isNeedsReview(assignment: Assignment): boolean {
 	return (
 		assignment.dueAtStatus === "needs_review" ||
@@ -102,16 +119,21 @@ function isUpcoming(assignment: Assignment): boolean {
 	);
 }
 
+// フォーマッタ生成はコストが高いため、締切カードごとに作り直さずモジュールスコープで使い回す。
+const dueAtFormatter = new Intl.DateTimeFormat("ja-JP", {
+	month: "numeric",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+});
+
 function formatDate(dueAt: string | null): string {
 	if (!dueAt) return "期限未設定";
 	const time = parseDueAt(dueAt);
-	if (time === null) return "期限要確認";
-	return new Intl.DateTimeFormat("ja-JP", {
-		month: "numeric",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-	}).format(new Date(time));
+	// 日付が壊れていて具体的な期限を出せない場合は、現在の和歌山大学のセメスターを
+	// 目安として示す（例: 前期中に開くと「前期中・日付要確認」）。
+	if (time === null) return `${semesterLabel(semesterOf(getNow()))}中・日付要確認`;
+	return dueAtFormatter.format(new Date(time));
 }
 
 function submissionLabel(assignment: Assignment): string {
@@ -138,7 +160,7 @@ function sourceLabel(assignment: Assignment): string {
 	}
 }
 
-function deadlineFilterLabel(filter: DeadlineFilter): string {
+function deadlineFilterLabel(filter: DeadlineViewFilter): string {
 	switch (filter) {
 		case "upcoming":
 			return "今後";
@@ -191,7 +213,7 @@ export function mountFuzzyShell(): void {
 	let isOpen = false;
 	let activeScreen: ScreenId = "search";
 	let mode: ConnectionMode = "checking";
-	let deadlineFilter: DeadlineFilter = "all";
+	let deadlineFilter: DeadlineViewFilter = "all";
 	let assignments: Assignment[] = [];
 	let assignmentsLoaded = false;
 	let loadingDeadlines = false;
@@ -543,32 +565,32 @@ export function mountFuzzyShell(): void {
 		const checkLabel = el("label", "fuzzy-checkline");
 		const checkbox = el("input") as HTMLInputElement;
 		checkbox.type = "checkbox";
-		checkbox.dataset.id = String(assignment.id);
 		checkbox.checked = assignment.submitted;
 		checkbox.addEventListener("change", async () => {
-			const previous = assignment.submitted;
 			const submitted = checkbox.checked;
+			// 応答待ちの間の二重操作を防ぐ。成否いずれも renderScreen() で
+			// assignments を正本に画面を作り直すため、この checkbox 自体の状態は個別に戻さない。
 			checkbox.disabled = true;
 			try {
 				const api = await apiPromise;
-				await api.updateSubmissionStatus(assignment.id, submitted);
+				const result = await api.updateSubmissionStatus(assignment.id, submitted);
+				if (!result.ok) throw new Error("サーバーが更新を受け付けませんでした。");
 				submissionError = null;
 				assignments = assignments.map((item) =>
 					item.id === assignment.id ? { ...item, submitted } : item,
 				);
-				renderScreen();
 			} catch (error) {
-				checkbox.checked = previous;
 				submissionError =
 					error instanceof Error
 						? `提出状態の更新に失敗しました: ${error.message}`
 						: "提出状態の更新に失敗しました。";
-				renderScreen();
-			} finally {
-				checkbox.disabled = false;
 			}
+			renderScreen();
 		});
-		checkLabel.append(checkbox, el("span", "", "提出済みにする"));
+		checkLabel.append(
+			checkbox,
+			el("span", "", assignment.submitted ? "未提出に戻す" : "提出済みにする"),
+		);
 
 		card.append(head, body, checkLabel);
 		return card;
@@ -640,6 +662,7 @@ export function mountFuzzyShell(): void {
 				deadlineFilterLabel(filter),
 			);
 			button.type = "button";
+			button.setAttribute("aria-pressed", String(deadlineFilter === filter));
 			button.addEventListener("click", () => {
 				deadlineFilter = filter;
 				renderScreen();
@@ -695,7 +718,8 @@ export function mountFuzzyShell(): void {
 			// 検索画面はキャッシュして使い回す（入力値・結果・選択状態を保持する）
 			mainEl.replaceChildren(getSearchScreen().root);
 		} else if (activeScreen === "deadlines") {
-			mainEl.replaceChildren(buildDeadlineScreen());
+			// 先にロード状態を確定させてから描画する。順序を逆にすると初回描画時点では
+			// loadingDeadlines がまだ false のため、読み込み中に空状態がちらついてしまう。
 			if (!assignmentsLoaded && !loadingDeadlines && !deadlineError) {
 				loadingDeadlines = true;
 				void loadAssignments().finally(() => {
@@ -703,6 +727,7 @@ export function mountFuzzyShell(): void {
 					if (activeScreen === "deadlines") renderScreen();
 				});
 			}
+			mainEl.replaceChildren(buildDeadlineScreen());
 		} else {
 			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
