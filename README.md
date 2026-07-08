@@ -35,14 +35,11 @@ docs/
 ## セットアップ
 
 1. リポジトリを clone する
-2. ルートで依存をインストール: `bun install`
-3. （初回のみ）各アプリ・クレートを生成する
-	- 拡張: `bun create wxt@latest apps/extension`（テンプレートは Svelte）
-	- デスクトップ（初期セットアップ）: `bun create tauri-app@latest apps/desktop`（フロントは Svelte + TS）
-	- Native Messagingホスト: `cargo new --bin apps/native-host`
-	- 共有Rustクレート: `cargo new --lib crates/engine-core`
-	- 生成後、ルート `package.json` の `workspaces` に `"apps/*"` を追加して再度 `bun install`
+2. ルートで依存をインストール: `bun install`（パッケージ管理はbunに統一。npm/yarnは使わない）
+3. Rust側のビルド確認: `cargo build`
 4. 整形・チェック: `bun run check`
+
+※各アプリ・クレート（`apps/extension`・`apps/desktop`・`apps/native-host`・`crates/engine-core`）はPhase0（#32〜#35）で生成済み。追加の生成作業は不要です。
 
 詳しい手順・トラブルシューティングは [`docs/セットアップ.md`](docs/セットアップ.md) を参照。
 
