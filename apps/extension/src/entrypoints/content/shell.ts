@@ -8,7 +8,12 @@
 // dataset を経由し、HTML文字列の組み立て（innerHTML等）には一切混ぜないこと。
 // このモジュールでは動的データを含むHTML文字列を組み立てる箇所を意図的に無くしている。
 
-import { type FuzzyApiClient, type SearchResult, createApiClient } from "@fuzzy/shared";
+import {
+	type Assignment,
+	type FuzzyApiClient,
+	type SearchResult,
+	createApiClient,
+} from "@fuzzy/shared";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -18,6 +23,9 @@ const STASH_ID = "fuzzy-shell-stash";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
 type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "organize";
+// 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
+// import 時の衝突・混同を避けるため View 用として別名にしている。
+type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
 
 interface MenuItem {
 	id: ScreenId;
@@ -29,7 +37,7 @@ interface MenuItem {
 const menuItems: readonly MenuItem[] = [
 	{ id: "dashboard", label: "ダッシュボード", enabled: false, description: "issue57 で実装" },
 	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
-	{ id: "deadlines", label: "締切ハブ", enabled: false, description: "issue55 で有効化" },
+	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
 	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
 	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
 ];
@@ -38,7 +46,7 @@ const placeholderCopy: Record<Exclude<ScreenId, "search">, { title: string; copy
 	dashboard: { title: "ダッシュボード", copy: "issue57 で実装する予定です。" },
 	deadlines: {
 		title: "締切ハブ",
-		copy: "issue55 でこのメニューが有効になり、課題一覧と提出状況の切り替えが追加されます。",
+		copy: "課題一覧と提出状況を、この画面でまとめて確認できます。",
 	},
 	courses: { title: "コース一覧", copy: "今後の画面としてここへ統合していきます。" },
 	organize: { title: "重複の整理", copy: "保存済み資料の整理UIをここへ追加する予定です。" },
@@ -50,7 +58,7 @@ interface SearchState {
 	/** 直近に実行した検索語（件数表示に使う） */
 	executedQuery: string;
 	results: SearchResult[];
-	selectedResultId: number | null;
+	selectedResultKey: string | null;
 	loading: boolean;
 	error: string | null;
 }
@@ -62,6 +70,107 @@ interface SearchScreen {
 	countLabel: HTMLElement;
 	resultsHost: HTMLElement;
 	noteHost: HTMLElement;
+}
+
+function getNow(): number {
+	return Date.now();
+}
+
+function parseDueAt(dueAt: string | null): number | null {
+	if (!dueAt) return null;
+	const time = Date.parse(dueAt);
+	return Number.isNaN(time) ? null : time;
+}
+
+// 和歌山大学のセメスター区分。締切ハブではクオーター単位ではなくセメスター単位で扱う。
+// 夏季集中などの特別授業も前期側に取り込めるよう、前期=4〜9月（[4,10)）／
+// 後期=10〜3月（[10,4)）と年間を隙間なく二分する。壊れた日付の締切は具体的な日付を
+// 出せないため、この区分を「おおよその所属セメスター」の目安として表示に使う。
+type Semester = "first" | "second";
+
+function semesterOf(time: number): Semester {
+	const month = new Date(time).getMonth() + 1; // 1〜12
+	return month >= 4 && month < 10 ? "first" : "second";
+}
+
+function semesterLabel(semester: Semester): string {
+	return semester === "first" ? "前期" : "後期";
+}
+
+function isNeedsReview(assignment: Assignment): boolean {
+	return (
+		assignment.dueAtStatus === "needs_review" ||
+		(assignment.dueAt !== null && parseDueAt(assignment.dueAt) === null)
+	);
+}
+
+function isOverdue(assignment: Assignment): boolean {
+	const dueTime = parseDueAt(assignment.dueAt);
+	return Boolean(dueTime !== null && !assignment.submitted && dueTime < getNow());
+}
+
+function isUpcoming(assignment: Assignment): boolean {
+	const dueTime = parseDueAt(assignment.dueAt);
+	return (
+		!assignment.submitted &&
+		(assignment.dueAt === null || dueTime !== null) &&
+		(dueTime === null || dueTime >= getNow()) &&
+		!isNeedsReview(assignment)
+	);
+}
+
+// フォーマッタ生成はコストが高いため、締切カードごとに作り直さずモジュールスコープで使い回す。
+const dueAtFormatter = new Intl.DateTimeFormat("ja-JP", {
+	month: "numeric",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+});
+
+function formatDate(dueAt: string | null): string {
+	if (!dueAt) return "期限未設定";
+	const time = parseDueAt(dueAt);
+	// 日付が壊れていて具体的な期限を出せない場合は、現在の和歌山大学のセメスターを
+	// 目安として示す（例: 前期中に開くと「前期中・日付要確認」）。
+	if (time === null) return `${semesterLabel(semesterOf(getNow()))}中・日付要確認`;
+	return dueAtFormatter.format(new Date(time));
+}
+
+function submissionLabel(assignment: Assignment): string {
+	switch (assignment.submissionMode) {
+		case "moodle_auto":
+			return "Moodle提出";
+		case "manual":
+			return "手動提出";
+		case "notify_only":
+			return "通知のみ";
+		default:
+			return "確認中";
+	}
+}
+
+function sourceLabel(assignment: Assignment): string {
+	switch (assignment.source) {
+		case "moodle_dashboard":
+			return "Moodleダッシュボード";
+		case "moodle_text":
+			return "Moodle本文";
+		case "file_content":
+			return "資料本文";
+	}
+}
+
+function deadlineFilterLabel(filter: DeadlineViewFilter): string {
+	switch (filter) {
+		case "upcoming":
+			return "今後";
+		case "overdue":
+			return "期限切れ";
+		case "review":
+			return "要確認";
+		default:
+			return "すべて";
+	}
 }
 
 export function mountFuzzyShell(): void {
@@ -83,7 +192,7 @@ export function mountFuzzyShell(): void {
 	navButton.setAttribute("aria-pressed", "false");
 	navButton.append(el("span", "fuzzy-nav-mark", "F"), el("span", "", "Fuzzy"));
 
-	const root = el("div");
+	const root = el(navHost.tagName === "UL" ? "li" : "div");
 	root.id = ROOT_ID;
 	root.append(navButton);
 	navHost.append(root);
@@ -104,11 +213,18 @@ export function mountFuzzyShell(): void {
 	let isOpen = false;
 	let activeScreen: ScreenId = "search";
 	let mode: ConnectionMode = "checking";
+	let deadlineFilter: DeadlineViewFilter = "all";
+	let assignments: Assignment[] = [];
+	let assignmentsLoaded = false;
+	let loadingDeadlines = false;
+	let deadlineError: string | null = null;
+	let submissionError: string | null = null;
+	let searchRequestId = 0;
 	const searchState: SearchState = {
 		query: "",
 		executedQuery: "",
 		results: [],
-		selectedResultId: null,
+		selectedResultKey: null,
 		loading: false,
 		error: null,
 	};
@@ -136,17 +252,22 @@ export function mountFuzzyShell(): void {
 	// --- 検索画面 ---
 
 	/** 選択中の候補パネルと結果行のハイライトだけを更新する（一覧は作り直さない） */
+	const getResultKey = (result: SearchResult, index: number): string =>
+		`${result.fileId}:${result.page ?? "none"}:${index}`;
+
 	const renderSelection = () => {
 		if (!searchScreen) return;
 		const selected =
-			searchState.results.find((result) => result.fileId === searchState.selectedResultId) ?? null;
+			searchState.results.find(
+				(result, index) => getResultKey(result, index) === searchState.selectedResultKey,
+			) ?? null;
 
 		for (const row of searchScreen.resultsHost.querySelectorAll<HTMLButtonElement>(
 			".fuzzy-result-row",
 		)) {
 			row.classList.toggle(
 				"is-selected",
-				selected !== null && Number(row.dataset.fileId) === selected.fileId,
+				selected !== null && row.dataset.resultKey === searchState.selectedResultKey,
 			);
 		}
 
@@ -188,10 +309,10 @@ export function mountFuzzyShell(): void {
 		);
 	};
 
-	const createResultRow = (result: SearchResult): HTMLButtonElement => {
+	const createResultRow = (result: SearchResult, index: number): HTMLButtonElement => {
 		const row = el("button", "fuzzy-result-row");
 		row.type = "button";
-		row.dataset.fileId = String(result.fileId);
+		row.dataset.resultKey = getResultKey(result, index);
 
 		const kindClass = fileKindClass(result.fileName);
 		const kind = el(
@@ -209,7 +330,7 @@ export function mountFuzzyShell(): void {
 		const side = el("div", "fuzzy-result-side");
 		side.append(
 			el("p", "", result.page === null ? "—" : `p.${result.page}`),
-			el("span", "", result.page === null ? "ファイルを開く" : "ページへ"),
+			el("span", "", "候補を見る"),
 		);
 
 		row.append(kind, main, el("p", "fuzzy-result-snippet", result.snippet), side);
@@ -257,12 +378,14 @@ export function mountFuzzyShell(): void {
 	};
 
 	const runSearch = async () => {
+		const requestId = ++searchRequestId;
 		const query = searchState.query.trim();
 		if (!query) {
+			searchState.loading = false;
 			searchState.error = "検索したいワードを入力してください。";
 			searchState.executedQuery = "";
 			searchState.results = [];
-			searchState.selectedResultId = null;
+			searchState.selectedResultKey = null;
 			renderSearchResults();
 			return;
 		}
@@ -273,18 +396,23 @@ export function mountFuzzyShell(): void {
 
 		try {
 			const api = await apiPromise;
-			searchState.results = await api.search(query);
+			const results = await api.search(query);
+			if (requestId !== searchRequestId) return;
+			searchState.results = results;
 			searchState.executedQuery = query;
-			searchState.selectedResultId = searchState.results[0]?.fileId ?? null;
+			searchState.selectedResultKey = results[0] ? getResultKey(results[0], 0) : null;
 			setTopMode(api.mode);
 		} catch (error) {
+			if (requestId !== searchRequestId) return;
 			searchState.error = error instanceof Error ? error.message : String(error);
 			searchState.executedQuery = query;
 			searchState.results = [];
-			searchState.selectedResultId = null;
+			searchState.selectedResultKey = null;
 		} finally {
-			searchState.loading = false;
-			renderSearchResults();
+			if (requestId === searchRequestId) {
+				searchState.loading = false;
+				renderSearchResults();
+			}
 		}
 	};
 
@@ -307,6 +435,7 @@ export function mountFuzzyShell(): void {
 		const input = el("input");
 		input.id = "fuzzy-search-input";
 		input.type = "search";
+		input.setAttribute("aria-label", "検索キーワード");
 		input.placeholder = "調べたい単語を入力";
 		inputWrap.append(el("span", "fuzzy-search-dot"), input);
 		const submitButton = el("button", "fuzzy-primary-button", "検索");
@@ -347,8 +476,8 @@ export function mountFuzzyShell(): void {
 		resultsHost.addEventListener("click", (event) => {
 			if (!(event.target instanceof Element)) return;
 			const row = event.target.closest<HTMLButtonElement>(".fuzzy-result-row");
-			if (!row?.dataset.fileId) return;
-			searchState.selectedResultId = Number(row.dataset.fileId);
+			if (!row?.dataset.resultKey) return;
+			searchState.selectedResultKey = row.dataset.resultKey;
 			renderSelection();
 		});
 
@@ -361,6 +490,209 @@ export function mountFuzzyShell(): void {
 			renderSearchResults();
 		}
 		return searchScreen;
+	};
+
+	const loadAssignments = async () => {
+		if (assignmentsLoaded) return;
+		try {
+			const api = await apiPromise;
+			assignments = await api.getDeadlines({ includePast: true });
+			assignmentsLoaded = true;
+			deadlineError = null;
+			setTopMode(api.mode);
+		} catch (error) {
+			deadlineError = error instanceof Error ? error.message : String(error);
+			assignmentsLoaded = false;
+		}
+	};
+
+	const filterAssignments = (): Assignment[] => {
+		switch (deadlineFilter) {
+			case "upcoming":
+				return assignments.filter(isUpcoming);
+			case "overdue":
+				return assignments.filter(isOverdue);
+			case "review":
+				return assignments.filter(isNeedsReview);
+			default:
+				return assignments;
+		}
+	};
+
+	const sortAssignments = (list: Assignment[]): Assignment[] =>
+		[...list].sort((a, b) => {
+			if (a.submitted !== b.submitted) return a.submitted ? 1 : -1;
+			if (isNeedsReview(a) !== isNeedsReview(b)) return isNeedsReview(a) ? -1 : 1;
+			const aTime = parseDueAt(a.dueAt) ?? Number.MAX_SAFE_INTEGER;
+			const bTime = parseDueAt(b.dueAt) ?? Number.MAX_SAFE_INTEGER;
+			return aTime - bTime;
+		});
+
+	const buildDeadlineCard = (assignment: Assignment): HTMLElement => {
+		const card = el("article", "fuzzy-deadline-card");
+		if (assignment.submitted) card.classList.add("is-submitted");
+		if (isNeedsReview(assignment)) card.classList.add("is-review");
+		if (isOverdue(assignment)) card.classList.add("is-overdue");
+
+		const head = el("div", "fuzzy-deadline-head");
+		const heading = el("div");
+		heading.append(
+			el("p", "fuzzy-course-name", assignment.courseName),
+			el("h2", "", assignment.title),
+		);
+
+		const badges = el("div", "fuzzy-deadline-badges");
+		badges.append(el("span", "fuzzy-badge", submissionLabel(assignment)));
+		if (isNeedsReview(assignment)) badges.append(el("span", "fuzzy-badge is-review", "要確認"));
+		if (isOverdue(assignment)) badges.append(el("span", "fuzzy-badge is-overdue", "期限切れ"));
+		badges.append(
+			el(
+				"span",
+				assignment.submitted ? "fuzzy-badge is-submitted" : "fuzzy-badge is-open",
+				assignment.submitted ? "提出済み" : "未提出",
+			),
+		);
+		head.append(heading, badges);
+
+		const body = el("div", "fuzzy-deadline-body");
+		const dueWrap = el("div");
+		dueWrap.append(
+			el("p", "fuzzy-deadline-label", "期限"),
+			el("p", "fuzzy-deadline-value", formatDate(assignment.dueAt)),
+		);
+		body.append(dueWrap, el("p", "fuzzy-deadline-source", sourceLabel(assignment)));
+
+		const checkLabel = el("label", "fuzzy-checkline");
+		const checkbox = el("input") as HTMLInputElement;
+		checkbox.type = "checkbox";
+		checkbox.checked = assignment.submitted;
+		checkbox.addEventListener("change", async () => {
+			const submitted = checkbox.checked;
+			// 応答待ちの間の二重操作を防ぐ。成否いずれも renderScreen() で
+			// assignments を正本に画面を作り直すため、この checkbox 自体の状態は個別に戻さない。
+			checkbox.disabled = true;
+			try {
+				const api = await apiPromise;
+				const result = await api.updateSubmissionStatus(assignment.id, submitted);
+				if (!result.ok) throw new Error("サーバーが更新を受け付けませんでした。");
+				submissionError = null;
+				assignments = assignments.map((item) =>
+					item.id === assignment.id ? { ...item, submitted } : item,
+				);
+			} catch (error) {
+				submissionError =
+					error instanceof Error
+						? `提出状態の更新に失敗しました: ${error.message}`
+						: "提出状態の更新に失敗しました。";
+			}
+			renderScreen();
+		});
+		checkLabel.append(
+			checkbox,
+			el("span", "", assignment.submitted ? "未提出に戻す" : "提出済みにする"),
+		);
+
+		card.append(head, body, checkLabel);
+		return card;
+	};
+
+	const buildDeadlineScreen = (): HTMLElement => {
+		const screen = el("div", "fuzzy-screen");
+		screen.append(buildScreenHeader("締切ハブ", "課題と提出状況をまとめて確認"));
+
+		if (deadlineError) {
+			const errorPanel = el("section", "fuzzy-error-panel");
+			const retryButton = el("button", "fuzzy-primary-button", "再読み込み");
+			retryButton.type = "button";
+			retryButton.addEventListener("click", () => {
+				deadlineError = null;
+				renderScreen();
+			});
+			errorPanel.append(
+				el("p", "", `締切データの取得に失敗しました: ${deadlineError}`),
+				retryButton,
+			);
+			screen.append(errorPanel);
+			return screen;
+		}
+
+		if (loadingDeadlines && !assignmentsLoaded) {
+			screen.append(el("section", "fuzzy-placeholder", "締切データを読み込んでいます…"));
+			return screen;
+		}
+
+		if (submissionError) {
+			const errorPanel = el("section", "fuzzy-error-panel");
+			const errorHead = el("div", "fuzzy-error-panel-head");
+			const closeButton = el("button", "fuzzy-error-close", "閉じる");
+			closeButton.type = "button";
+			closeButton.addEventListener("click", () => {
+				submissionError = null;
+				renderScreen();
+			});
+			errorHead.append(el("p", "", submissionError), closeButton);
+			errorPanel.append(errorHead);
+			screen.append(errorPanel);
+		}
+
+		const metricGrid = el("section", "fuzzy-metric-grid");
+		const metrics: Array<{ label: string; value: number; className?: string }> = [
+			{ label: "未提出", value: assignments.filter((item) => !item.submitted).length },
+			{ label: "要確認", value: assignments.filter(isNeedsReview).length, className: "is-warn" },
+			{ label: "期限切れ", value: assignments.filter(isOverdue).length, className: "is-soft" },
+		];
+		for (const metric of metrics) {
+			const card = el(
+				"article",
+				metric.className ? `fuzzy-metric-card ${metric.className}` : "fuzzy-metric-card",
+			);
+			card.append(
+				el("p", "fuzzy-metric-label", metric.label),
+				el("p", "fuzzy-metric-value", String(metric.value)),
+			);
+			metricGrid.append(card);
+		}
+
+		const toolbar = el("section", "fuzzy-deadline-toolbar");
+		const filterRow = el("div", "fuzzy-filter-row");
+		for (const filter of ["all", "upcoming", "overdue", "review"] as const) {
+			const button = el(
+				"button",
+				deadlineFilter === filter ? "fuzzy-filter-chip is-active" : "fuzzy-filter-chip",
+				deadlineFilterLabel(filter),
+			);
+			button.type = "button";
+			button.setAttribute("aria-pressed", String(deadlineFilter === filter));
+			button.addEventListener("click", () => {
+				deadlineFilter = filter;
+				renderScreen();
+			});
+			filterRow.append(button);
+		}
+		toolbar.append(
+			filterRow,
+			el(
+				"p",
+				"fuzzy-toolbar-copy",
+				"提出済みにすると一覧へ即反映されます。要確認は期限の再確認が必要な課題です。",
+			),
+		);
+
+		const listHost = el("section", "fuzzy-deadline-list");
+		const visible = sortAssignments(filterAssignments());
+		if (visible.length === 0) {
+			const empty = el("section", "fuzzy-empty");
+			empty.append(
+				el("h2", "", "表示できる課題がありません"),
+				el("p", "", "この条件に合う締切は今のところ見つかっていません。"),
+			);
+			listHost.append(empty);
+		} else {
+			listHost.append(...visible.map(buildDeadlineCard));
+		}
+
+		screen.append(metricGrid, toolbar, listHost);
+		return screen;
 	};
 
 	const buildPlaceholderScreen = (screenId: Exclude<ScreenId, "search">): HTMLElement => {
@@ -385,6 +717,17 @@ export function mountFuzzyShell(): void {
 		if (activeScreen === "search") {
 			// 検索画面はキャッシュして使い回す（入力値・結果・選択状態を保持する）
 			mainEl.replaceChildren(getSearchScreen().root);
+		} else if (activeScreen === "deadlines") {
+			// 先にロード状態を確定させてから描画する。順序を逆にすると初回描画時点では
+			// loadingDeadlines がまだ false のため、読み込み中に空状態がちらついてしまう。
+			if (!assignmentsLoaded && !loadingDeadlines && !deadlineError) {
+				loadingDeadlines = true;
+				void loadAssignments().finally(() => {
+					loadingDeadlines = false;
+					if (activeScreen === "deadlines") renderScreen();
+				});
+			}
+			mainEl.replaceChildren(buildDeadlineScreen());
 		} else {
 			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
@@ -427,7 +770,7 @@ export function mountFuzzyShell(): void {
 		}
 
 		const footer = el("div", "fuzzy-sidebar-footer");
-		footer.append(el("p", "", "検索を実装中"), el("span", "", "issue54 / mock search"));
+		footer.append(el("p", "", "開発中"), el("span", "", "issue54 + issue55"));
 		sidebar.append(brand, nav, footer);
 
 		const content = el("div", "fuzzy-content");
@@ -459,6 +802,10 @@ export function mountFuzzyShell(): void {
 			(api) => setTopMode(api.mode),
 			() => setTopMode("checking"),
 		);
+
+		if (activeScreen === "search") {
+			getSearchScreen().input.focus();
+		}
 	};
 
 	navButton.addEventListener("click", () => {
@@ -1028,6 +1375,188 @@ function ensureStyle(): void {
 			font-weight: 800;
 		}
 
+		.fuzzy-metric-grid {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 14px;
+		}
+
+		.fuzzy-metric-card {
+			padding: 16px;
+		}
+
+		.fuzzy-metric-card.is-warn {
+			background: #fff8df;
+		}
+
+		.fuzzy-metric-card.is-soft {
+			background: #f4f5fb;
+		}
+
+		.fuzzy-metric-label {
+			margin: 0;
+			color: #6b7292;
+			font-size: 0.8rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-metric-value {
+			margin: 10px 0 0;
+			font-size: 2rem;
+			font-weight: 900;
+			line-height: 1;
+		}
+
+		.fuzzy-deadline-toolbar {
+			padding: 14px;
+			border-radius: 14px;
+			background: #ffffff;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-filter-row {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			margin-bottom: 10px;
+		}
+
+		.fuzzy-filter-chip {
+			border: 0;
+			border-radius: 999px;
+			padding: 8px 14px;
+			background: #eef0fb;
+			color: #59607d;
+			font: inherit;
+			font-size: 0.8rem;
+			font-weight: 800;
+			cursor: pointer;
+		}
+
+		.fuzzy-filter-chip.is-active {
+			background: #6c63ff;
+			color: #ffffff;
+		}
+
+		.fuzzy-toolbar-copy {
+			margin: 0;
+			color: #636b8b;
+			font-size: 0.84rem;
+			line-height: 1.7;
+		}
+
+		.fuzzy-deadline-list {
+			display: grid;
+			gap: 14px;
+		}
+
+		.fuzzy-deadline-card {
+			padding: 16px;
+			border-radius: 14px;
+			background: #ffffff;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-deadline-card.is-review {
+			background: #fff8df;
+		}
+
+		.fuzzy-deadline-card.is-overdue {
+			box-shadow:
+				inset 4px 0 0 #ff8a5b,
+				0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-deadline-card.is-submitted {
+			opacity: 0.72;
+		}
+
+		.fuzzy-deadline-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 14px;
+		}
+
+		.fuzzy-course-name {
+			margin: 0 0 4px;
+			color: #7a81a1;
+			font-size: 0.76rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-deadline-head h2 {
+			margin: 0;
+			font-size: 1.06rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-deadline-badges {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			justify-content: flex-end;
+		}
+
+		.fuzzy-badge {
+			border-radius: 999px;
+			padding: 6px 10px;
+			background: #eef0fb;
+			font-size: 0.74rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-badge.is-review {
+			background: #ffe38c;
+		}
+
+		.fuzzy-badge.is-overdue {
+			background: #ffd8cc;
+		}
+
+		.fuzzy-badge.is-submitted {
+			background: #dff4e7;
+		}
+
+		.fuzzy-badge.is-open {
+			background: #e3e8fb;
+		}
+
+		.fuzzy-deadline-body {
+			display: grid;
+			gap: 6px;
+			margin-top: 12px;
+		}
+
+		.fuzzy-deadline-label {
+			margin: 0;
+			color: #7a81a1;
+			font-size: 0.76rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-deadline-value {
+			margin: 0;
+			font-size: 0.95rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-deadline-source {
+			margin: 0;
+			color: #626a89;
+			font-size: 0.82rem;
+			line-height: 1.7;
+		}
+
+		.fuzzy-checkline {
+			display: inline-flex;
+			align-items: center;
+			gap: 10px;
+			margin-top: 14px;
+			font-size: 0.84rem;
+			font-weight: 800;
+		}
+
 		.fuzzy-placeholder {
 			color: #5d6483;
 			font-size: 0.95rem;
@@ -1048,11 +1577,49 @@ function ensureStyle(): void {
 			color: #c84833;
 		}
 
+		.fuzzy-error-panel {
+			padding: 16px;
+			border-radius: 14px;
+			background: #fff0ec;
+			color: #b43d24;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			font-size: 0.9rem;
+			font-weight: 800;
+			line-height: 1.7;
+		}
+
+		.fuzzy-error-panel-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 12px;
+		}
+
+		.fuzzy-error-panel-head p {
+			margin: 0;
+		}
+
+		.fuzzy-error-close {
+			border: 0;
+			border-radius: 999px;
+			padding: 6px 12px;
+			background: rgba(180, 61, 36, 0.12);
+			color: #b43d24;
+			font: inherit;
+			font-size: 0.78rem;
+			font-weight: 800;
+			cursor: pointer;
+			flex: 0 0 auto;
+		}
+
 		.fuzzy-nav-button:focus,
 		.fuzzy-side-link:focus,
 		.fuzzy-close-button:focus,
 		.fuzzy-primary-button:focus,
+		.fuzzy-error-close:focus,
 		.fuzzy-result-row:focus,
+		.fuzzy-filter-chip:focus,
+		.fuzzy-checkline input:focus,
 		.fuzzy-search-input-wrap:focus-within {
 			outline: 3px solid rgba(108, 99, 255, 0.28);
 			outline-offset: 2px;
@@ -1072,6 +1639,10 @@ function ensureStyle(): void {
 			}
 
 			.fuzzy-search-layout {
+				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-metric-grid {
 				grid-template-columns: 1fr;
 			}
 		}
@@ -1095,6 +1666,14 @@ function ensureStyle(): void {
 
 			.fuzzy-result-side {
 				justify-items: start;
+			}
+
+			.fuzzy-deadline-head {
+				flex-direction: column;
+			}
+
+			.fuzzy-deadline-badges {
+				justify-content: flex-start;
 			}
 		}
 	`;

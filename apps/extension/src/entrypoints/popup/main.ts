@@ -16,7 +16,7 @@ target.innerHTML = `
 		<ol class="fuzzy-popup-steps">
 			<li>Moodleを開く</li>
 			<li>上部ナビの「Fuzzy」を押す</li>
-			<li>検索画面が開くことを確認する</li>
+			<li>横断検索または締切ハブが開くことを確認する</li>
 		</ol>
 	</main>
 `;

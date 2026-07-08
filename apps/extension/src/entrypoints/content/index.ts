@@ -1,17 +1,16 @@
 // Moodleページで動くコンテンツスクリプトのエントリポイント。
-// シェルUI（サイドバー＋横断検索画面）は ./shell.ts に分離している。
-// DOM解析（ファイルリンク・本文・ダッシュボード取得、issue #48）は
-// 別モジュールとしてこのディレクトリに追加する想定。
+// シェルUI（サイドバー付き検索・締切画面）は ./shell.ts に分離している。
+// DOM操作は issue48 のダッシュボード注入と同様に、このディレクトリ内で完結させる。
 import { mountFuzzyShell } from "./shell";
 
 export default defineContentScript({
-	// 拡張機能のマッチパターンはホスト部に「*.」の前置ワイルドカードしか使えないため、
-	// 年度で変わるホスト名（moodle2026.wakayama-u.ac.jp 等）を matches だけでは絞り込めない。
-	// そこで大学ドメイン全体にマッチさせ、main() 冒頭のホスト名チェックで
-	// 「moodle」を含むホストに限定する。
+	// 年度で変わるホスト名（moodle2026.wakayama-u.ac.jp 等）を
+	// matches だけでは細かく絞り込めないため、
+	// main() 内部の正規表現で moodle[数字].wakayama-u.ac.jp の形式だけに限定する。
+	// 数字部分は任意（\d*）なので、年度なしの moodle.wakayama-u.ac.jp も許可する。
 	matches: ["*://*.wakayama-u.ac.jp/*"],
 	main() {
-		if (!location.hostname.includes("moodle")) return;
+		if (!/^moodle\d*\.wakayama-u\.ac\.jp$/.test(location.hostname)) return;
 		mountFuzzyShell();
 	},
 });
