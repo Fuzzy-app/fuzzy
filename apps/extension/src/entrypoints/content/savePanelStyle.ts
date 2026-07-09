@@ -1,6 +1,7 @@
 // 保存パネル（./savePanel.ts）のスタイル定義。DOM構築ロジックと分離している。
 export const SAVE_PANEL_ID = "fuzzy-save-panel";
 export const SAVE_PANEL_STYLE_ID = "fuzzy-save-panel-style";
+export const SAVE_HANDLE_ID = "fuzzy-save-handle";
 
 export const SAVE_PANEL_STYLE = `
 		#${SAVE_PANEL_ID} {
@@ -127,19 +128,35 @@ export const SAVE_PANEL_STYLE = `
 			font-weight: 900;
 		}
 
-		.fuzzy-panel-handle {
-			position: absolute;
-			z-index: 4;
+		/* 開閉ハンドル（›）。パネル本体のoverflowにクリップされないよう、
+		   パネルとは別に body 直下へ固定配置し、パネル左端のすぐ外側に出す。 */
+		#${SAVE_HANDLE_ID} {
+			position: fixed;
+			z-index: 2147483647;
 			top: 50%;
-			left: -22px;
-			width: 24px;
-			height: 60px;
-			border-radius: 8px 0 0 8px !important;
-			padding: 0 !important;
+			right: min(300px, calc(100vw - 24px));
 			transform: translateY(-50%);
-			box-shadow: -6px 0 18px rgb(22 34 51 / 14%);
-			font-size: 18px !important;
+			display: grid;
+			place-items: center;
+			box-sizing: border-box;
+			width: 28px;
+			height: 66px;
+			margin: 0;
+			border: 0;
+			border-radius: 12px 0 0 12px;
+			background: #5d5ce2;
+			color: #ffffff;
+			font-family: "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+			font-size: 22px;
+			font-weight: 900;
 			line-height: 1;
+			cursor: pointer;
+			box-shadow: -8px 0 20px rgb(22 34 51 / 22%);
+			appearance: none;
+		}
+
+		#${SAVE_HANDLE_ID}:hover {
+			background: #4f4ed0;
 		}
 
 		.fuzzy-panel-tab {

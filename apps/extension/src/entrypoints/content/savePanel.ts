@@ -9,7 +9,12 @@ import {
 	collectMoodlePageSnapshotWithNestedFolders,
 	safeCollectMoodlePageSnapshot,
 } from "../../lib/moodle/snapshotCollector";
-import { SAVE_PANEL_ID, SAVE_PANEL_STYLE, SAVE_PANEL_STYLE_ID } from "./savePanelStyle";
+import {
+	SAVE_HANDLE_ID,
+	SAVE_PANEL_ID,
+	SAVE_PANEL_STYLE,
+	SAVE_PANEL_STYLE_ID,
+} from "./savePanelStyle";
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
@@ -21,11 +26,22 @@ interface SimilarWarning {
 
 export function mountSavePanel(): void {
 	document.getElementById(SAVE_PANEL_ID)?.remove();
+	document.getElementById(SAVE_HANDLE_ID)?.remove();
 
 	const panel = document.createElement("aside");
 	panel.id = SAVE_PANEL_ID;
 	panel.setAttribute("aria-label", "Fuzzy 資料一括保存");
 	document.body.append(panel);
+
+	// 開閉ハンドル（›）はパネル本体のoverflowにクリップされないよう、
+	// パネルとは別に body 直下へ固定配置する（パネル左端のすぐ外側に表示）。
+	const collapseHandle = document.createElement("button");
+	collapseHandle.id = SAVE_HANDLE_ID;
+	collapseHandle.type = "button";
+	collapseHandle.textContent = "›";
+	collapseHandle.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
+	collapseHandle.addEventListener("click", () => setPanelOpen(false));
+	document.body.append(collapseHandle);
 
 	const api = new BackgroundApiClient();
 	let snapshot = safeCollectMoodlePageSnapshot();
@@ -185,15 +201,14 @@ export function mountSavePanel(): void {
 
 	function render() {
 		panel.classList.toggle("is-collapsed", !isPanelOpen);
+		// 開閉ハンドルは開いている間だけ表示（閉じている間は「Fuzzy」タブで再オープン）。
+		collapseHandle.style.display = isPanelOpen ? "grid" : "none";
 		panel.innerHTML = "";
 
 		if (!isPanelOpen) {
 			panel.append(renderOpenTab());
 			return;
 		}
-
-		// 開閉ハンドルは左端の外へ飛び出すため、clipされるスクロール領域の外（パネル直下）に置く。
-		panel.append(renderHandle());
 
 		// ヘッダー・各セクション・フッターは内側のスクロール領域に入れる。
 		// こうするとパネル自身をoverflow:visibleにでき、左端のハンドルが隠れない。
@@ -222,16 +237,6 @@ export function mountSavePanel(): void {
 		button.setAttribute("aria-label", "Fuzzyの一括保存パネルを開く");
 		button.addEventListener("click", () => setPanelOpen(true));
 		return button;
-	}
-
-	function renderHandle() {
-		const handle = document.createElement("button");
-		handle.className = "fuzzy-panel-handle";
-		handle.type = "button";
-		handle.textContent = "›";
-		handle.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
-		handle.addEventListener("click", () => setPanelOpen(false));
-		return handle;
 	}
 
 	function renderHeader() {
