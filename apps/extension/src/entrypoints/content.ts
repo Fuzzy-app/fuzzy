@@ -76,6 +76,7 @@ async function mountFuzzyShell(): Promise<void> {
 	let isOpen = false;
 	let activeScreen: ScreenId = "search";
 	let mode: ConnectionMode = "checking";
+	let shellTopOffset = 0;
 	const searchState: SearchState = {
 		query: "正規化",
 		results: [],
@@ -144,14 +145,22 @@ async function mountFuzzyShell(): Promise<void> {
 		isOpen = false;
 		navButton.classList.remove("is-active");
 		navButton.setAttribute("aria-pressed", "false");
+		window.removeEventListener("resize", applyShellFrame);
 		page?.remove();
 		restoreMainContent();
+		document.body.classList.remove("fuzzy-shell-open");
 	};
 
 	const setTopMode = (nextMode: ConnectionMode) => {
 		mode = nextMode;
 		const badge = page?.querySelector<HTMLElement>(".fuzzy-top-status");
 		if (badge) setModeLabel(badge, nextMode);
+	};
+
+	const applyShellFrame = () => {
+		if (!page) return;
+		page.style.top = `${shellTopOffset}px`;
+		page.style.height = `calc(100vh - ${shellTopOffset}px)`;
 	};
 
 	const renderSidebarState = () => {
@@ -372,8 +381,12 @@ async function mountFuzzyShell(): Promise<void> {
 		isOpen = true;
 		navButton.classList.add("is-active");
 		navButton.setAttribute("aria-pressed", "true");
+		document.body.classList.add("fuzzy-shell-open");
+		shellTopOffset = getShellTopOffset(navHost);
 		moveMainContentToStash();
-		mainHost.append(buildPage());
+		document.body.append(buildPage());
+		applyShellFrame();
+		window.addEventListener("resize", applyShellFrame);
 
 		try {
 			const api = await apiPromise;
@@ -453,12 +466,54 @@ function findMainHost(): HTMLElement | null {
 	return null;
 }
 
+function getShellTopOffset(navHost: HTMLElement): number {
+	const candidates = [
+		navHost.closest<HTMLElement>("header"),
+		navHost.closest<HTMLElement>(".primary-navigation"),
+		navHost.closest<HTMLElement>(".secondary-navigation"),
+		navHost.closest<HTMLElement>(".moremenu"),
+		document.querySelector<HTMLElement>("header[role='banner']"),
+		document.querySelector<HTMLElement>(".navbar"),
+		document.querySelector<HTMLElement>(".primary-navigation"),
+		document.querySelector<HTMLElement>(".secondary-navigation"),
+		document.querySelector<HTMLElement>(".tertiary-navigation"),
+		document.querySelector<HTMLElement>(".nav-tabs"),
+		document.querySelector<HTMLElement>(".tabs"),
+		document.querySelector<HTMLElement>(".moremenu"),
+		document.querySelector<HTMLElement>(".secondarymoremenu"),
+		document.querySelector<HTMLElement>("#page-header"),
+		document.querySelector<HTMLElement>(".page-header-headings"),
+	];
+
+	const bottoms = candidates
+		.filter((element): element is HTMLElement => element !== null)
+		.map((element) => element.getBoundingClientRect().bottom)
+		.filter((bottom) => Number.isFinite(bottom) && bottom > 0);
+
+	if (bottoms.length === 0) {
+		return Math.max(0, Math.round(navHost.getBoundingClientRect().bottom));
+	}
+
+	return Math.max(0, Math.round(Math.max(...bottoms)));
+}
+
 function ensureStyle(): void {
 	if (document.getElementById(STYLE_ID)) return;
 
 	const style = document.createElement("style");
 	style.id = STYLE_ID;
 	style.textContent = `
+		body.fuzzy-shell-open {
+			overflow: hidden;
+		}
+
+		body.fuzzy-shell-open #page-header,
+		body.fuzzy-shell-open .page-header-headings,
+		body.fuzzy-shell-open .page-context-header,
+		body.fuzzy-shell-open #page-navbar {
+			display: none !important;
+		}
+
 		#${ROOT_ID} {
 			display: inline-flex;
 			align-items: stretch;
@@ -498,13 +553,18 @@ function ensureStyle(): void {
 		}
 
 		#${PAGE_ID} {
+			position: fixed;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			z-index: 2147483000;
 			display: grid;
-			grid-template-columns: 148px minmax(0, 1fr);
-			min-height: 720px;
-			border-radius: 18px;
+			grid-template-columns: 180px minmax(0, 1fr);
+			min-height: 0;
 			overflow: hidden;
-			background: #f6f7ff;
-			box-shadow: 0 18px 60px rgba(31, 38, 92, 0.16);
+			background:
+				radial-gradient(circle at top left, rgba(108, 99, 255, 0.12), transparent 22%),
+				linear-gradient(180deg, #eef1ff 0%, #f7f8ff 100%);
 			color: #151515;
 			font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
 		}
@@ -600,7 +660,11 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-content {
-			padding: 18px 20px 22px;
+			display: grid;
+			grid-template-rows: auto 1fr;
+			gap: 12px;
+			padding: 24px 28px 32px;
+			overflow: auto;
 		}
 
 		.fuzzy-topbar {
@@ -608,7 +672,9 @@ function ensureStyle(): void {
 			align-items: center;
 			justify-content: space-between;
 			gap: 16px;
-			margin-bottom: 10px;
+			width: 100%;
+			max-width: 1320px;
+			margin: 0 auto;
 		}
 
 		.fuzzy-top-status {
@@ -646,6 +712,9 @@ function ensureStyle(): void {
 		.fuzzy-main {
 			display: grid;
 			gap: 18px;
+			max-width: 1320px;
+			width: 100%;
+			margin: 0 auto;
 		}
 
 		.fuzzy-screen-header {
