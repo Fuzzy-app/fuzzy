@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="ja">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Fuzzy 検索画面モック</title>
+	<style>
+		:root {
+			color-scheme: light;
+			--nav: #171b2d;
+			--nav-muted: #8b92ad;
+			--panel: #ffffff;
+			--page: #f3f5fb;
+			--line: #e1e5f0;
+			--text: #202537;
+			--muted: #6d7488;
+			--primary: #5b5ff0;
+			--primary-soft: #ececff;
+			--success: #20b486;
+			--warning: #f4b740;
+			--pdf: #f25f5c;
+			--doc: #4a7df0;
+			--ppt: #e09a36;
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			min-height: 100vh;
+			background: var(--page);
+			color: var(--text);
+			font-family:
+				Inter, "Yu Gothic UI", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+		}
+
+		.app {
+			display: grid;
+			grid-template-columns: 176px minmax(0, 1fr);
+			min-height: 100vh;
+		}
+
+		.sidebar {
+			display: flex;
+			flex-direction: column;
+			gap: 18px;
+			background: var(--nav);
+			padding: 20px 14px;
+			color: #fff;
+		}
+
+		.brand {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			font-size: 14px;
+			font-weight: 700;
+		}
+
+		.brand-mark {
+			display: grid;
+			width: 28px;
+			height: 28px;
+			place-items: center;
+			border-radius: 8px;
+			background: var(--primary);
+			font-size: 15px;
+		}
+
+		.nav-list {
+			display: grid;
+			gap: 6px;
+			margin: 4px 0 0;
+			padding: 0;
+			list-style: none;
+		}
+
+		.nav-item {
+			display: flex;
+			align-items: center;
+			gap: 9px;
+			min-height: 34px;
+			border-radius: 7px;
+			padding: 8px 10px;
+			color: var(--nav-muted);
+			font-size: 12px;
+			font-weight: 700;
+		}
+
+		.nav-item.active {
+			background: #303759;
+			color: #fff;
+		}
+
+		.nav-icon {
+			width: 10px;
+			height: 10px;
+			border-radius: 3px;
+			background: currentColor;
+			opacity: 0.8;
+		}
+
+		.status {
+			margin-top: auto;
+			border-radius: 9px;
+			background: #222842;
+			padding: 12px;
+			color: #dce1f2;
+			font-size: 11px;
+			line-height: 1.45;
+		}
+
+		.status-dot {
+			display: inline-block;
+			width: 9px;
+			height: 9px;
+			margin-right: 7px;
+			border-radius: 999px;
+			background: var(--success);
+			vertical-align: -1px;
+		}
+
+		.main {
+			padding: 28px 32px 34px;
+		}
+
+		.topbar {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 16px;
+			margin-bottom: 22px;
+		}
+
+		.eyebrow {
+			margin: 0 0 6px;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 700;
+		}
+
+		h1 {
+			margin: 0;
+			font-size: 24px;
+			line-height: 1.25;
+			letter-spacing: 0;
+		}
+
+		.mode {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			border: 1px solid var(--line);
+			border-radius: 999px;
+			background: var(--panel);
+			padding: 8px 12px;
+			color: var(--success);
+			font-size: 12px;
+			font-weight: 700;
+			white-space: nowrap;
+		}
+
+		.search-panel {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--panel);
+			box-shadow: 0 14px 34px rgba(41, 47, 79, 0.08);
+			overflow: hidden;
+		}
+
+		.search-tools {
+			display: grid;
+			gap: 14px;
+			border-bottom: 1px solid var(--line);
+			padding: 18px;
+		}
+
+		.tabs {
+			display: flex;
+			gap: 8px;
+		}
+
+		.tab {
+			border: 0;
+			border-radius: 7px;
+			background: #f1f3f8;
+			padding: 9px 14px;
+			color: var(--muted);
+			font: inherit;
+			font-size: 12px;
+			font-weight: 700;
+		}
+
+		.tab.active {
+			background: var(--primary-soft);
+			color: var(--primary);
+		}
+
+		.search-row {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) auto;
+			gap: 10px;
+		}
+
+		.search-input {
+			width: 100%;
+			min-height: 42px;
+			border: 2px solid var(--primary);
+			border-radius: 8px;
+			padding: 0 14px;
+			font-size: 14px;
+			outline: none;
+		}
+
+		.search-button {
+			min-width: 92px;
+			border: 0;
+			border-radius: 8px;
+			background: var(--primary);
+			color: #fff;
+			font: inherit;
+			font-size: 13px;
+			font-weight: 800;
+			cursor: pointer;
+		}
+
+		.result-summary {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			padding: 12px 18px 0;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 700;
+		}
+
+		.results {
+			display: grid;
+			gap: 10px;
+			padding: 14px 18px 18px;
+		}
+
+		.result-card {
+			display: grid;
+			grid-template-columns: auto minmax(0, 1fr) auto;
+			gap: 12px;
+			align-items: center;
+			width: 100%;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: #fff;
+			padding: 12px;
+			text-align: left;
+			cursor: pointer;
+		}
+
+		.result-card:hover,
+		.result-card:focus-visible {
+			border-color: var(--primary);
+			box-shadow: 0 8px 20px rgba(91, 95, 240, 0.12);
+			outline: none;
+		}
+
+		.file-type {
+			display: grid;
+			width: 38px;
+			height: 28px;
+			place-items: center;
+			border-radius: 7px;
+			color: #fff;
+			font-size: 10px;
+			font-weight: 900;
+		}
+
+		.file-type.pdf {
+			background: var(--pdf);
+		}
+
+		.file-type.docx {
+			background: var(--doc);
+		}
+
+		.file-type.pptx {
+			background: var(--ppt);
+		}
+
+		.result-main {
+			min-width: 0;
+		}
+
+		.result-title {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			margin: 0 0 4px;
+			font-size: 14px;
+			font-weight: 800;
+		}
+
+		.course {
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 700;
+		}
+
+		.snippet {
+			margin: 0;
+			color: #4e566d;
+			font-size: 12px;
+			line-height: 1.6;
+		}
+
+		mark {
+			border-radius: 4px;
+			background: #fff2b8;
+			padding: 1px 3px;
+			color: #805900;
+			font-weight: 800;
+		}
+
+		.page-jump {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			min-width: 74px;
+			min-height: 32px;
+			border-radius: 7px;
+			background: var(--primary-soft);
+			color: var(--primary);
+			font-size: 12px;
+			font-weight: 800;
+			white-space: nowrap;
+		}
+
+		.empty {
+			border: 1px dashed #c9cfde;
+			border-radius: 8px;
+			padding: 24px;
+			color: var(--muted);
+			text-align: center;
+			font-size: 13px;
+			font-weight: 700;
+		}
+
+		.jump-message {
+			margin: 0 18px 18px;
+			border-radius: 8px;
+			background: #dff8ed;
+			padding: 12px 14px;
+			color: #087457;
+			font-size: 12px;
+			font-weight: 800;
+		}
+
+		.jump-message:empty {
+			display: none;
+		}
+
+		@media (max-width: 760px) {
+			.app {
+				grid-template-columns: 1fr;
+			}
+
+			.sidebar {
+				display: none;
+			}
+
+			.main {
+				padding: 20px;
+			}
+
+			.topbar {
+				display: grid;
+			}
+
+			.search-row,
+			.result-card {
+				grid-template-columns: 1fr;
+			}
+
+			.file-type,
+			.page-jump {
+				width: fit-content;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="app">
+		<aside class="sidebar" aria-label="Fuzzy ナビゲーション">
+			<div class="brand">
+				<span class="brand-mark">F</span>
+				<span>Fuzzy</span>
+			</div>
+			<ul class="nav-list">
+				<li class="nav-item"><span class="nav-icon"></span>ダッシュボード</li>
+				<li class="nav-item active"><span class="nav-icon"></span>横断検索</li>
+				<li class="nav-item"><span class="nav-icon"></span>締切ハブ</li>
+				<li class="nav-item"><span class="nav-icon"></span>コース一覧</li>
+				<li class="nav-item"><span class="nav-icon"></span>資料の整理</li>
+			</ul>
+			<div class="status"><span class="status-dot"></span>同期済み<br />すべてローカルで検索</div>
+		</aside>
+
+		<main class="main">
+			<div class="topbar">
+				<div>
+					<p class="eyebrow">横断検索</p>
+					<h1>どのファイルに載っているか</h1>
+				</div>
+				<div class="mode">検索先: ローカル資料</div>
+			</div>
+
+			<section class="search-panel" aria-label="資料検索">
+				<div class="search-tools">
+					<div class="tabs" aria-label="検索モード">
+						<button class="tab active" type="button">キーワード</button>
+						<button class="tab" type="button">資料で確認</button>
+					</div>
+					<div class="search-row">
+						<input
+							id="queryInput"
+							class="search-input"
+							type="search"
+							value="正規化"
+							aria-label="検索キーワード"
+						/>
+						<button id="searchButton" class="search-button" type="button">検索</button>
+					</div>
+				</div>
+
+				<div class="result-summary">
+					<span id="resultCount">「正規化」に一致する資料を検索できます</span>
+					<span>ファイル名・授業名・該当ページ</span>
+				</div>
+
+				<div id="results" class="results" aria-live="polite"></div>
+				<p id="jumpMessage" class="jump-message" aria-live="polite"></p>
+			</section>
+		</main>
+	</div>
+
+	<script>
+		const sampleResults = {
+			正規化: [
+				{
+					fileId: 3,
+					fileName: "第4回_正規化.pdf",
+					courseName: "データベース",
+					snippet: "…第3正規化の条件は、推移的関数従属が存在しないこと…",
+					page: 12,
+					score: 0.93,
+				},
+				{
+					fileId: 4,
+					fileName: "正規化_メモ.docx",
+					courseName: "データベース",
+					snippet: "…正規化のメリットは更新異常の防止…",
+					page: null,
+					score: 0.81,
+				},
+			],
+		};
+
+		const queryInput = document.getElementById("queryInput");
+		const searchButton = document.getElementById("searchButton");
+		const results = document.getElementById("results");
+		const resultCount = document.getElementById("resultCount");
+		const jumpMessage = document.getElementById("jumpMessage");
+
+		const escapeHtml = (value) =>
+			value.replace(/[&<>"']/g, (char) => {
+				const map = {
+					"&": "&amp;",
+					"<": "&lt;",
+					">": "&gt;",
+					'"': "&quot;",
+					"'": "&#039;",
+				};
+				return map[char];
+			});
+
+		const highlightQuery = (text, query) => {
+			const escapedText = escapeHtml(text);
+			const escapedQuery = escapeHtml(query);
+			if (!escapedQuery) {
+				return escapedText;
+			}
+			return escapedText.replaceAll(escapedQuery, `<mark>${escapedQuery}</mark>`);
+		};
+
+		const getFileType = (fileName) => {
+			const extension = fileName.split(".").pop()?.toLowerCase() ?? "";
+			return ["pdf", "docx", "pptx"].includes(extension) ? extension : "docx";
+		};
+
+		const renderResults = () => {
+			const query = queryInput.value.trim();
+			const found = sampleResults[query] ?? [];
+
+			results.innerHTML = "";
+			jumpMessage.textContent = "";
+
+			if (!query) {
+				resultCount.textContent = "検索キーワードを入力してください";
+				results.innerHTML = '<div class="empty">キーワードを入力すると、保存済み資料の中を探します。</div>';
+				return;
+			}
+
+			if (found.length === 0) {
+				resultCount.textContent = `「${query}」に一致する資料はありません`;
+				results.innerHTML = '<div class="empty">別のキーワードで検索してください。</div>';
+				return;
+			}
+
+			resultCount.textContent = `「${query}」に一致する資料: ${found.length}件`;
+
+			for (const item of found) {
+				const button = document.createElement("button");
+				const pageLabel = item.page === null ? "ページ不明" : `p.${item.page}`;
+				const fileType = getFileType(item.fileName);
+
+				button.type = "button";
+				button.className = "result-card";
+				button.innerHTML = `
+					<span class="file-type ${fileType}">${fileType.toUpperCase()}</span>
+					<span class="result-main">
+						<span class="result-title">
+							${escapeHtml(item.fileName)}
+							<span class="course">${escapeHtml(item.courseName ?? "コース不明")}</span>
+						</span>
+						<span class="snippet">${highlightQuery(item.snippet, query)}</span>
+					</span>
+					<span class="page-jump">${pageLabel}</span>
+				`;
+
+				button.addEventListener("click", () => {
+					const target = item.page === null ? "該当箇所" : `${item.page}ページ`;
+					jumpMessage.textContent = `${item.fileName} の ${target} を開く準備をしました。fileId=${item.fileId}`;
+				});
+
+				results.appendChild(button);
+			}
+		};
+
+		searchButton.addEventListener("click", renderResults);
+		queryInput.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				renderResults();
+			}
+		});
+
+		renderResults();
+	</script>
+</body>
+</html>

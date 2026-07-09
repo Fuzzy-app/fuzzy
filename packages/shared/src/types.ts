@@ -10,10 +10,59 @@ export interface Course {
 	term: string | null;
 }
 
+export interface SimilarFileMatch {
+	fileId: number;
+	originalName: string;
+	similarity: number;
+}
+
 export interface SaveSuggestion {
 	path: string;
 	confidence: number; // 0.0〜1.0、確からしさ順の表示に使う
-	similarMatches?: { fileId: number; originalName: string; similarity: number }[];
+	similarMatches?: SimilarFileMatch[];
+}
+
+export interface MoodleCourseContext {
+	name: string | null;
+	sectionTitle: string | null;
+	breadcrumbs: string[];
+}
+
+export interface MoodleFileMeta {
+	title: string;
+	url: string;
+	moodleFileId: string | null;
+	sectionTitle: string | null;
+	mimeHint: string | null;
+}
+
+export interface SuggestSavePathRequest {
+	course: MoodleCourseContext;
+	fileMeta: MoodleFileMeta | null;
+}
+
+export interface CheckSimilarFilesRequest {
+	fileMeta: MoodleFileMeta;
+}
+
+export interface SaveFilesRequest {
+	files: MoodleFileMeta[];
+	targetPath: string;
+}
+
+export interface SaveFilesResult {
+	savedFileIds: string[];
+}
+
+export interface ExtractZipRequest {
+	fileMeta: MoodleFileMeta;
+	targetPath: string;
+	destinationPath: string;
+	flatten: boolean;
+}
+
+export interface ExtractZipResult {
+	extractedPaths: string[];
 }
 
 export interface SearchResult {

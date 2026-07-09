@@ -11,15 +11,22 @@ import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
 import type {
 	Assignment,
 	AssignmentChange,
+	CheckSimilarFilesRequest,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
+	ExtractZipRequest,
+	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
+	SaveFilesRequest,
+	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SimilarFileMatch,
+	SuggestSavePathRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
 
@@ -74,16 +81,58 @@ export class MockApiClient implements FuzzyApiClient {
 		return delay(table[query] ?? []);
 	}
 
-	async suggestSavePath(courseId: number): Promise<SaveSuggestion[]> {
-		const course = (courses as { id: number; name: string }[]).find((c) => c.id === courseId);
-		const courseLabel = course?.name ?? "不明なコース";
+	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
+		const knownCourse = (courses as { id: number; name: string }[]).find(
+			(c) => c.name === request.course.name,
+		);
+		const courseLabel = knownCourse?.name ?? request.course.name ?? "不明なコース";
+		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
 		return delay([
 			{
-				path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\第10回`,
+				path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\${sectionLabel ?? "資料"}`,
 				confidence: 0.92,
 			},
 			{ path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`, confidence: 0.6 },
 		]);
+	}
+
+	async checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
+		const title = request.fileMeta.title;
+		if (/正規化|第4回|normal/i.test(title)) {
+			return delay([
+				{
+					fileId: 204,
+					originalName: "第04回_正規化.pdf",
+					similarity: 0.88,
+				},
+			]);
+		}
+		if (/演習|exercise/i.test(title)) {
+			return delay([
+				{
+					fileId: 317,
+					originalName: "演習問題_解答例.docx",
+					similarity: 0.74,
+				},
+			]);
+		}
+		return delay([]);
+	}
+
+	async saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
+		return delay({
+			savedFileIds: request.files.map((file, index) => file.moodleFileId ?? `${index + 1}`),
+		});
+	}
+
+	async extractZip(request: ExtractZipRequest): Promise<ExtractZipResult> {
+		const basePath = request.destinationPath || request.targetPath;
+		return delay({
+			extractedPaths: [
+				request.flatten ? `${basePath}\\第1回_資料.pdf` : `${basePath}\\contents\\第1回_資料.pdf`,
+				request.flatten ? `${basePath}\\演習データ.csv` : `${basePath}\\contents\\演習データ.csv`,
+			],
+		});
 	}
 
 	async getRules(): Promise<RuleSet> {
