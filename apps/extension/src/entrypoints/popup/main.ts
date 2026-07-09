@@ -10,13 +10,12 @@ target.innerHTML = `
 		<p class="fuzzy-popup-kicker">Fuzzy</p>
 		<h1>Moodle上で確認してください</h1>
 		<p class="fuzzy-popup-body">
-			今回の画面は拡張機能のポップアップではなく、Moodleの上部ナビに追加される
-			「Fuzzy」タブから開きます。
+			Fuzzyの画面は拡張機能のポップアップではなく、Moodleのページ内に表示されます。
 		</p>
 		<ol class="fuzzy-popup-steps">
 			<li>Moodleを開く</li>
-			<li>上部ナビの「Fuzzy」を押す</li>
-			<li>検索画面が開くことを確認する</li>
+			<li>資料の保存は、授業ページ右側の保存パネルから行う</li>
+			<li>横断検索・締切ハブは、上部ナビの「Fuzzy」タブから開く</li>
 		</ol>
 	</main>
 `;

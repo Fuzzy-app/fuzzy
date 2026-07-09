@@ -1,15 +1,22 @@
 import type {
 	Assignment,
 	AssignmentChange,
+	CheckSimilarFilesRequest,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
+	ExtractZipRequest,
+	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
+	SaveFilesRequest,
+	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SimilarFileMatch,
+	SuggestSavePathRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
 import { ApiError } from "./client";
@@ -91,8 +98,20 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("search", { query });
 	}
 
-	suggestSavePath(courseId: number): Promise<SaveSuggestion[]> {
-		return this.send("suggestSavePath", { courseId });
+	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
+		return this.send("suggestSavePath", request);
+	}
+
+	checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
+		return this.send("checkSimilarFiles", request);
+	}
+
+	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
+		return this.send("saveFiles", request);
+	}
+
+	extractZip(request: ExtractZipRequest): Promise<ExtractZipResult> {
+		return this.send("extractZip", request);
 	}
 
 	getRules(): Promise<RuleSet> {

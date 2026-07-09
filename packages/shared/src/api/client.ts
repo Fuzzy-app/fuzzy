@@ -1,15 +1,22 @@
 import type {
 	Assignment,
 	AssignmentChange,
+	CheckSimilarFilesRequest,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroup,
+	ExtractZipRequest,
+	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
 	RuleViolation,
+	SaveFilesRequest,
+	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SimilarFileMatch,
+	SuggestSavePathRequest,
 } from "../types";
 
 /**
@@ -34,7 +41,13 @@ export interface FuzzyApiClient {
 
 	search(query: string): Promise<SearchResult[]>;
 
-	suggestSavePath(courseId: number): Promise<SaveSuggestion[]>;
+	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]>;
+
+	checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]>;
+
+	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult>;
+
+	extractZip(request: ExtractZipRequest): Promise<ExtractZipResult>;
 
 	getRules(): Promise<RuleSet>;
 
