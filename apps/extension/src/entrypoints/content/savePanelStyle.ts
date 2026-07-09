@@ -11,7 +11,9 @@ export const SAVE_PANEL_STYLE = `
 			width: min(300px, calc(100vw - 24px));
 			height: 100vh;
 			box-sizing: border-box;
-			overflow: auto;
+			/* 縦スクロールは内側の .fuzzy-panel-scroll が担当する。
+			   パネル自身はclipしない（左端の外へ飛び出す開閉ハンドルを隠さないため）。 */
+			overflow: visible;
 			border-left: 1px solid #e2e6f0;
 			border-top: 3px solid #635bff;
 			border-radius: 0;
@@ -44,6 +46,13 @@ export const SAVE_PANEL_STYLE = `
 			font: inherit;
 		}
 
+		.fuzzy-panel-scroll {
+			height: 100%;
+			overflow-y: auto;
+			/* スクロールバーを専用ガターに収め、ヘッダーの操作ボタンに重ならないようにする */
+			scrollbar-gutter: stable;
+		}
+
 		.fuzzy-panel-header,
 		.fuzzy-section,
 		.fuzzy-actions {
@@ -52,14 +61,20 @@ export const SAVE_PANEL_STYLE = `
 		}
 
 		.fuzzy-panel-header {
+			position: sticky;
+			top: 0;
+			z-index: 3;
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
 			border-top: 0;
 			background: #ffffff;
+			box-shadow: 0 2px 8px rgb(22 34 51 / 6%);
 		}
 
 		.fuzzy-panel-tools {
+			position: relative;
+			z-index: 1;
 			display: flex;
 			flex: 0 0 auto;
 			gap: 5px;
@@ -114,10 +129,11 @@ export const SAVE_PANEL_STYLE = `
 
 		.fuzzy-panel-handle {
 			position: absolute;
+			z-index: 4;
 			top: 50%;
-			left: -18px;
-			width: 20px;
-			height: 52px;
+			left: -22px;
+			width: 24px;
+			height: 60px;
 			border-radius: 8px 0 0 8px !important;
 			padding: 0 !important;
 			transform: translateY(-50%);

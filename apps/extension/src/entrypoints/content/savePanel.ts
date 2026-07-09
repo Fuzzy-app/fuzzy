@@ -192,18 +192,26 @@ export function mountSavePanel(): void {
 			return;
 		}
 
+		// 開閉ハンドルは左端の外へ飛び出すため、clipされるスクロール領域の外（パネル直下）に置く。
 		panel.append(renderHandle());
-		panel.append(renderHeader());
-		if (message) panel.append(renderNote());
-		panel.append(renderFileList(snapshot.files));
-		panel.append(renderPathSection());
+
+		// ヘッダー・各セクション・フッターは内側のスクロール領域に入れる。
+		// こうするとパネル自身をoverflow:visibleにでき、左端のハンドルが隠れない。
+		const scroll = document.createElement("div");
+		scroll.className = "fuzzy-panel-scroll";
+		scroll.append(renderHeader());
+		if (message) scroll.append(renderNote());
+		scroll.append(renderFileList(snapshot.files));
+		scroll.append(renderPathSection());
 
 		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
 		const zipFiles = selectedFiles.filter(isZipFile);
 		if (zipFiles.length > 0)
-			panel.append(renderZipSection(zipFiles.length, currentDestinationPath()));
-		if (awaitingConfirm && similarWarnings.length > 0) panel.append(renderSimilarConfirm());
-		panel.append(renderActions(selectedFiles, zipFiles));
+			scroll.append(renderZipSection(zipFiles.length, currentDestinationPath()));
+		if (awaitingConfirm && similarWarnings.length > 0) scroll.append(renderSimilarConfirm());
+		scroll.append(renderActions(selectedFiles, zipFiles));
+
+		panel.append(scroll);
 	}
 
 	function renderOpenTab() {
