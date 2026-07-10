@@ -1,54 +1,115 @@
 <script lang="ts">
-	type FolderPattern = {
-		id: string;
-		title: string;
-		description: string;
-		exampleTitle: string;
-		exampleLines: string[];
-		recommended?: boolean;
-		selected?: boolean;
+	import {
+		pickBaseFolderClient,
+		scanExistingStructureClient,
+	} from "$lib/setup/api";
+	import type { PatternCandidate, SetupDraft } from "$lib/setup/types";
+
+	const steps = [
+		{ label: "保存先フォルダ", state: "current" },
+		{ label: "既存構成スキャン", state: "current" },
+		{ label: "保存", state: "upcoming" },
+	] as const;
+
+	const sidebarItems = [
+		"保存先フォルダを選ぶ",
+		"既存の並び方を確認する",
+		"選んだ候補を次の設定に渡す",
+	];
+
+	let draft: SetupDraft = {
+		baseFolderPath: null,
+		selectedCandidateId: null,
+		candidates: [],
+		lastScannedAt: null,
 	};
 
-	const sideItems = ["保存フォルダ", "フォルダの作り方", "データベース登録"];
+	let isPickingFolder = false;
+	let isScanning = false;
+	let errorMessage: string | null = null;
 
-	const progressItems = [
-		{ label: "フォルダの保存", state: "done" },
-		{ label: "階層ルール", state: "current" },
-		{ label: "完了", state: "upcoming" },
-	];
+	function formatScannedAt(value: string | null): string {
+		if (!value) {
+			return "未実行";
+		}
 
-	const patterns: FolderPattern[] = [
-		{
-			id: "pattern-course-session",
-			title: "年 / 学期 / 科目",
-			description:
-				"最も多い保存形式をもとに、回ごとの資料を科目単位で整理します",
-			exampleTitle: "2025",
-			exampleLines: ["春学期", "情報アーキテクチャ"],
-			selected: true,
-		},
-		{
-			id: "pattern-simple",
-			title: "科目だけ（シンプル）",
-			description: "科目別に統一し、授業フォルダの中へまとめる形です",
-			exampleTitle: "情報アーキテクチャ",
-			exampleLines: ["データベース", "離散数学"],
-		},
-		{
-			id: "pattern-grade-course",
-			title: "科目 / 回（おすすめ・標準）",
-			description: "回ごとに区切ってテンポよく資料を追える構成です",
-			exampleTitle: "情報アーキテクチャ",
-			exampleLines: ["第1回", "第2回", "第3回"],
-			recommended: true,
-		},
-	];
+		return new Intl.DateTimeFormat("ja-JP", {
+			month: "numeric",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit",
+		}).format(new Date(value));
+	}
+
+	function selectCandidate(candidateId: string): void {
+		draft = {
+			...draft,
+			selectedCandidateId: candidateId,
+		};
+	}
+
+	async function runScan(path: string): Promise<void> {
+		isScanning = true;
+		errorMessage = null;
+
+		try {
+			const candidates = await scanExistingStructureClient(path);
+			const selectedCandidateId =
+				candidates.find((candidate) => candidate.recommended)?.id ??
+				candidates[0]?.id ??
+				null;
+
+			draft = {
+				...draft,
+				baseFolderPath: path,
+				candidates,
+				selectedCandidateId,
+				lastScannedAt: new Date().toISOString(),
+			};
+		} catch {
+			errorMessage = "スキャン結果の読み込みに失敗しました。";
+		} finally {
+			isScanning = false;
+		}
+	}
+
+	async function handlePickFolder(): Promise<void> {
+		isPickingFolder = true;
+		errorMessage = null;
+
+		try {
+			const path = await pickBaseFolderClient();
+
+			if (!path) {
+				return;
+			}
+
+			await runScan(path);
+		} catch {
+			errorMessage = "フォルダ選択に失敗しました。";
+		} finally {
+			isPickingFolder = false;
+		}
+	}
+
+	async function handleRescan(): Promise<void> {
+		if (!draft.baseFolderPath) {
+			return;
+		}
+
+		await runScan(draft.baseFolderPath);
+	}
+
+	$: selectedCandidate =
+		draft.candidates.find(
+			(candidate) => candidate.id === draft.selectedCandidateId,
+		) ?? null;
 </script>
 
 <svelte:head>
 	<meta
 		name="description"
-		content="Fuzzy の初期セットアップ画面。保存パターンの候補を比較しながら、フォルダ構成を選べます。"
+		content="Fuzzy の初期セットアップ画面。保存先フォルダの選択と既存構成スキャン結果を確認できます。"
 	/>
 </svelte:head>
 
@@ -70,11 +131,13 @@
 
 	<section class="workspace">
 		<aside class="sidebar">
-			<p class="sidebar-label">セットアップ中: ドキュメントを整理します</p>
-			<nav aria-label="セットアップの項目">
+			<p class="sidebar-label">
+				Issue #46: 保存先の選択と既存構成スキャンを先に固めます。
+			</p>
+			<nav aria-label="セットアップの流れ">
 				<ul class="side-list">
-					{#each sideItems as item, index}
-						<li class:active={index === 1}>
+					{#each sidebarItems as item, index}
+						<li class:active={index < 2}>
 							<span class="side-index">{index + 1}</span>
 							<span>{item}</span>
 						</li>
@@ -85,65 +148,139 @@
 
 		<section class="content">
 			<div class="progress" aria-label="進捗">
-				{#each progressItems as item, index}
+				{#each steps as item, index}
 					<div class="progress-item">
-						<div class="progress-dot {item.state}">
-							{#if item.state === "done"}
-								✓
-							{:else}
-								{index + 1}
-							{/if}
+						<div
+							class:current={item.state === "current"}
+							class:upcoming={item.state === "upcoming"}
+							class="progress-dot"
+						>
+							{index + 1}
 						</div>
 						<span>{item.label}</span>
 					</div>
 				{/each}
 			</div>
 
-			<section class="chooser">
-				<p class="chip">STEP 2/3</p>
-				<h1>フォルダの作り方を選ぶ</h1>
-				<p class="intro">
-					検出された保存傾向をもとに Fuzzy
-					が候補を並べています。あとから変更できるので、
-					今の運用にもっとも近い形を選んでください。
-				</p>
-
-				<div class="pattern-list">
-					{#each patterns as pattern}
-						<article class:selected={pattern.selected} class="pattern-card">
-							<div class="pattern-main">
-								<div class="pattern-title-row">
-									<h2>{pattern.title}</h2>
-									{#if pattern.recommended}
-										<span class="badge">おすすめ</span>
-									{/if}
-								</div>
-								<p>{pattern.description}</p>
-							</div>
-
-							<div class="example-box" aria-label={`${pattern.title} の例`}>
-								<p>{pattern.exampleTitle}</p>
-								<ul>
-									{#each pattern.exampleLines as line}
-										<li>{line}</li>
-									{/each}
-								</ul>
-							</div>
-						</article>
-					{/each}
-				</div>
-
-				<div class="helper-row">
-					<div class="helper-note">
-						<span class="helper-icon">i</span>
-						<span>もっとも近い候補を選ぶ</span>
+			<section class="panel">
+				<div class="panel-header">
+					<div>
+						<p class="chip">STEP 1-2 / 3</p>
+						<h1>保存先フォルダを選んで、既存の並び方を確認する</h1>
+						<p class="intro">
+							今は UI
+							を先に完成させる段階なので、フォルダ選択とスキャン結果はモック値で完結します。
+							将来はここを `pick_base_folder` と `scan_existing_structure`
+							に差し替える前提です。
+						</p>
 					</div>
-					<button class="ghost-button" type="button"
-						>まだレビューを続ける</button
+					<button
+						class="primary-button"
+						type="button"
+						on:click={handlePickFolder}
+						disabled={isPickingFolder || isScanning}
 					>
+						{#if isPickingFolder}
+							フォルダを選択中...
+						{:else}
+							保存先フォルダを選ぶ
+						{/if}
+					</button>
 				</div>
 
-				<button class="primary-button" type="button">この構成で進める</button>
+				<div class="folder-card">
+					<div>
+						<p class="section-label">選択中の保存先</p>
+						<strong>{draft.baseFolderPath ?? "まだ選択されていません"}</strong>
+					</div>
+					<div class="folder-meta">
+						<span>最終スキャン: {formatScannedAt(draft.lastScannedAt)}</span>
+						<button
+							class="ghost-button"
+							type="button"
+							on:click={handleRescan}
+							disabled={!draft.baseFolderPath || isScanning}
+						>
+							{#if isScanning}
+								再スキャン中...
+							{:else}
+								再スキャン
+							{/if}
+						</button>
+					</div>
+				</div>
+
+				{#if errorMessage}
+					<p class="error-banner" role="alert">{errorMessage}</p>
+				{/if}
+
+				<section class="scan-section">
+					<div class="scan-heading">
+						<div>
+							<p class="section-label">既存構成の候補</p>
+							<h2>スキャン結果</h2>
+						</div>
+						<span class="scan-count">{draft.candidates.length} 件</span>
+					</div>
+
+					{#if draft.candidates.length === 0}
+						<div class="empty-state">
+							<p>フォルダを選ぶと、既存構成の候補がここに表示されます。</p>
+						</div>
+					{:else}
+						<div class="pattern-list">
+							{#each draft.candidates as candidate}
+								<button
+									class:selected={candidate.id === draft.selectedCandidateId}
+									class="pattern-card"
+									type="button"
+									on:click={() => selectCandidate(candidate.id)}
+								>
+									<div class="pattern-main">
+										<div class="pattern-title-row">
+											<h3>{candidate.name}</h3>
+											{#if candidate.recommended}
+												<span class="badge">おすすめ</span>
+											{/if}
+										</div>
+										<p>{candidate.description}</p>
+										<p class="reason">{candidate.reason}</p>
+									</div>
+
+									<div class="pattern-side">
+										<div class="score-box">
+											<span>一致度</span>
+											<strong>{candidate.matchScore}%</strong>
+										</div>
+										<div
+											class="example-box"
+											aria-label={`${candidate.name} の例`}
+										>
+											<p>検出された並び</p>
+											<ul>
+												{#each candidate.folders as folder}
+													<li>{folder}</li>
+												{/each}
+											</ul>
+										</div>
+									</div>
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</section>
+
+				<section class="selection-summary">
+					<div>
+						<p class="section-label">次の issue #47 へ渡す想定</p>
+						<h2>現在の選択内容</h2>
+					</div>
+					<div class="summary-card">
+						<p>保存先: {draft.baseFolderPath ?? "未選択"}</p>
+						<p>選択候補: {selectedCandidate?.name ?? "未選択"}</p>
+						<p>保存処理は issue #47 で `save_initial_setup` に接続します。</p>
+					</div>
+				</section>
 			</section>
 		</section>
 	</section>
@@ -154,11 +291,11 @@
 		margin: 0;
 		font-family: "BIZ UDPGothic", "Yu Gothic UI", "Segoe UI", sans-serif;
 		background:
-			linear-gradient(180deg, #a783ff 0 4px, transparent 4px),
+			linear-gradient(180deg, #9d8bff 0 4px, transparent 4px),
 			radial-gradient(
 				circle at top,
-				rgba(143, 116, 245, 0.16),
-				transparent 24%
+				rgba(134, 118, 239, 0.22),
+				transparent 26%
 			),
 			linear-gradient(180deg, #f6f7fb 0%, #eceef7 100%);
 		color: #27283a;
@@ -229,7 +366,7 @@
 	.workspace {
 		min-height: calc(100vh - 56px);
 		display: grid;
-		grid-template-columns: 232px minmax(0, 1fr);
+		grid-template-columns: 248px minmax(0, 1fr);
 		border-radius: 0 0 20px 20px;
 		overflow: hidden;
 		background: rgba(255, 255, 255, 0.64);
@@ -250,6 +387,7 @@
 	.sidebar-label {
 		margin: 0 0 24px;
 		font-size: 0.74rem;
+		line-height: 1.6;
 		color: #8b8fa6;
 	}
 
@@ -328,24 +466,30 @@
 		color: #7f84a0;
 	}
 
-	.progress-dot.done {
-		background: #36b37e;
-		color: #fff;
-	}
-
 	.progress-dot.current {
 		background: #6d5cf6;
 		color: #fff;
 		box-shadow: 0 0 0 4px rgba(109, 92, 246, 0.14);
 	}
 
-	.chooser {
-		width: min(100%, 520px);
+	.progress-dot.upcoming {
+		background: #d8dced;
+	}
+
+	.panel {
+		width: min(100%, 940px);
 		margin: 22px auto 0;
-		padding: 26px 28px 18px;
+		padding: 26px 28px 24px;
 		border-radius: 24px;
 		background: rgba(255, 255, 255, 0.94);
 		box-shadow: 0 28px 52px rgba(96, 105, 151, 0.16);
+	}
+
+	.panel-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 16px;
 	}
 
 	.chip {
@@ -362,6 +506,7 @@
 
 	h1,
 	h2,
+	h3,
 	p,
 	ul {
 		margin-top: 0;
@@ -369,31 +514,104 @@
 
 	h1 {
 		margin-bottom: 8px;
-		font-size: 1.7rem;
+		font-size: 1.8rem;
 		letter-spacing: -0.02em;
 	}
 
 	.intro {
-		margin-bottom: 18px;
-		font-size: 0.78rem;
-		line-height: 1.65;
+		max-width: 640px;
+		margin-bottom: 0;
+		font-size: 0.82rem;
+		line-height: 1.7;
 		color: #8085a0;
 	}
 
+	.section-label {
+		margin-bottom: 6px;
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		color: #7d83a2;
+		text-transform: uppercase;
+	}
+
+	.folder-card,
+	.summary-card,
+	.empty-state,
+	.error-banner {
+		border-radius: 18px;
+	}
+
+	.folder-card {
+		margin-top: 20px;
+		padding: 18px 20px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		background: linear-gradient(180deg, #f8f9ff 0%, #f1f3fc 100%);
+		border: 1px solid rgba(203, 207, 226, 0.76);
+	}
+
+	.folder-card strong {
+		font-size: 0.98rem;
+		color: #3f4566;
+		word-break: break-all;
+	}
+
+	.folder-meta {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 10px;
+		font-size: 0.76rem;
+		color: #7b809d;
+	}
+
+	.scan-section {
+		margin-top: 24px;
+	}
+
+	.scan-heading,
+	.selection-summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+	}
+
+	.scan-heading h2,
+	.selection-summary h2 {
+		margin-bottom: 0;
+		font-size: 1.05rem;
+	}
+
+	.scan-count {
+		padding: 6px 10px;
+		border-radius: 999px;
+		background: rgba(124, 104, 246, 0.08);
+		color: #6c5cf2;
+		font-size: 0.74rem;
+		font-weight: 700;
+	}
+
 	.pattern-list {
+		margin-top: 14px;
 		display: grid;
-		gap: 12px;
+		gap: 14px;
 	}
 
 	.pattern-card {
-		padding: 16px;
+		width: 100%;
+		padding: 18px;
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) 128px;
-		gap: 14px;
-		align-items: center;
-		border-radius: 16px;
+		grid-template-columns: minmax(0, 1fr) 260px;
+		gap: 18px;
+		text-align: left;
+		border-radius: 18px;
 		border: 1px solid rgba(203, 207, 226, 0.76);
 		background: #fff;
+		cursor: pointer;
 		transition:
 			border-color 0.18s ease,
 			box-shadow 0.18s ease,
@@ -410,19 +628,48 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		margin-bottom: 6px;
+		margin-bottom: 8px;
 	}
 
-	.pattern-title-row h2 {
+	.pattern-title-row h3 {
 		margin-bottom: 0;
-		font-size: 0.96rem;
+		font-size: 1rem;
 	}
 
 	.pattern-main p {
 		margin-bottom: 0;
+		font-size: 0.78rem;
+		line-height: 1.65;
+		color: #747b99;
+	}
+
+	.reason {
+		margin-top: 10px;
+		color: #575f84;
+		font-weight: 700;
+	}
+
+	.pattern-side {
+		display: grid;
+		gap: 12px;
+	}
+
+	.score-box {
+		padding: 12px 14px;
+		border-radius: 14px;
+		background: linear-gradient(180deg, #f6f0ff 0%, #ece8ff 100%);
+		color: #6457d6;
+	}
+
+	.score-box span {
+		display: block;
+		margin-bottom: 4px;
 		font-size: 0.72rem;
-		line-height: 1.6;
-		color: #7b809d;
+		font-weight: 700;
+	}
+
+	.score-box strong {
+		font-size: 1.3rem;
 	}
 
 	.badge {
@@ -435,15 +682,15 @@
 	}
 
 	.example-box {
-		padding: 10px 12px;
-		border-radius: 12px;
+		padding: 12px 14px;
+		border-radius: 14px;
 		background: #f4f5fb;
 		color: #666d8f;
 		font-size: 0.72rem;
 	}
 
 	.example-box p {
-		margin-bottom: 6px;
+		margin-bottom: 8px;
 		font-weight: 700;
 		color: #555d82;
 	}
@@ -451,36 +698,39 @@
 	.example-box ul {
 		margin: 0;
 		padding-left: 1rem;
-		line-height: 1.5;
+		line-height: 1.6;
 	}
 
-	.helper-row {
+	.selection-summary {
+		margin-top: 26px;
+		align-items: flex-start;
+	}
+
+	.summary-card {
+		margin-top: 14px;
+		padding: 16px 18px;
+		background: linear-gradient(180deg, #fff8dd 0%, #ffefb5 100%);
+		color: #6f5600;
+		font-size: 0.8rem;
+		line-height: 1.7;
+	}
+
+	.empty-state {
+		margin-top: 14px;
+		padding: 28px 20px;
+		background: rgba(244, 245, 251, 0.82);
+		border: 1px dashed rgba(179, 184, 210, 0.8);
+		color: #7d83a2;
+		text-align: center;
+	}
+
+	.error-banner {
 		margin-top: 14px;
 		padding: 12px 14px;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		border-radius: 14px;
-		background: linear-gradient(180deg, #fff7d7 0%, #ffedaa 100%);
-	}
-
-	.helper-note {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 0.74rem;
-		font-weight: 700;
-		color: #8f6a00;
-	}
-
-	.helper-icon {
-		width: 18px;
-		height: 18px;
-		display: grid;
-		place-items: center;
-		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.72);
+		background: #fff2f0;
+		border: 1px solid #f2c5bd;
+		color: #ab3e2d;
+		font-size: 0.78rem;
 	}
 
 	.ghost-button,
@@ -490,27 +740,31 @@
 		cursor: pointer;
 	}
 
+	.ghost-button:disabled,
+	.primary-button:disabled {
+		cursor: default;
+		opacity: 0.7;
+	}
+
 	.ghost-button {
 		padding: 8px 10px;
 		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.65);
-		color: #d08400;
-		font-size: 0.72rem;
+		background: rgba(255, 255, 255, 0.72);
+		color: #6256ca;
+		font-size: 0.74rem;
 		font-weight: 700;
 	}
 
 	.primary-button {
-		width: 100%;
-		margin-top: 12px;
 		padding: 13px 16px;
-		border-radius: 12px;
+		border-radius: 14px;
 		background: linear-gradient(180deg, #7f6cff 0%, #6958f5 100%);
 		color: #fff;
 		font-weight: 700;
 		box-shadow: 0 14px 28px rgba(109, 92, 246, 0.28);
 	}
 
-	@media (max-width: 920px) {
+	@media (max-width: 980px) {
 		.workspace {
 			grid-template-columns: 1fr;
 		}
@@ -525,12 +779,16 @@
 			flex-wrap: wrap;
 		}
 
-		.chooser {
-			width: 100%;
+		.panel-header,
+		.folder-card,
+		.scan-heading,
+		.selection-summary {
+			flex-direction: column;
+			align-items: stretch;
 		}
 	}
 
-	@media (max-width: 640px) {
+	@media (max-width: 720px) {
 		.window {
 			padding: 8px;
 		}
@@ -539,20 +797,18 @@
 			padding: 16px;
 		}
 
-		.chooser {
-			padding: 20px 16px 16px;
+		.panel {
+			padding: 20px 16px 18px;
 		}
 
 		.pattern-card {
 			grid-template-columns: 1fr;
 		}
 
-		.helper-row {
-			flex-direction: column;
-			align-items: stretch;
+		.folder-meta {
+			align-items: flex-start;
 		}
 
-		.ghost-button,
 		.primary-button {
 			width: 100%;
 		}
@@ -561,10 +817,6 @@
 			flex-direction: column;
 			align-items: flex-start;
 			gap: 0;
-		}
-
-		.side-list {
-			grid-template-columns: 1fr;
 		}
 	}
 </style>
