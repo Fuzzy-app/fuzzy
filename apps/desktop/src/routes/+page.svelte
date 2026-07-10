@@ -27,6 +27,7 @@
 	let isPickingFolder = false;
 	let isScanning = false;
 	let errorMessage: string | null = null;
+	const minimumScanLoadingMs = 450;
 
 	function formatScannedAt(value: string | null): string {
 		if (!value) {
@@ -48,7 +49,18 @@
 		};
 	}
 
+	function waitForMinimumLoadingTime(startedAt: number): Promise<void> {
+		const elapsedMs = Date.now() - startedAt;
+		const remainingMs = Math.max(0, minimumScanLoadingMs - elapsedMs);
+
+		return new Promise((resolve) => {
+			setTimeout(resolve, remainingMs);
+		});
+	}
+
 	async function runScan(path: string): Promise<void> {
+		const startedAt = Date.now();
+
 		isScanning = true;
 		errorMessage = null;
 
@@ -69,6 +81,7 @@
 		} catch {
 			errorMessage = "スキャン結果の読み込みに失敗しました。";
 		} finally {
+			await waitForMinimumLoadingTime(startedAt);
 			isScanning = false;
 		}
 	}
@@ -104,6 +117,12 @@
 		draft.candidates.find(
 			(candidate) => candidate.id === draft.selectedCandidateId,
 		) ?? null;
+	$: selectedCandidateRank =
+		selectedCandidate === null
+			? null
+			: draft.candidates.findIndex(
+					(candidate) => candidate.id === draft.selectedCandidateId,
+				) + 1;
 </script>
 
 <svelte:head>
@@ -196,16 +215,25 @@
 					<div class="folder-meta">
 						<span>最終スキャン: {formatScannedAt(draft.lastScannedAt)}</span>
 						<button
+							class:loading={isScanning}
 							class="ghost-button"
 							type="button"
 							on:click={handleRescan}
 							disabled={!draft.baseFolderPath || isScanning}
+							aria-busy={isScanning}
 						>
-							{#if isScanning}
-								再スキャン中...
-							{:else}
-								再スキャン
-							{/if}
+							<span class="ghost-button-label">
+								{#if isScanning}
+									<span class="spinner" aria-hidden="true"></span>
+								{/if}
+								<span>
+									{#if isScanning}
+										再スキャン中...
+									{:else}
+										再スキャン
+									{/if}
+								</span>
+							</span>
 						</button>
 					</div>
 				</div>
@@ -276,8 +304,20 @@
 						<h2>現在の選択内容</h2>
 					</div>
 					<div class="summary-card">
-						<p>保存先: {draft.baseFolderPath ?? "未選択"}</p>
-						<p>選択候補: {selectedCandidate?.name ?? "未選択"}</p>
+						<p><strong>保存先:</strong> {draft.baseFolderPath ?? "未選択"}</p>
+						<p><strong>スキャン候補数:</strong> {draft.candidates.length}件</p>
+						<p>
+							<strong>選択候補:</strong>
+							{selectedCandidate?.name ?? "未選択"}
+						</p>
+						{#if selectedCandidate}
+							<p>
+								<strong>候補順位:</strong>
+								{selectedCandidateRank} / {draft.candidates.length}
+							</p>
+							<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
+							<p><strong>選択理由:</strong> {selectedCandidate.reason}</p>
+						{/if}
 						<p>保存処理は issue #47 で `save_initial_setup` に接続します。</p>
 					</div>
 				</section>
@@ -715,6 +755,10 @@
 		line-height: 1.7;
 	}
 
+	.summary-card strong {
+		color: #5b4600;
+	}
+
 	.empty-state {
 		margin-top: 14px;
 		padding: 28px 20px;
@@ -755,6 +799,25 @@
 		font-weight: 700;
 	}
 
+	.ghost-button.loading {
+		background: rgba(109, 92, 246, 0.1);
+	}
+
+	.ghost-button-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.spinner {
+		width: 12px;
+		height: 12px;
+		border: 2px solid rgba(98, 86, 202, 0.22);
+		border-top-color: #6256ca;
+		border-radius: 999px;
+		animation: spin 0.8s linear infinite;
+	}
+
 	.primary-button {
 		padding: 13px 16px;
 		border-radius: 14px;
@@ -762,6 +825,12 @@
 		color: #fff;
 		font-weight: 700;
 		box-shadow: 0 14px 28px rgba(109, 92, 246, 0.28);
+	}
+
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 
 	@media (max-width: 980px) {
