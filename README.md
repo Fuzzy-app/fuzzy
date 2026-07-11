@@ -15,10 +15,14 @@ packages/
 └── shared/       拡張 ⇄ アプリで共有する型・APIクライアント（型は将来 ts-rs で Rust から生成）
 docs/
 ├── 仕様書.md          機能要件・アーキテクチャ・データ設計
+
+├── 開発判断.md        Issue優先度・継続時の合意事項
 ├── セットアップ.md     開発環境構築手順（Bun / Rust / Tauri 前提パッケージ）
 ├── データベース設計.md  SQLiteスキーマ
 └── api/contract.md   Native Messaging / Tauriコマンド契約
 ```
+
+仕様とIssueの扱い、外部連携、Moodle資料取得など、開発中に合意した前提は [`docs/開発判断.md`](docs/開発判断.md) を参照する。仕様書・Issueとの相違を見つけた場合は、実装前に報告する。
 
 `packages/shared` には暫定の型定義（`src/types.ts`）、サンプルデータ（`src/sample-data/`）、`FuzzyApiClient`インターフェースとその実装（`NativeApiClient` / `MockApiClient`、`src/api/`）が既に入っている。`createApiClient()` が native-host への接続を試み、応答がなければ自動でサンプルデータにフォールバックするため、native-host・拡張機能の実装が揃っていない段階でも画面開発を進められる。
 
