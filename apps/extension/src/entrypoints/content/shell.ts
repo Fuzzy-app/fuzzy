@@ -18,6 +18,7 @@ import {
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
 const BUTTON_ID = "fuzzy-shell-nav-button";
+const DRAWER_BUTTON_ID = "fuzzy-shell-drawer-button";
 const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
 
@@ -185,17 +186,17 @@ export function mountFuzzyShell(): void {
 
 	ensureStyle();
 
-	// --- ナビボタン ---
-	const navButton = el("button", "fuzzy-nav-button");
+	// Moodleの自動折りたたみ処理に乗せるため、既存タブと同じ li.nav-item > a.nav-link で追加する。
+	const navButton = el("a", "nav-link fuzzy-nav-button");
 	navButton.id = BUTTON_ID;
-	navButton.type = "button";
+	navButton.href = "#";
 	navButton.setAttribute("aria-pressed", "false");
 	navButton.append(el("span", "fuzzy-nav-mark", "F"), el("span", "", "Fuzzy"));
 
-	const root = el(navHost.tagName === "UL" ? "li" : "div");
+	const root = el(navHost.tagName === "UL" ? "li" : "div", navHost.tagName === "UL" ? "nav-item" : "");
 	root.id = ROOT_ID;
 	root.append(navButton);
-	navHost.append(root);
+	insertNavRoot(navHost, root);
 
 	// シェルを開いている間、Moodle本文の退避先になる要素
 	const stash = el("div");
@@ -209,10 +210,12 @@ export function mountFuzzyShell(): void {
 	let mainEl: HTMLElement | null = null;
 	let statusBadge: HTMLElement | null = null;
 	let searchScreen: SearchScreen | null = null;
+	let drawerButton: HTMLAnchorElement | null = null;
 	const sideLinks: HTMLButtonElement[] = [];
 	let isOpen = false;
 	let activeScreen: ScreenId = "search";
 	let mode: ConnectionMode = "checking";
+	let shellTopOffset = 0;
 	let deadlineFilter: DeadlineViewFilter = "all";
 	let assignments: Assignment[] = [];
 	let assignmentsLoaded = false;
@@ -247,6 +250,34 @@ export function mountFuzzyShell(): void {
 				: mode === "mock"
 					? "完全ローカル・サンプル表示"
 					: "接続確認中";
+	};
+
+	const applyShellFrame = () => {
+		if (!page) return;
+		page.style.top = `${shellTopOffset}px`;
+		page.style.height = `calc(100vh - ${shellTopOffset}px)`;
+	};
+
+	const renderEntryState = () => {
+		navButton.classList.toggle("is-active", isOpen);
+		navButton.setAttribute("aria-pressed", String(isOpen));
+		if (!drawerButton) return;
+		drawerButton.classList.toggle("active", isOpen);
+		drawerButton.setAttribute("aria-current", isOpen ? "page" : "false");
+	};
+
+	const ensureDrawerEntry = () => {
+		const nextButton = upsertDrawerButton();
+		if (!nextButton) return;
+		if (drawerButton !== nextButton) {
+			drawerButton = nextButton;
+			drawerButton.addEventListener("click", (event) => {
+				event.preventDefault();
+				if (isOpen) closeShell();
+				else openShell();
+			});
+		}
+		renderEntryState();
 	};
 
 	// --- 検索画面 ---
@@ -736,10 +767,11 @@ export function mountFuzzyShell(): void {
 	const closeShell = () => {
 		if (!isOpen) return;
 		isOpen = false;
-		navButton.classList.remove("is-active");
-		navButton.setAttribute("aria-pressed", "false");
+		renderEntryState();
+		window.removeEventListener("resize", applyShellFrame);
 		page?.remove();
 		restoreMainContent();
+		document.body.classList.remove("fuzzy-shell-open");
 	};
 
 	const buildPage = (): HTMLElement => {
@@ -792,10 +824,13 @@ export function mountFuzzyShell(): void {
 	const openShell = () => {
 		if (isOpen) return;
 		isOpen = true;
-		navButton.classList.add("is-active");
-		navButton.setAttribute("aria-pressed", "true");
+		renderEntryState();
+		document.body.classList.add("fuzzy-shell-open");
+		shellTopOffset = getShellTopOffset(navHost);
 		moveMainContentToStash();
-		mainHost.append(buildPage());
+		document.body.append(buildPage());
+		applyShellFrame();
+		window.addEventListener("resize", applyShellFrame);
 
 		// 接続モードの表示だけ非同期で更新する（検索は自動では実行しない）
 		void apiPromise.then(
@@ -808,9 +843,16 @@ export function mountFuzzyShell(): void {
 		}
 	};
 
-	navButton.addEventListener("click", () => {
+	navButton.addEventListener("click", (event) => {
+		event.preventDefault();
 		if (isOpen) closeShell();
 		else openShell();
+	});
+
+	ensureDrawerEntry();
+	new MutationObserver(() => ensureDrawerEntry()).observe(document.body, {
+		childList: true,
+		subtree: true,
 	});
 
 	// Moodle側の別タブ（Home等）を押したときはFuzzyを閉じて本文を戻す
@@ -894,15 +936,103 @@ function findMainHost(): HTMLElement | null {
 	return null;
 }
 
+function insertNavRoot(navHost: HTMLElement, root: HTMLElement): void {
+	const moreItem = Array.from(navHost.children).find((child) => {
+		if (!(child instanceof HTMLElement)) return false;
+		const text = child.textContent?.trim() ?? "";
+		return text.includes("さらに") || text.includes("More");
+	});
+
+	if (moreItem) {
+		navHost.insertBefore(root, moreItem);
+	} else {
+		navHost.append(root);
+	}
+
+	window.dispatchEvent(new Event("resize"));
+}
+
+function findDrawerMyCoursesLink(): HTMLAnchorElement | null {
+	return (
+		Array.from(document.querySelectorAll<HTMLAnchorElement>("a.list-group-item")).find((link) => {
+			const href = link.getAttribute("href") ?? "";
+			const text = link.textContent?.trim() ?? "";
+			return (
+				(href.includes("/my/courses.php") ||
+					text === "マイコース" ||
+					text === "My courses") &&
+				!link.classList.contains("sr-only") &&
+				!link.classList.contains("skip")
+			);
+		}) ?? null
+	);
+}
+
+function upsertDrawerButton(): HTMLAnchorElement | null {
+	const existing = document.getElementById(DRAWER_BUTTON_ID);
+	if (existing instanceof HTMLAnchorElement) return existing;
+
+	const myCoursesLink = findDrawerMyCoursesLink();
+	if (!myCoursesLink) return null;
+
+	const button = document.createElement("a");
+	button.id = DRAWER_BUTTON_ID;
+	button.href = "#";
+	button.className = "list-group-item list-group-item-action fuzzy-drawer-button";
+	button.textContent = "Fuzzy";
+	myCoursesLink.insertAdjacentElement("afterend", button);
+	return button;
+}
+
+function getShellTopOffset(navHost: HTMLElement): number {
+	const candidates = [
+		navHost.closest<HTMLElement>("header"),
+		navHost.closest<HTMLElement>(".primary-navigation"),
+		navHost.closest<HTMLElement>(".secondary-navigation"),
+		navHost.closest<HTMLElement>(".moremenu"),
+		document.querySelector<HTMLElement>("header[role='banner']"),
+		document.querySelector<HTMLElement>(".navbar"),
+		document.querySelector<HTMLElement>(".primary-navigation"),
+		document.querySelector<HTMLElement>(".secondary-navigation"),
+		document.querySelector<HTMLElement>(".tertiary-navigation"),
+		document.querySelector<HTMLElement>(".nav-tabs"),
+		document.querySelector<HTMLElement>(".tabs"),
+		document.querySelector<HTMLElement>(".moremenu"),
+		document.querySelector<HTMLElement>(".secondarymoremenu"),
+		document.querySelector<HTMLElement>("#page-header"),
+		document.querySelector<HTMLElement>(".page-header-headings"),
+	];
+
+	const bottoms = candidates
+		.filter((element): element is HTMLElement => element !== null)
+		.map((element) => element.getBoundingClientRect().bottom)
+		.filter((bottom) => Number.isFinite(bottom) && bottom > 0);
+
+	if (bottoms.length === 0) {
+		return Math.max(0, Math.round(navHost.getBoundingClientRect().bottom));
+	}
+
+	return Math.max(0, Math.round(Math.max(...bottoms)));
+}
+
 function ensureStyle(): void {
 	if (document.getElementById(STYLE_ID)) return;
 
 	const style = document.createElement("style");
 	style.id = STYLE_ID;
 	style.textContent = `
+		body.fuzzy-shell-open {
+			overflow: hidden;
+		}
+
+		body.fuzzy-shell-open #page-header,
+		body.fuzzy-shell-open .page-header-headings,
+		body.fuzzy-shell-open .page-context-header,
+		body.fuzzy-shell-open #page-navbar {
+			display: none !important;
+		}
+
 		#${ROOT_ID} {
-			display: inline-flex;
-			align-items: stretch;
 			margin-left: 8px;
 		}
 
@@ -910,15 +1040,10 @@ function ensureStyle(): void {
 			display: inline-flex;
 			align-items: center;
 			gap: 10px;
-			border: 0;
 			border-bottom: 3px solid transparent;
 			padding: 12px 16px 10px;
-			background: transparent;
-			color: #151515;
 			font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
-			font-size: 0.95rem;
 			font-weight: 700;
-			cursor: pointer;
 		}
 
 		.fuzzy-nav-button:hover,
@@ -939,13 +1064,18 @@ function ensureStyle(): void {
 		}
 
 		#${PAGE_ID} {
+			position: fixed;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			z-index: 2147483000;
 			display: grid;
-			grid-template-columns: 148px minmax(0, 1fr);
-			min-height: 720px;
-			border-radius: 18px;
+			grid-template-columns: 180px minmax(0, 1fr);
+			min-height: 0;
 			overflow: hidden;
-			background: #f6f7ff;
-			box-shadow: 0 18px 60px rgba(31, 38, 92, 0.16);
+			background:
+				radial-gradient(circle at top left, rgba(108, 99, 255, 0.12), transparent 22%),
+				linear-gradient(180deg, #eef1ff 0%, #f7f8ff 100%);
 			color: #151515;
 			font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
 		}
@@ -1041,7 +1171,11 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-content {
-			padding: 18px 20px 22px;
+			display: grid;
+			grid-template-rows: auto 1fr;
+			gap: 12px;
+			padding: 24px 28px 32px;
+			overflow: auto;
 		}
 
 		.fuzzy-topbar {
@@ -1049,7 +1183,9 @@ function ensureStyle(): void {
 			align-items: center;
 			justify-content: space-between;
 			gap: 16px;
-			margin-bottom: 10px;
+			width: 100%;
+			max-width: 1320px;
+			margin: 0 auto;
 		}
 
 		.fuzzy-top-status {
@@ -1087,6 +1223,12 @@ function ensureStyle(): void {
 		.fuzzy-screen {
 			display: grid;
 			gap: 18px;
+		}
+
+		.fuzzy-main {
+			max-width: 1320px;
+			width: 100%;
+			margin: 0 auto;
 		}
 
 		.fuzzy-screen-header {
@@ -1627,15 +1769,50 @@ function ensureStyle(): void {
 
 		@media (max-width: 1080px) {
 			#${PAGE_ID} {
-				grid-template-columns: 1fr;
+				grid-template-columns: 92px minmax(0, 1fr);
 			}
 
 			.fuzzy-sidebar {
-				grid-template-rows: auto auto auto;
+				grid-template-rows: auto 1fr;
+				gap: 18px;
+				padding: 14px 10px;
 			}
 
 			.fuzzy-side-nav {
-				grid-template-columns: repeat(2, minmax(0, 1fr));
+				gap: 10px;
+			}
+
+			.fuzzy-side-link {
+				display: grid;
+				justify-items: center;
+				gap: 6px;
+				border-radius: 12px;
+				padding: 10px 6px;
+				font-size: 0.68rem;
+				line-height: 1.25;
+				text-align: center;
+			}
+
+			.fuzzy-sidebar-footer {
+				display: none;
+			}
+
+			.fuzzy-brand {
+				justify-content: center;
+			}
+
+			.fuzzy-brand span:last-child {
+				display: none;
+			}
+
+			.fuzzy-side-dot {
+				width: 10px;
+				height: 10px;
+			}
+
+			.fuzzy-content {
+				min-height: 0;
+				padding: 18px 18px 24px;
 			}
 
 			.fuzzy-search-layout {
