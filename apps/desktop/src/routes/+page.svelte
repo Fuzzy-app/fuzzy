@@ -1,33 +1,77 @@
 <script lang="ts">
+	import { onMount } from "svelte";
 	import {
+		getSetupStatusClient,
 		pickBaseFolderClient,
+		saveInitialSetupClient,
 		scanExistingStructureClient,
 	} from "$lib/setup/api";
-	import type { PatternCandidate, SetupDraft } from "$lib/setup/types";
+	import type {
+		CourseOverride,
+		InitialRuleOption,
+		PatternCandidate,
+		SetupDraft,
+		SetupStatus,
+	} from "$lib/setup/types";
 
 	const steps = [
-		{ label: "保存先フォルダ", state: "current" },
-		{ label: "既存構成スキャン", state: "current" },
-		{ label: "保存", state: "upcoming" },
+		{ label: "保存先", state: "done" },
+		{ label: "推定結果", state: "done" },
+		{ label: "初期ルール", state: "current" },
 	] as const;
 
-	const sidebarItems = [
-		"保存先フォルダを選ぶ",
-		"既存の並び方を確認する",
-		"選んだ候補を次の設定に渡す",
+	const sidebarItems = ["保存先フォルダ", "保存パターン推定", "初期ルール選択"];
+
+	const ruleOptions: InitialRuleOption[] = [
+		{
+			id: "year-course-assignment",
+			name: "年度 / 科目 / 課題",
+			description:
+				"学年をまたいで資料が増えても、年度単位で見失いにくい標準ルールです。",
+			template: "{year}/{course}/{assignment}",
+			preview: [
+				"2026/情報アーキテクチャ/第03回レポート",
+				"2026/統計学/中間課題",
+			],
+			recommended: true,
+		},
+		{
+			id: "semester-course-assignment",
+			name: "学期 / 科目 / 課題",
+			description:
+				"前期・後期の区切りを優先して、履修中の科目を見渡しやすくします。",
+			template: "{term}/{course}/{assignment}",
+			preview: ["2026前期/統計学/中間課題", "2026後期/HCI/発表資料"],
+		},
+		{
+			id: "course-assignment",
+			name: "科目 / 課題",
+			description: "科目名を起点にした、短く扱いやすいルールです。",
+			template: "{course}/{assignment}",
+			preview: ["認知科学/提出物", "情報アーキテクチャ/第03回レポート"],
+		},
 	];
 
 	let draft: SetupDraft = {
 		baseFolderPath: null,
 		selectedCandidateId: null,
+		selectedRuleId: "year-course-assignment",
 		candidates: [],
+		courseOverrides: [],
 		lastScannedAt: null,
 	};
 
+	let setupStatus: SetupStatus = { done: false };
 	let isPickingFolder = false;
 	let isScanning = false;
+	let isSaving = false;
 	let errorMessage: string | null = null;
+	let successMessage: string | null = null;
 	const minimumScanLoadingMs = 450;
+
+	onMount(async () => {
+		setupStatus = await getSetupStatusClient();
+	});
 
 	function formatScannedAt(value: string | null): string {
 		if (!value) {
@@ -42,13 +86,6 @@
 		}).format(new Date(value));
 	}
 
-	function selectCandidate(candidateId: string): void {
-		draft = {
-			...draft,
-			selectedCandidateId: candidateId,
-		};
-	}
-
 	function waitForMinimumLoadingTime(startedAt: number): Promise<void> {
 		const elapsedMs = Date.now() - startedAt;
 		const remainingMs = Math.max(0, minimumScanLoadingMs - elapsedMs);
@@ -58,11 +95,61 @@
 		});
 	}
 
+	function createOverrides(candidates: PatternCandidate[]): CourseOverride[] {
+		const courseNames = Array.from(
+			new Set(
+				candidates
+					.flatMap((candidate) =>
+						candidate.folders
+							.map(
+								(folder) =>
+									folder.split("/").at(-2) ?? folder.split("/").at(0) ?? "",
+							)
+							.filter(Boolean),
+					)
+					.slice(0, 3),
+			),
+		);
+
+		return courseNames.map((courseName, index) => ({
+			id: `course-override-${index + 1}`,
+			courseName,
+			description: "この科目だけ初期ルールから外す候補として保持します。",
+			enabled: false,
+		}));
+	}
+
+	function selectCandidate(candidateId: string): void {
+		draft = {
+			...draft,
+			selectedCandidateId: candidateId,
+		};
+	}
+
+	function selectRule(ruleId: string): void {
+		draft = {
+			...draft,
+			selectedRuleId: ruleId,
+		};
+	}
+
+	function toggleOverride(overrideId: string): void {
+		draft = {
+			...draft,
+			courseOverrides: draft.courseOverrides.map((override) =>
+				override.id === overrideId
+					? { ...override, enabled: !override.enabled }
+					: override,
+			),
+		};
+	}
+
 	async function runScan(path: string): Promise<void> {
 		const startedAt = Date.now();
 
 		isScanning = true;
 		errorMessage = null;
+		successMessage = null;
 
 		try {
 			const candidates = await scanExistingStructureClient(path);
@@ -75,6 +162,7 @@
 				...draft,
 				baseFolderPath: path,
 				candidates,
+				courseOverrides: createOverrides(candidates),
 				selectedCandidateId,
 				lastScannedAt: new Date().toISOString(),
 			};
@@ -89,6 +177,7 @@
 	async function handlePickFolder(): Promise<void> {
 		isPickingFolder = true;
 		errorMessage = null;
+		successMessage = null;
 
 		try {
 			const path = await pickBaseFolderClient();
@@ -113,22 +202,55 @@
 		await runScan(draft.baseFolderPath);
 	}
 
+	async function handleSaveInitialSetup(): Promise<void> {
+		if (!draft.baseFolderPath || !selectedCandidate || !selectedRule) {
+			return;
+		}
+
+		isSaving = true;
+		errorMessage = null;
+		successMessage = null;
+
+		try {
+			await saveInitialSetupClient({
+				path: draft.baseFolderPath,
+				pattern: selectedCandidate,
+				rule: selectedRule,
+				courseOverrides: draft.courseOverrides.filter(
+					(override) => override.enabled,
+				),
+			});
+
+			setupStatus = await getSetupStatusClient();
+			successMessage = "初期セットアップを保存しました。";
+		} catch {
+			errorMessage = "初期セットアップの保存に失敗しました。";
+		} finally {
+			isSaving = false;
+		}
+	}
+
 	$: selectedCandidate =
 		draft.candidates.find(
 			(candidate) => candidate.id === draft.selectedCandidateId,
 		) ?? null;
+	$: selectedRule =
+		ruleOptions.find((rule) => rule.id === draft.selectedRuleId) ?? null;
 	$: selectedCandidateRank =
 		selectedCandidate === null
 			? null
 			: draft.candidates.findIndex(
 					(candidate) => candidate.id === draft.selectedCandidateId,
 				) + 1;
+	$: canSaveSetup = Boolean(
+		draft.baseFolderPath && selectedCandidate && selectedRule,
+	);
 </script>
 
 <svelte:head>
 	<meta
 		name="description"
-		content="Fuzzy の初期セットアップ画面。保存先フォルダの選択と既存構成スキャン結果を確認できます。"
+		content="Fuzzy の初期セットアップ画面。保存パターン推定結果と初期ルールを選択できます。"
 	/>
 </svelte:head>
 
@@ -151,12 +273,12 @@
 	<section class="workspace">
 		<aside class="sidebar">
 			<p class="sidebar-label">
-				Issue #46: 保存先の選択と既存構成スキャンを先に固めます。
+				Issue #47: 推定結果から初期ルールを選び、保存完了まで確認します。
 			</p>
 			<nav aria-label="セットアップの流れ">
 				<ul class="side-list">
 					{#each sidebarItems as item, index}
-						<li class:active={index < 2}>
+						<li class:active={index <= 2}>
 							<span class="side-index">{index + 1}</span>
 							<span>{item}</span>
 						</li>
@@ -171,10 +293,14 @@
 					<div class="progress-item">
 						<div
 							class:current={item.state === "current"}
-							class:upcoming={item.state === "upcoming"}
+							class:done={item.state === "done"}
 							class="progress-dot"
 						>
-							{index + 1}
+							{#if item.state === "done"}
+								✓
+							{:else}
+								{index + 1}
+							{/if}
 						</div>
 						<span>{item.label}</span>
 					</div>
@@ -184,20 +310,18 @@
 			<section class="panel">
 				<div class="panel-header">
 					<div>
-						<p class="chip">STEP 1-2 / 3</p>
-						<h1>保存先フォルダを選んで、既存の並び方を確認する</h1>
+						<p class="chip">STEP 3 / 3</p>
+						<h1>保存パターンを確認して、初期ルールを選ぶ</h1>
 						<p class="intro">
-							今は UI
-							を先に完成させる段階なので、フォルダ選択とスキャン結果はモック値で完結します。
-							将来はここを `pick_base_folder` と `scan_existing_structure`
-							に差し替える前提です。
+							スキャン結果に近い保存パターンを確認し、Fuzzy
+							が今後使うフォルダ作成ルールを選びます。
 						</p>
 					</div>
 					<button
 						class="primary-button"
 						type="button"
 						on:click={handlePickFolder}
-						disabled={isPickingFolder || isScanning}
+						disabled={isPickingFolder || isScanning || isSaving}
 					>
 						{#if isPickingFolder}
 							フォルダを選択中...
@@ -219,7 +343,7 @@
 							class="ghost-button"
 							type="button"
 							on:click={handleRescan}
-							disabled={!draft.baseFolderPath || isScanning}
+							disabled={!draft.baseFolderPath || isScanning || isSaving}
 							aria-busy={isScanning}
 						>
 							<span class="ghost-button-label">
@@ -238,22 +362,35 @@
 					</div>
 				</div>
 
+				{#if setupStatus.done}
+					<p class="success-banner" role="status">
+						初期セットアップは保存済みです。
+						{#if setupStatus.savedAt}
+							<span>保存日時: {formatScannedAt(setupStatus.savedAt)}</span>
+						{/if}
+					</p>
+				{/if}
+
 				{#if errorMessage}
 					<p class="error-banner" role="alert">{errorMessage}</p>
+				{/if}
+
+				{#if successMessage}
+					<p class="success-banner" role="status">{successMessage}</p>
 				{/if}
 
 				<section class="scan-section">
 					<div class="scan-heading">
 						<div>
-							<p class="section-label">既存構成の候補</p>
-							<h2>スキャン結果</h2>
+							<p class="section-label">保存パターン推定</p>
+							<h2>推定結果</h2>
 						</div>
 						<span class="scan-count">{draft.candidates.length} 件</span>
 					</div>
 
 					{#if draft.candidates.length === 0}
 						<div class="empty-state">
-							<p>フォルダを選ぶと、既存構成の候補がここに表示されます。</p>
+							<p>フォルダを選ぶと、保存パターンの候補が表示されます。</p>
 						</div>
 					{:else}
 						<div class="pattern-list">
@@ -298,16 +435,84 @@
 					{/if}
 				</section>
 
+				<section class="rule-section">
+					<div class="scan-heading">
+						<div>
+							<p class="section-label">初期ルール</p>
+							<h2>フォルダ作成ルール</h2>
+						</div>
+					</div>
+
+					<div class="rule-grid">
+						{#each ruleOptions as rule}
+							<button
+								class:selected={rule.id === draft.selectedRuleId}
+								class="rule-card"
+								type="button"
+								on:click={() => selectRule(rule.id)}
+							>
+								<div class="pattern-title-row">
+									<h3>{rule.name}</h3>
+									{#if rule.recommended}
+										<span class="badge">標準</span>
+									{/if}
+								</div>
+								<p>{rule.description}</p>
+								<code>{rule.template}</code>
+								<ul>
+									{#each rule.preview as preview}
+										<li>{preview}</li>
+									{/each}
+								</ul>
+							</button>
+						{/each}
+					</div>
+				</section>
+
+				{#if draft.courseOverrides.length > 0}
+					<section class="override-section">
+						<div class="override-explanation">
+							<p class="section-label">初期例外</p>
+							<h2>コース別に外す候補</h2>
+							<p class="override-help">
+								チェックしたコースは、選択中の初期ルールから外して保存します。たとえば
+								`年度 / 科目 / 課題` を選んでいても、そのコースだけは `科目 /
+								課題` のように短い並びで扱う想定です。
+							</p>
+						</div>
+						<div>
+							<p class="section-label">初期例外</p>
+							<h2>コース別に外す候補</h2>
+						</div>
+						<div class="override-list">
+							{#each draft.courseOverrides as override}
+								<label class="override-row">
+									<input
+										type="checkbox"
+										checked={override.enabled}
+										on:change={() => toggleOverride(override.id)}
+									/>
+									<span>
+										<strong>{override.courseName}</strong>
+										<small
+											>このコースだけ共通ルールから外し、科目フォルダ直下で保存します。</small
+										>
+									</span>
+								</label>
+							{/each}
+						</div>
+					</section>
+				{/if}
+
 				<section class="selection-summary">
 					<div>
-						<p class="section-label">次の issue #47 へ渡す想定</p>
+						<p class="section-label">保存内容</p>
 						<h2>現在の選択内容</h2>
 					</div>
 					<div class="summary-card">
 						<p><strong>保存先:</strong> {draft.baseFolderPath ?? "未選択"}</p>
-						<p><strong>スキャン候補数:</strong> {draft.candidates.length}件</p>
 						<p>
-							<strong>選択候補:</strong>
+							<strong>推定候補:</strong>
 							{selectedCandidate?.name ?? "未選択"}
 						</p>
 						{#if selectedCandidate}
@@ -316,11 +521,33 @@
 								{selectedCandidateRank} / {draft.candidates.length}
 							</p>
 							<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
-							<p><strong>選択理由:</strong> {selectedCandidate.reason}</p>
 						{/if}
-						<p>保存処理は issue #47 で `save_initial_setup` に接続します。</p>
+						<p><strong>初期ルール:</strong> {selectedRule?.name ?? "未選択"}</p>
+						{#if selectedRule}
+							<p><strong>テンプレート:</strong> {selectedRule.template}</p>
+						{/if}
+						<p>
+							<strong>初期例外:</strong>
+							{draft.courseOverrides.filter((override) => override.enabled)
+								.length}件
+						</p>
 					</div>
 				</section>
+
+				<div class="action-row">
+					<button
+						class="primary-button"
+						type="button"
+						on:click={handleSaveInitialSetup}
+						disabled={!canSaveSetup || isSaving || isScanning}
+					>
+						{#if isSaving}
+							保存中...
+						{:else}
+							この内容で初期設定を保存
+						{/if}
+					</button>
+				</div>
 			</section>
 		</section>
 	</section>
@@ -359,8 +586,20 @@
 		border-bottom: none;
 	}
 
-	.brand {
+	.brand,
+	.brand-copy,
+	.window-actions,
+	.progress,
+	.progress-item,
+	.panel-header,
+	.folder-card,
+	.scan-heading,
+	.selection-summary,
+	.action-row {
 		display: flex;
+	}
+
+	.brand {
 		align-items: center;
 		gap: 10px;
 	}
@@ -379,7 +618,6 @@
 	}
 
 	.brand-copy {
-		display: flex;
 		align-items: baseline;
 		gap: 8px;
 		font-size: 0.76rem;
@@ -392,7 +630,6 @@
 	}
 
 	.window-actions {
-		display: flex;
 		gap: 8px;
 	}
 
@@ -444,7 +681,7 @@
 		align-items: center;
 		gap: 10px;
 		padding: 10px 12px;
-		border-radius: 12px;
+		border-radius: 8px;
 		color: #777d98;
 		font-size: 0.88rem;
 	}
@@ -481,7 +718,6 @@
 	}
 
 	.progress {
-		display: flex;
 		justify-content: flex-end;
 		gap: 18px;
 		font-size: 0.74rem;
@@ -489,7 +725,6 @@
 	}
 
 	.progress-item {
-		display: flex;
 		align-items: center;
 		gap: 8px;
 	}
@@ -506,27 +741,29 @@
 		color: #7f84a0;
 	}
 
+	.progress-dot.done,
 	.progress-dot.current {
 		background: #6d5cf6;
 		color: #fff;
+	}
+
+	.progress-dot.current {
 		box-shadow: 0 0 0 4px rgba(109, 92, 246, 0.14);
 	}
 
-	.progress-dot.upcoming {
-		background: #d8dced;
-	}
-
 	.panel {
-		width: min(100%, 940px);
+		width: min(100%, 980px);
 		margin: 22px auto 0;
 		padding: 26px 28px 24px;
-		border-radius: 24px;
+		border-radius: 12px;
 		background: rgba(255, 255, 255, 0.94);
 		box-shadow: 0 28px 52px rgba(96, 105, 151, 0.16);
 	}
 
-	.panel-header {
-		display: flex;
+	.panel-header,
+	.folder-card,
+	.scan-heading,
+	.selection-summary {
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 16px;
@@ -541,7 +778,6 @@
 		color: #6d5cf6;
 		font-size: 0.7rem;
 		font-weight: 700;
-		letter-spacing: 0.04em;
 	}
 
 	h1,
@@ -555,7 +791,11 @@
 	h1 {
 		margin-bottom: 8px;
 		font-size: 1.8rem;
-		letter-spacing: -0.02em;
+		letter-spacing: 0;
+	}
+
+	h2 {
+		font-size: 1.05rem;
 	}
 
 	.intro {
@@ -570,7 +810,6 @@
 		margin-bottom: 6px;
 		font-size: 0.72rem;
 		font-weight: 700;
-		letter-spacing: 0.04em;
 		color: #7d83a2;
 		text-transform: uppercase;
 	}
@@ -578,17 +817,15 @@
 	.folder-card,
 	.summary-card,
 	.empty-state,
-	.error-banner {
-		border-radius: 18px;
+	.error-banner,
+	.success-banner {
+		border-radius: 8px;
 	}
 
 	.folder-card {
 		margin-top: 20px;
 		padding: 18px 20px;
-		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 16px;
 		background: linear-gradient(180deg, #f8f9ff 0%, #f1f3fc 100%);
 		border: 1px solid rgba(203, 207, 226, 0.76);
 	}
@@ -608,22 +845,16 @@
 		color: #7b809d;
 	}
 
-	.scan-section {
+	.scan-section,
+	.rule-section,
+	.override-section {
 		margin-top: 24px;
 	}
 
-	.scan-heading,
-	.selection-summary {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 16px;
-	}
-
 	.scan-heading h2,
-	.selection-summary h2 {
+	.selection-summary h2,
+	.override-section h2 {
 		margin-bottom: 0;
-		font-size: 1.05rem;
 	}
 
 	.scan-count {
@@ -635,20 +866,24 @@
 		font-weight: 700;
 	}
 
-	.pattern-list {
+	.pattern-list,
+	.rule-grid,
+	.override-list {
 		margin-top: 14px;
 		display: grid;
 		gap: 14px;
 	}
 
-	.pattern-card {
+	.rule-grid {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.pattern-card,
+	.rule-card {
 		width: 100%;
 		padding: 18px;
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) 260px;
-		gap: 18px;
 		text-align: left;
-		border-radius: 18px;
+		border-radius: 8px;
 		border: 1px solid rgba(203, 207, 226, 0.76);
 		background: #fff;
 		cursor: pointer;
@@ -658,7 +893,14 @@
 			transform 0.18s ease;
 	}
 
-	.pattern-card.selected {
+	.pattern-card {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 260px;
+		gap: 18px;
+	}
+
+	.pattern-card.selected,
+	.rule-card.selected {
 		border-color: #7c68f6;
 		box-shadow: 0 0 0 3px rgba(124, 104, 246, 0.12);
 		transform: translateY(-1px);
@@ -676,7 +918,8 @@
 		font-size: 1rem;
 	}
 
-	.pattern-main p {
+	.pattern-main p,
+	.rule-card p {
 		margin-bottom: 0;
 		font-size: 0.78rem;
 		line-height: 1.65;
@@ -694,9 +937,13 @@
 		gap: 12px;
 	}
 
-	.score-box {
+	.score-box,
+	.example-box {
 		padding: 12px 14px;
-		border-radius: 14px;
+		border-radius: 8px;
+	}
+
+	.score-box {
 		background: linear-gradient(180deg, #f6f0ff 0%, #ece8ff 100%);
 		color: #6457d6;
 	}
@@ -716,14 +963,12 @@
 		padding: 3px 8px;
 		border-radius: 999px;
 		background: #fff4d9;
-		color: #bb7a00;
+		color: #9c6c00;
 		font-size: 0.67rem;
 		font-weight: 700;
 	}
 
 	.example-box {
-		padding: 12px 14px;
-		border-radius: 14px;
 		background: #f4f5fb;
 		color: #666d8f;
 		font-size: 0.72rem;
@@ -735,15 +980,66 @@
 		color: #555d82;
 	}
 
-	.example-box ul {
+	.example-box ul,
+	.rule-card ul {
 		margin: 0;
 		padding-left: 1rem;
 		line-height: 1.6;
 	}
 
+	.rule-card code {
+		display: block;
+		margin: 12px 0;
+		padding: 8px 10px;
+		border-radius: 6px;
+		background: #f4f5fb;
+		color: #3f4566;
+		font-size: 0.75rem;
+		white-space: normal;
+	}
+
+	.rule-card ul {
+		color: #666d8f;
+		font-size: 0.72rem;
+	}
+
+	.override-row {
+		padding: 12px 14px;
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		border-radius: 8px;
+		background: #f8f9ff;
+		border: 1px solid rgba(203, 207, 226, 0.76);
+		font-size: 0.8rem;
+		color: #43576a;
+	}
+
+	.override-section > div:not(.override-explanation):not(.override-list) {
+		display: none;
+	}
+
+	.override-row input {
+		margin-top: 2px;
+	}
+
+	.override-row small {
+		display: block;
+		margin-top: 3px;
+		color: #7b809d;
+		line-height: 1.5;
+	}
+
+	.override-help {
+		max-width: 680px;
+		margin: 8px 0 0;
+		font-size: 0.78rem;
+		line-height: 1.7;
+		color: #7b809d;
+	}
+
 	.selection-summary {
 		margin-top: 26px;
-		align-items: flex-start;
 	}
 
 	.summary-card {
@@ -759,9 +1055,15 @@
 		color: #5b4600;
 	}
 
-	.empty-state {
+	.empty-state,
+	.error-banner,
+	.success-banner {
 		margin-top: 14px;
-		padding: 28px 20px;
+		padding: 14px 16px;
+		font-size: 0.8rem;
+	}
+
+	.empty-state {
 		background: rgba(244, 245, 251, 0.82);
 		border: 1px dashed rgba(179, 184, 210, 0.8);
 		color: #7d83a2;
@@ -769,17 +1071,31 @@
 	}
 
 	.error-banner {
-		margin-top: 14px;
-		padding: 12px 14px;
 		background: #fff2f0;
 		border: 1px solid #f2c5bd;
 		color: #ab3e2d;
-		font-size: 0.78rem;
+	}
+
+	.success-banner {
+		background: #edf8f1;
+		border: 1px solid #b9e2c7;
+		color: #2e6b43;
+	}
+
+	.success-banner span {
+		display: block;
+		margin-top: 4px;
+	}
+
+	.action-row {
+		margin-top: 18px;
+		justify-content: flex-end;
 	}
 
 	.ghost-button,
 	.primary-button {
 		border: none;
+		border-radius: 8px;
 		font: inherit;
 		cursor: pointer;
 	}
@@ -792,8 +1108,7 @@
 
 	.ghost-button {
 		padding: 8px 10px;
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.72);
+		background: rgba(255, 255, 255, 0.78);
 		color: #6256ca;
 		font-size: 0.74rem;
 		font-weight: 700;
@@ -820,7 +1135,6 @@
 
 	.primary-button {
 		padding: 13px 16px;
-		border-radius: 14px;
 		background: linear-gradient(180deg, #7f6cff 0%, #6958f5 100%);
 		color: #fff;
 		font-weight: 700;
@@ -855,6 +1169,10 @@
 			flex-direction: column;
 			align-items: stretch;
 		}
+
+		.rule-grid {
+			grid-template-columns: 1fr;
+		}
 	}
 
 	@media (max-width: 720px) {
@@ -878,7 +1196,8 @@
 			align-items: flex-start;
 		}
 
-		.primary-button {
+		.primary-button,
+		.action-row {
 			width: 100%;
 		}
 

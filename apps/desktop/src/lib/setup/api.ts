@@ -1,4 +1,6 @@
-import type { PatternCandidate } from "./types";
+import type { InitialSetupPayload, PatternCandidate, SetupStatus } from "./types";
+
+const setupStorageKey = "fuzzy.desktop.initialSetup";
 
 const mockBaseFolders = [
 	"C:/Users/hirot/Documents/Fuzzy",
@@ -67,6 +69,11 @@ const mockScanResultsByPath: Record<string, PatternCandidate[]> = {
 };
 
 let mockFolderIndex = 0;
+let memorySavedSetup: { payload: InitialSetupPayload; savedAt: string } | null = null;
+
+function canUseLocalStorage(): boolean {
+	return typeof localStorage !== "undefined";
+}
 
 export async function pickBaseFolderClient(): Promise<string | null> {
 	const folder = mockBaseFolders[mockFolderIndex % mockBaseFolders.length];
@@ -78,4 +85,42 @@ export async function pickBaseFolderClient(): Promise<string | null> {
 
 export async function scanExistingStructureClient(path: string): Promise<PatternCandidate[]> {
 	return Promise.resolve(mockScanResultsByPath[path] ?? []);
+}
+
+export async function saveInitialSetupClient(payload: InitialSetupPayload): Promise<{ ok: true }> {
+	const savedAt = new Date().toISOString();
+
+	memorySavedSetup = { payload, savedAt };
+
+	if (canUseLocalStorage()) {
+		localStorage.setItem(setupStorageKey, JSON.stringify(memorySavedSetup));
+	}
+
+	return Promise.resolve({ ok: true });
+}
+
+export async function getSetupStatusClient(): Promise<SetupStatus> {
+	if (memorySavedSetup) {
+		return Promise.resolve({ done: true, savedAt: memorySavedSetup.savedAt });
+	}
+
+	if (!canUseLocalStorage()) {
+		return Promise.resolve({ done: false });
+	}
+
+	const savedSetup = localStorage.getItem(setupStorageKey);
+
+	if (!savedSetup) {
+		return Promise.resolve({ done: false });
+	}
+
+	try {
+		const parsed = JSON.parse(savedSetup) as { savedAt?: string };
+
+		return Promise.resolve({ done: true, savedAt: parsed.savedAt });
+	} catch {
+		localStorage.removeItem(setupStorageKey);
+
+		return Promise.resolve({ done: false });
+	}
 }
