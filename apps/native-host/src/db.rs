@@ -46,12 +46,12 @@ impl Db {
 	}
 
 	/// 既存の[`Connection`]からDbを構成する（ファイル／メモリで共通の初期化）。
-	fn from_connection(conn: Connection) -> EngineResult<Self> {
+	fn from_connection(mut conn: Connection) -> EngineResult<Self> {
 		// 接続直後に必ずFK制約を有効化する（データベース設計.md）。
 		conn.execute_batch("PRAGMA foreign_keys = ON;")
 			.map_err(db_err)?;
 		if !schema_applied(&conn)? {
-			conn.execute_batch(SCHEMA_SQL).map_err(db_err)?;
+			apply_schema(&mut conn, SCHEMA_SQL)?;
 		}
 		Ok(Self { conn })
 	}
@@ -73,6 +73,17 @@ fn schema_applied(conn: &Connection) -> EngineResult<bool> {
 		)
 		.map_err(db_err)?;
 	Ok(count > 0)
+}
+
+/// DDL全体を1トランザクションで適用する。
+///
+/// スキーマ適用の途中で失敗しても、`app_settings` だけが作成されたような
+/// 部分適用状態を残さない。部分適用が残ると、次回起動時に
+/// [`schema_applied`] が誤って適用済みと判断してしまうためである。
+fn apply_schema(conn: &mut Connection, schema_sql: &str) -> EngineResult<()> {
+	let tx = conn.transaction().map_err(db_err)?;
+	tx.execute_batch(schema_sql).map_err(db_err)?;
+	tx.commit().map_err(db_err)
 }
 
 /// DBファイルの実パスを決定する。
@@ -184,5 +195,22 @@ mod tests {
 			.unwrap();
 		assert_eq!(tables, 1);
 		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	/// DDL途中の失敗では、先行するDDLもロールバックされること。
+	#[test]
+	fn schema_failure_is_atomic() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		let invalid_schema = "CREATE TABLE app_settings (key TEXT PRIMARY KEY);\nINVALID SQL;";
+		assert!(apply_schema(&mut conn, invalid_schema).is_err());
+
+		let tables: i64 = conn
+			.query_row(
+				"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(tables, 0);
 	}
 }
