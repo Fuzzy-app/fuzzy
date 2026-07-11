@@ -4,9 +4,8 @@
 //! Moodleタブが開いている間ブラウザが `connectNative` で本プロセスを起動・維持し、
 //! ポートが閉じられる（stdinがEOFになる）と正常終了する（docs/仕様書.md 3.4節）。
 //!
-//! 起動時に issue #36 でSQLiteへ接続しスキーマを適用する。個別コマンドは
-//! issue #37（ping）以降で `dispatch` に追加していく（現状は全コマンド未実装で
-//! `INTERNAL` を返す）。
+//! 起動時に issue #36 でSQLiteへ接続しスキーマを適用する。issue #37 で `ping`
+//! を実装し疎通確認できるようにした。他コマンドは順次 `dispatch` に追加していく。
 
 mod db;
 mod protocol;
@@ -43,14 +42,26 @@ fn main() -> std::io::Result<()> {
 
 /// コマンド名に応じて処理を振り分ける。
 ///
-/// 現状は全コマンド未実装のため、常に `INTERNAL` エラーを返す。
-/// issue #37 以降でここに `match request.command.as_str()` の分岐を追加し、
-/// `db` を通じてSQLiteへアクセスする。
+/// 実装済みコマンドは issue #37 の `ping` のみ。未実装コマンドは `INTERNAL` を返す。
+/// 以降の issue でここに分岐を追加し、`db` を通じてSQLiteへアクセスする。
 fn dispatch(_db: &Db, request: Request) -> Response {
-	Response::err(
-		Some(request.id),
-		"INTERNAL",
-		format!("コマンド '{}' は未実装です", request.command),
+	match request.command.as_str() {
+		"ping" => ping(request.id),
+		_ => Response::err(
+			Some(request.id),
+			"INTERNAL",
+			format!("コマンド '{}' は未実装です", request.command),
+		),
+	}
+}
+
+/// `ping`：疎通確認（docs/api/contract.md 1.2節）。`{}` → `{ version }`。
+/// 拡張機能はこの応答（タイムアウト目安800ms）でホスト常駐を判定し、応答が無ければ
+/// サンプルデータのモック動作へフォールバックする（同 1.3節）。
+fn ping(id: String) -> Response {
+	Response::ok(
+		id,
+		serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
 	)
 }
 
@@ -71,5 +82,21 @@ mod tests {
 		assert_eq!(response.id.as_deref(), Some("req-1"));
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "INTERNAL");
+	}
+
+	/// `ping` は ok レスポンスで version を返すこと。
+	#[test]
+	fn ping_returns_version() {
+		let db = Db::open_in_memory().unwrap();
+		let request = Request {
+			id: "req-ping".to_string(),
+			command: "ping".to_string(),
+			payload: serde_json::json!({}),
+		};
+		let response = dispatch(&db, request);
+		assert_eq!(response.id.as_deref(), Some("req-ping"));
+		assert!(response.ok);
+		let data = response.data.expect("data があること");
+		assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
 	}
 }
