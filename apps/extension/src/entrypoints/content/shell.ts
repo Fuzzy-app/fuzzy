@@ -1028,7 +1028,12 @@ function ensureStyle(): void {
 		body.fuzzy-shell-open #page-header,
 		body.fuzzy-shell-open .page-header-headings,
 		body.fuzzy-shell-open .page-context-header,
-		body.fuzzy-shell-open #page-navbar {
+		body.fuzzy-shell-open #page-navbar,
+		body.fuzzy-shell-open #page-secondary-navigation,
+		body.fuzzy-shell-open .secondary-navigation,
+		body.fuzzy-shell-open .tertiary-navigation,
+		body.fuzzy-shell-open .course-navigation,
+		body.fuzzy-shell-open .course-header {
 			display: none !important;
 		}
 
