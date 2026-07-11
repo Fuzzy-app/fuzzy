@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
 	// （拡張機能側は ping タイムアウトでサンプルデータのモック動作へフォールバックする）。
 	let database = Db::open_default().map_err(|e| {
 		eprintln!("DB接続に失敗しました: {e}");
-		std::io::Error::other(e.to_string())
+		std::io::Error::other(e)
 	})?;
 
 	let mut input = stdin().lock();
