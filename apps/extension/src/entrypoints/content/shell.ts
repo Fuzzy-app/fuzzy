@@ -10,6 +10,8 @@
 
 import {
 	type Assignment,
+	type AssignmentChange,
+	type DataSyncEvent,
 	type FuzzyApiClient,
 	type SearchResult,
 	createApiClient,
@@ -174,6 +176,62 @@ function deadlineFilterLabel(filter: DeadlineViewFilter): string {
 	}
 }
 
+const syncDateFormatter = new Intl.DateTimeFormat("ja-JP", {
+	month: "numeric",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+});
+
+function formatSyncDate(syncedAt: string): string {
+	const time = Date.parse(syncedAt);
+	if (Number.isNaN(time)) return "取得日時を確認してください";
+	return syncDateFormatter.format(new Date(time));
+}
+
+function syncTriggerLabel(trigger: DataSyncEvent["trigger"]): string {
+	return trigger === "manual" ? "手動取得" : "自動取得";
+}
+
+function assignmentChangeFieldLabel(field: AssignmentChange["field"]): string {
+	switch (field) {
+		case "dueAt":
+			return "期限";
+		case "title":
+			return "課題名";
+		case "submissionMode":
+			return "提出方法";
+		case "dueAtStatus":
+			return "期限判定";
+		case "submitted":
+			return "提出状況";
+	}
+}
+
+function assignmentChangeValueLabel(field: AssignmentChange["field"], value: string | null): string {
+	if (value === null || value === "") return "未設定";
+	if (field === "dueAt") return formatDate(value);
+	if (field === "dueAtStatus") return value === "needs_review" ? "要確認" : "通常";
+	if (field === "submitted") return value === "true" ? "提出済み" : "未提出";
+	if (field === "submissionMode") {
+		switch (value) {
+			case "moodle_auto":
+				return "Moodle提出";
+			case "manual":
+				return "手動提出";
+			case "notify_only":
+				return "通知のみ";
+			default:
+				return "確認中";
+		}
+	}
+	return value;
+}
+
+function syncChangeTotal(event: DataSyncEvent): number {
+	return event.newAssignmentCount + event.changedAssignmentCount + event.removedAssignmentCount;
+}
+
 export function mountFuzzyShell(): void {
 	if (document.getElementById(ROOT_ID)) return;
 
@@ -222,6 +280,11 @@ export function mountFuzzyShell(): void {
 	let loadingDeadlines = false;
 	let deadlineError: string | null = null;
 	let submissionError: string | null = null;
+	let latestSyncEvent: DataSyncEvent | null = null;
+	let assignmentChanges: AssignmentChange[] = [];
+	let loadingSyncSummary = false;
+	let syncSummaryLoaded = false;
+	let syncSummaryError: string | null = null;
 	let searchRequestId = 0;
 	const searchState: SearchState = {
 		query: "",
@@ -537,6 +600,22 @@ export function mountFuzzyShell(): void {
 		}
 	};
 
+	const loadSyncSummary = async () => {
+		if (syncSummaryLoaded) return;
+		try {
+			const api = await apiPromise;
+			const syncEvent = await api.getLatestSyncEvent();
+			latestSyncEvent = syncEvent;
+			assignmentChanges = syncEvent ? await api.getAssignmentChanges() : [];
+			syncSummaryLoaded = true;
+			syncSummaryError = null;
+			setTopMode(api.mode);
+		} catch (error) {
+			syncSummaryError = error instanceof Error ? error.message : String(error);
+			syncSummaryLoaded = false;
+		}
+	};
+
 	const filterAssignments = (): Assignment[] => {
 		switch (deadlineFilter) {
 			case "upcoming":
@@ -627,6 +706,113 @@ export function mountFuzzyShell(): void {
 		return card;
 	};
 
+	const buildSyncSummaryPanel = (): HTMLElement => {
+		const panel = el("section", "fuzzy-sync-panel");
+		const head = el("div", "fuzzy-sync-head");
+		const titleWrap = el("div");
+		titleWrap.append(el("p", "fuzzy-section-label", "データ取得通知"), el("h2", "", "取得結果"));
+
+		const reloadButton = el("button", "fuzzy-sync-action", "表示を更新");
+		reloadButton.type = "button";
+		reloadButton.disabled = loadingSyncSummary;
+		reloadButton.addEventListener("click", () => {
+			syncSummaryLoaded = false;
+			syncSummaryError = null;
+			renderScreen();
+		});
+
+		head.append(titleWrap, reloadButton);
+		panel.append(head);
+
+		if (loadingSyncSummary && !syncSummaryLoaded) {
+			panel.append(el("p", "fuzzy-toolbar-copy", "Moodleからのデータ取得結果を確認しています…"));
+			return panel;
+		}
+
+		if (syncSummaryError) {
+			const errorRow = el("div", "fuzzy-sync-error");
+			errorRow.append(
+				el("p", "", `データ取得結果の確認に失敗しました: ${syncSummaryError}`),
+				el("p", "", "締切一覧は表示できます。変更点だけ後でもう一度確認してください。"),
+			);
+			panel.append(errorRow);
+			return panel;
+		}
+
+		if (!latestSyncEvent) {
+			panel.append(
+				el(
+					"p",
+					"fuzzy-toolbar-copy",
+					"まだMoodleから課題・締切データを取得した記録がありません。",
+				),
+			);
+			return panel;
+		}
+
+		const total = syncChangeTotal(latestSyncEvent);
+		const summary = el("div", "fuzzy-sync-summary");
+		const message =
+			total > 0
+				? `Moodleからデータを取得しました（対象${total}件）`
+				: "Moodleからデータを取得しました（対象なし）";
+		summary.append(
+			el("p", "fuzzy-sync-message", message),
+			el(
+				"p",
+				"fuzzy-sync-meta",
+				`${formatSyncDate(latestSyncEvent.syncedAt)}・${syncTriggerLabel(latestSyncEvent.trigger)}`,
+			),
+		);
+
+		const counts = el("div", "fuzzy-sync-counts");
+		for (const item of [
+			{ label: "新規", value: latestSyncEvent.newAssignmentCount },
+			{ label: "変更", value: latestSyncEvent.changedAssignmentCount },
+			{ label: "削除", value: latestSyncEvent.removedAssignmentCount },
+		]) {
+			const count = el("div", "fuzzy-sync-count");
+			count.append(el("span", "", item.label), el("strong", "", String(item.value)));
+			counts.append(count);
+		}
+		panel.append(summary, counts);
+
+		const changeList = el("div", "fuzzy-change-list");
+		changeList.append(el("p", "fuzzy-change-list-label", `変更内容（${assignmentChanges.length}件）`));
+		if (assignmentChanges.length === 0) {
+			changeList.append(el("p", "fuzzy-toolbar-copy", "表示する変更点はありません。"));
+		} else {
+			for (const change of assignmentChanges) {
+				const row = el("article", "fuzzy-change-row");
+				const main = el("div");
+				main.append(
+					el("p", "fuzzy-course-name", change.courseName),
+					el("h3", "", change.title),
+					el("p", "fuzzy-change-field", assignmentChangeFieldLabel(change.field)),
+				);
+
+				const diff = el("div", "fuzzy-change-diff");
+				diff.append(
+					el(
+						"span",
+						"fuzzy-change-value is-old",
+						assignmentChangeValueLabel(change.field, change.oldValue),
+					),
+					el("span", "fuzzy-change-arrow", "→"),
+					el(
+						"span",
+						"fuzzy-change-value is-new",
+						assignmentChangeValueLabel(change.field, change.newValue),
+					),
+				);
+				row.append(main, diff);
+				changeList.append(row);
+			}
+		}
+		panel.append(changeList);
+		return panel;
+	};
+
 	const buildDeadlineScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
 		screen.append(buildScreenHeader("締切ハブ", "課題と提出状況をまとめて確認"));
@@ -684,6 +870,8 @@ export function mountFuzzyShell(): void {
 			metricGrid.append(card);
 		}
 
+		const syncPanel = buildSyncSummaryPanel();
+
 		const toolbar = el("section", "fuzzy-deadline-toolbar");
 		const filterRow = el("div", "fuzzy-filter-row");
 		for (const filter of ["all", "upcoming", "overdue", "review"] as const) {
@@ -722,7 +910,7 @@ export function mountFuzzyShell(): void {
 			listHost.append(...visible.map(buildDeadlineCard));
 		}
 
-		screen.append(metricGrid, toolbar, listHost);
+		screen.append(metricGrid, syncPanel, toolbar, listHost);
 		return screen;
 	};
 
@@ -755,6 +943,13 @@ export function mountFuzzyShell(): void {
 				loadingDeadlines = true;
 				void loadAssignments().finally(() => {
 					loadingDeadlines = false;
+					if (activeScreen === "deadlines") renderScreen();
+				});
+			}
+			if (!syncSummaryLoaded && !loadingSyncSummary && !syncSummaryError) {
+				loadingSyncSummary = true;
+				void loadSyncSummary().finally(() => {
+					loadingSyncSummary = false;
 					if (activeScreen === "deadlines") renderScreen();
 				});
 			}
@@ -802,7 +997,7 @@ export function mountFuzzyShell(): void {
 		}
 
 		const footer = el("div", "fuzzy-sidebar-footer");
-		footer.append(el("p", "", "開発中"), el("span", "", "issue54 + issue55"));
+		footer.append(el("p", "", "開発中"), el("span", "", "issue55 + issue56"));
 		sidebar.append(brand, nav, footer);
 
 		const content = el("div", "fuzzy-content");
@@ -1554,6 +1749,165 @@ function ensureStyle(): void {
 			line-height: 1;
 		}
 
+		.fuzzy-sync-panel {
+			display: grid;
+			gap: 14px;
+			padding: 16px;
+			border-radius: 14px;
+			background:
+				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
+				#ffffff;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-sync-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 14px;
+		}
+
+		.fuzzy-sync-head h2,
+		.fuzzy-change-row h3,
+		.fuzzy-sync-message,
+		.fuzzy-sync-meta,
+		.fuzzy-change-field,
+		.fuzzy-sync-error p {
+			margin: 0;
+		}
+
+		.fuzzy-sync-head h2 {
+			font-size: 1.18rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-sync-action {
+			border: 0;
+			border-radius: 999px;
+			padding: 8px 12px;
+			background: #eef0fb;
+			color: #59607d;
+			font: inherit;
+			font-size: 0.78rem;
+			font-weight: 800;
+			cursor: pointer;
+			white-space: nowrap;
+		}
+
+		.fuzzy-sync-action:disabled {
+			cursor: wait;
+			opacity: 0.7;
+		}
+
+		.fuzzy-sync-summary {
+			display: grid;
+			gap: 4px;
+		}
+
+		.fuzzy-sync-message {
+			font-size: 1rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-sync-meta,
+		.fuzzy-change-field {
+			color: #636b8b;
+			font-size: 0.8rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-sync-counts {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.fuzzy-sync-count {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 10px;
+			border-radius: 12px;
+			padding: 10px 12px;
+			background: rgba(255, 255, 255, 0.72);
+			box-shadow: inset 0 0 0 1px #eceefd;
+			color: #636b8b;
+			font-size: 0.8rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-sync-count strong {
+			color: #151515;
+			font-size: 1.2rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-change-list {
+			display: grid;
+			gap: 10px;
+		}
+
+		.fuzzy-change-list-label {
+			margin: 0;
+			color: #636b8b;
+			font-size: 0.8rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-change-row {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) minmax(220px, 0.75fr);
+			gap: 14px;
+			align-items: center;
+			border-radius: 12px;
+			padding: 12px;
+			background: #ffffff;
+			box-shadow: inset 0 0 0 1px #eceefd;
+		}
+
+		.fuzzy-change-row h3 {
+			font-size: 0.96rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-change-diff {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+			gap: 8px;
+			align-items: center;
+		}
+
+		.fuzzy-change-value {
+			border-radius: 10px;
+			padding: 8px 10px;
+			background: #f4f5fb;
+			font-size: 0.78rem;
+			font-weight: 800;
+			line-height: 1.5;
+		}
+
+		.fuzzy-change-value.is-new {
+			background: #dcf9e8;
+			color: #14935b;
+		}
+
+		.fuzzy-change-arrow {
+			color: #6c63ff;
+			font-weight: 900;
+		}
+
+		.fuzzy-sync-error {
+			display: grid;
+			gap: 6px;
+			border-radius: 12px;
+			padding: 12px;
+			background: #fff0ec;
+			color: #b43d24;
+			font-size: 0.86rem;
+			font-weight: 800;
+			line-height: 1.7;
+		}
+
 		.fuzzy-deadline-toolbar {
 			padding: 14px;
 			border-radius: 14px;
@@ -1763,6 +2117,7 @@ function ensureStyle(): void {
 		.fuzzy-side-link:focus,
 		.fuzzy-close-button:focus,
 		.fuzzy-primary-button:focus,
+		.fuzzy-sync-action:focus,
 		.fuzzy-error-close:focus,
 		.fuzzy-result-row:focus,
 		.fuzzy-filter-chip:focus,
@@ -1825,6 +2180,11 @@ function ensureStyle(): void {
 			}
 
 			.fuzzy-metric-grid {
+				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-sync-counts,
+			.fuzzy-change-row {
 				grid-template-columns: 1fr;
 			}
 		}
