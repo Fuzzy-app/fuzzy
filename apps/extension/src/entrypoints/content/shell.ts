@@ -10,10 +10,12 @@
 
 import {
 	type Assignment,
+	type DashboardSummary,
 	type FuzzyApiClient,
 	type SearchResult,
 	createApiClient,
 } from "@fuzzy/shared";
+import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -36,15 +38,17 @@ interface MenuItem {
 }
 
 const menuItems: readonly MenuItem[] = [
-	{ id: "dashboard", label: "ダッシュボード", enabled: false, description: "issue57 で実装" },
+	{ id: "dashboard", label: "ダッシュボード", enabled: true, description: "issue57" },
 	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
 	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
 	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
 	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
 ];
 
-const placeholderCopy: Record<Exclude<ScreenId, "search">, { title: string; copy: string }> = {
-	dashboard: { title: "ダッシュボード", copy: "issue57 で実装する予定です。" },
+const placeholderCopy: Record<
+	Exclude<ScreenId, "search" | "dashboard">,
+	{ title: string; copy: string }
+> = {
 	deadlines: {
 		title: "締切ハブ",
 		copy: "課題一覧と提出状況を、この画面でまとめて確認できます。",
@@ -128,6 +132,18 @@ const dueAtFormatter = new Intl.DateTimeFormat("ja-JP", {
 	minute: "2-digit",
 });
 
+const cacheDateFormatter = new Intl.DateTimeFormat("ja-JP", {
+	month: "numeric",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+});
+
+function formatCacheDate(cachedAt: string): string {
+	const time = Date.parse(cachedAt);
+	return Number.isNaN(time) ? "日時不明" : cacheDateFormatter.format(new Date(time));
+}
+
 function formatDate(dueAt: string | null): string {
 	if (!dueAt) return "期限未設定";
 	const time = parseDueAt(dueAt);
@@ -193,7 +209,10 @@ export function mountFuzzyShell(): void {
 	navButton.setAttribute("aria-pressed", "false");
 	navButton.append(el("span", "fuzzy-nav-mark", "F"), el("span", "", "Fuzzy"));
 
-	const root = el(navHost.tagName === "UL" ? "li" : "div", navHost.tagName === "UL" ? "nav-item" : "");
+	const root = el(
+		navHost.tagName === "UL" ? "li" : "div",
+		navHost.tagName === "UL" ? "nav-item" : "",
+	);
 	root.id = ROOT_ID;
 	root.append(navButton);
 	insertNavRoot(navHost, root);
@@ -222,6 +241,12 @@ export function mountFuzzyShell(): void {
 	let loadingDeadlines = false;
 	let deadlineError: string | null = null;
 	let submissionError: string | null = null;
+	let dashboard: DashboardSummary | null = null;
+	let dashboardCachedAt: string | null = null;
+	let dashboardUsesCache = false;
+	let dashboardLoaded = false;
+	let loadingDashboard = false;
+	let dashboardError: string | null = null;
 	let searchRequestId = 0;
 	const searchState: SearchState = {
 		query: "",
@@ -537,6 +562,42 @@ export function mountFuzzyShell(): void {
 		}
 	};
 
+	const loadDashboard = async () => {
+		if (dashboardLoaded) return;
+		const cached = await readDashboardCache();
+		try {
+			const api = await apiPromise;
+			if (api.mode === "mock" && cached) {
+				dashboard = cached.dashboard;
+				dashboardCachedAt = cached.cachedAt;
+				dashboardUsesCache = true;
+				dashboardLoaded = true;
+				dashboardError = null;
+				setTopMode(api.mode);
+				return;
+			}
+
+			dashboard = await api.getDashboard();
+			dashboardCachedAt = new Date().toISOString();
+			dashboardUsesCache = false;
+			dashboardLoaded = true;
+			dashboardError = null;
+			setTopMode(api.mode);
+			await writeDashboardCache(dashboard);
+		} catch (error) {
+			if (cached) {
+				dashboard = cached.dashboard;
+				dashboardCachedAt = cached.cachedAt;
+				dashboardUsesCache = true;
+				dashboardLoaded = true;
+				dashboardError = null;
+				return;
+			}
+			dashboardError = error instanceof Error ? error.message : String(error);
+			dashboardLoaded = false;
+		}
+	};
+
 	const filterAssignments = (): Assignment[] => {
 		switch (deadlineFilter) {
 			case "upcoming":
@@ -726,7 +787,109 @@ export function mountFuzzyShell(): void {
 		return screen;
 	};
 
-	const buildPlaceholderScreen = (screenId: Exclude<ScreenId, "search">): HTMLElement => {
+	const buildDashboardScreen = (): HTMLElement => {
+		const screen = el("div", "fuzzy-screen");
+		screen.append(buildScreenHeader("ダッシュボード", "学習状況をひと目で確認"));
+
+		if (dashboardError) {
+			const errorPanel = el("section", "fuzzy-error-panel");
+			const retryButton = el("button", "fuzzy-primary-button", "再読み込み");
+			retryButton.type = "button";
+			retryButton.addEventListener("click", () => {
+				dashboardError = null;
+				renderScreen();
+			});
+			errorPanel.append(
+				el("p", "", `ダッシュボードの取得に失敗しました: ${dashboardError}`),
+				retryButton,
+			);
+			screen.append(errorPanel);
+			return screen;
+		}
+
+		if (loadingDashboard && !dashboardLoaded) {
+			screen.append(el("section", "fuzzy-placeholder", "ダッシュボードを読み込んでいます…"));
+			return screen;
+		}
+
+		if (!dashboard) return screen;
+
+		const actions = el("div", "fuzzy-dashboard-actions");
+		const reloadButton = el("button", "fuzzy-primary-button", "表示を更新");
+		reloadButton.type = "button";
+		reloadButton.disabled = loadingDashboard;
+		reloadButton.addEventListener("click", () => {
+			dashboardLoaded = false;
+			dashboardError = null;
+			renderScreen();
+		});
+		actions.append(reloadButton);
+		if (dashboardUsesCache) {
+			actions.append(
+				el(
+					"p",
+					"fuzzy-dashboard-cache-note",
+					`オフラインキャッシュを表示中（${formatCacheDate(dashboardCachedAt ?? "")}に保存）`,
+				),
+			);
+		} else {
+			actions.append(el("p", "fuzzy-dashboard-cache-note", "最新の集計結果を表示中"));
+		}
+
+		const metrics = el("section", "fuzzy-metric-grid");
+		for (const metric of [
+			{ label: "保存済み資料", value: dashboard.totalFiles },
+			{ label: "整理が必要", value: dashboard.totalViolations, className: "is-warn" },
+			{ label: "今後の締切", value: dashboard.upcomingDeadlineCount, className: "is-soft" },
+		]) {
+			const card = el(
+				"article",
+				metric.className ? `fuzzy-metric-card ${metric.className}` : "fuzzy-metric-card",
+			);
+			card.append(
+				el("p", "fuzzy-metric-label", metric.label),
+				el("p", "fuzzy-metric-value", String(metric.value)),
+			);
+			metrics.append(card);
+		}
+
+		const courseList = el("section", "fuzzy-dashboard-course-list");
+		if (dashboard.courses.length === 0) {
+			courseList.append(el("p", "fuzzy-toolbar-copy", "表示できるコースはありません。"));
+		} else {
+			for (const course of dashboard.courses) {
+				const card = el(
+					"article",
+					course.violationCount > 0 ? "fuzzy-dashboard-course is-warn" : "fuzzy-dashboard-course",
+				);
+				const head = el("div", "fuzzy-dashboard-course-head");
+				head.append(
+					el("h2", "", course.courseName),
+					el("span", "fuzzy-dashboard-file-count", `${course.fileCount}資料`),
+				);
+				const details = el("dl", "fuzzy-dashboard-course-details");
+				const addDetail = (label: string, value: string) => {
+					const row = el("div");
+					row.append(el("dt", "", label), el("dd", "", value));
+					details.append(row);
+				};
+				addDetail(
+					"整理状況",
+					course.violationCount > 0 ? `要整理 ${course.violationCount}件` : "整理済み",
+				);
+				addDetail("次の締切", formatDate(course.nextDueAt));
+				card.append(head, details);
+				courseList.append(card);
+			}
+		}
+
+		screen.append(actions, metrics, courseList);
+		return screen;
+	};
+
+	const buildPlaceholderScreen = (
+		screenId: Exclude<ScreenId, "search" | "dashboard">,
+	): HTMLElement => {
 		const { title, copy } = placeholderCopy[screenId];
 		const screen = el("div", "fuzzy-screen");
 		screen.append(buildScreenHeader("準備中", title));
@@ -748,6 +911,15 @@ export function mountFuzzyShell(): void {
 		if (activeScreen === "search") {
 			// 検索画面はキャッシュして使い回す（入力値・結果・選択状態を保持する）
 			mainEl.replaceChildren(getSearchScreen().root);
+		} else if (activeScreen === "dashboard") {
+			if (!dashboardLoaded && !loadingDashboard && !dashboardError) {
+				loadingDashboard = true;
+				void loadDashboard().finally(() => {
+					loadingDashboard = false;
+					if (activeScreen === "dashboard") renderScreen();
+				});
+			}
+			mainEl.replaceChildren(buildDashboardScreen());
 		} else if (activeScreen === "deadlines") {
 			// 先にロード状態を確定させてから描画する。順序を逆にすると初回描画時点では
 			// loadingDeadlines がまだ false のため、読み込み中に空状態がちらついてしまう。
@@ -802,7 +974,7 @@ export function mountFuzzyShell(): void {
 		}
 
 		const footer = el("div", "fuzzy-sidebar-footer");
-		footer.append(el("p", "", "開発中"), el("span", "", "issue54 + issue55"));
+		footer.append(el("p", "", "開発中"), el("span", "", "issue54 + issue55 + issue57"));
 		sidebar.append(brand, nav, footer);
 
 		const content = el("div", "fuzzy-content");
@@ -958,9 +1130,7 @@ function findDrawerMyCoursesLink(): HTMLAnchorElement | null {
 			const href = link.getAttribute("href") ?? "";
 			const text = link.textContent?.trim() ?? "";
 			return (
-				(href.includes("/my/courses.php") ||
-					text === "マイコース" ||
-					text === "My courses") &&
+				(href.includes("/my/courses.php") || text === "マイコース" || text === "My courses") &&
 				!link.classList.contains("sr-only") &&
 				!link.classList.contains("skip")
 			);
@@ -1549,6 +1719,94 @@ function ensureStyle(): void {
 			line-height: 1;
 		}
 
+		.fuzzy-dashboard-actions {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 14px;
+			padding: 14px;
+			border-radius: 14px;
+			background: #ffffff;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-dashboard-cache-note {
+			margin: 0;
+			color: #636b8b;
+			font-size: 0.8rem;
+			font-weight: 800;
+			line-height: 1.6;
+			text-align: right;
+		}
+
+		.fuzzy-dashboard-course-list {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 14px;
+		}
+
+		.fuzzy-dashboard-course {
+			display: grid;
+			gap: 16px;
+			padding: 16px;
+			border-radius: 14px;
+			background: #ffffff;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-dashboard-course.is-warn {
+			box-shadow:
+				inset 4px 0 0 #f2bd41,
+				0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-dashboard-course-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 12px;
+		}
+
+		.fuzzy-dashboard-course-head h2 {
+			margin: 0;
+			font-size: 1.05rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-dashboard-file-count {
+			flex: 0 0 auto;
+			border-radius: 999px;
+			padding: 6px 10px;
+			background: #eef0fb;
+			color: #5b61a0;
+			font-size: 0.74rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-dashboard-course-details {
+			display: grid;
+			gap: 10px;
+			margin: 0;
+		}
+
+		.fuzzy-dashboard-course-details div {
+			display: grid;
+			grid-template-columns: 74px 1fr;
+			gap: 10px;
+		}
+
+		.fuzzy-dashboard-course-details dt {
+			color: #7a81a1;
+			font-size: 0.76rem;
+			font-weight: 800;
+		}
+
+		.fuzzy-dashboard-course-details dd {
+			margin: 0;
+			font-size: 0.86rem;
+			font-weight: 800;
+		}
+
 		.fuzzy-deadline-toolbar {
 			padding: 14px;
 			border-radius: 14px;
@@ -1822,6 +2080,10 @@ function ensureStyle(): void {
 			.fuzzy-metric-grid {
 				grid-template-columns: 1fr;
 			}
+
+			.fuzzy-dashboard-course-list {
+				grid-template-columns: 1fr;
+			}
 		}
 
 		@media (max-width: 760px) {
@@ -1851,6 +2113,15 @@ function ensureStyle(): void {
 
 			.fuzzy-deadline-badges {
 				justify-content: flex-start;
+			}
+
+			.fuzzy-dashboard-actions {
+				align-items: flex-start;
+				flex-direction: column;
+			}
+
+			.fuzzy-dashboard-cache-note {
+				text-align: left;
 			}
 		}
 	`;
