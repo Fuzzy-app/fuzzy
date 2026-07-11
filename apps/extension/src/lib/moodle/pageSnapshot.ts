@@ -33,9 +33,11 @@ export interface MoodlePageSnapshot {
 export const MOODLE_PAGE_SNAPSHOT_MESSAGE = "fuzzy:getMoodlePageSnapshot";
 
 const FILE_EXTENSION_PATTERN =
-	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|png|jpe?g|gif)(?:$|[?#])/i;
-const MOODLE_FILE_PATTERN = /\/pluginfile\.php\/|\/mod\/resource\/view\.php/i;
+	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|png|jpe?g|gif|mp3|wav|m4a|ogg|mp4|webm|avi|mov|exe)(?:$|[?#])/i;
+const MOODLE_DIRECT_FILE_PATTERN = /\/pluginfile\.php\//i;
+const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
 const MOODLE_FOLDER_PATTERN = /\/mod\/folder\/view\.php/i;
+const WEB_PAGE_MIME_HINTS = new Set(["htm", "html"]);
 const ASSIGNMENT_KEYWORD_PATTERN =
 	/(課題|レポート|提出|締切|期限|小テスト|quiz|assignment|report|due)/i;
 const DUE_TEXT_PATTERN =
@@ -108,12 +110,13 @@ export function extractFileLinks(root: Document | Element = document): MoodleFil
 	const links = Array.from(contentRoot.querySelectorAll<HTMLAnchorElement>("a[href]"));
 	const files = links.filter(isFileLikeLink).map((link) => {
 		const url = normalizeUrl(link.href, root);
+		const mimeHint = extractMimeHint(link, url);
 		return {
-			title: extractLinkTitle(link),
+			title: extractFileTitle(link, url, mimeHint),
 			url,
 			moodleFileId: extractMoodleFileId(url),
 			sectionTitle: findSectionTitle(link),
-			mimeHint: extractMimeHint(link, url),
+			mimeHint,
 		};
 	});
 
@@ -188,10 +191,22 @@ function isFileLikeLink(link: HTMLAnchorElement): boolean {
 
 	const href = link.href;
 	const label = extractLinkTitle(link);
+	const mimeHint = extractMimeHint(link, href);
+
+	// Moodle resource URLs can point to a file or an HTML page. Only include them
+	// when the activity metadata identifies a non-page file type.
+	if (MOODLE_RESOURCE_PATTERN.test(href)) {
+		return (
+			!WEB_PAGE_MIME_HINTS.has(mimeHint ?? "") &&
+			(mimeHint !== null || FILE_EXTENSION_PATTERN.test(href) || FILE_EXTENSION_PATTERN.test(label))
+		);
+	}
+
 	return (
-		MOODLE_FILE_PATTERN.test(href) ||
-		FILE_EXTENSION_PATTERN.test(href) ||
-		FILE_EXTENSION_PATTERN.test(label)
+		!WEB_PAGE_MIME_HINTS.has(mimeHint ?? "") &&
+		(MOODLE_DIRECT_FILE_PATTERN.test(href) ||
+			FILE_EXTENSION_PATTERN.test(href) ||
+			FILE_EXTENSION_PATTERN.test(label))
 	);
 }
 
@@ -224,6 +239,26 @@ function extractLinkTitle(link: HTMLAnchorElement): string {
 	}
 
 	return normalizeText(clone.textContent) || normalizeText(link.getAttribute("title")) || link.href;
+}
+
+function extractFileTitle(link: HTMLAnchorElement, url: string, mimeHint: string | null): string {
+	const title = extractLinkTitle(link);
+	if (!mimeHint || hasFileExtension(title)) return title;
+
+	const fileName = extractFileNameFromUrl(url);
+	if (fileName && hasFileExtension(fileName)) return fileName;
+
+	return `${title}.${mimeHint}`;
+}
+
+function hasFileExtension(value: string): boolean {
+	return /\.[a-z0-9]{2,5}(?:$|[?#])/i.test(value);
+}
+
+function extractFileNameFromUrl(url: string): string | null {
+	const pathname = safeDecodeURIComponent(safeUrl(url)?.pathname ?? "");
+	const fileName = pathname.split("/").pop() ?? "";
+	return fileName && fileName !== "pluginfile.php" ? fileName : null;
 }
 
 function findSectionTitle(element: Element): string | null {
@@ -279,7 +314,7 @@ function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
 	const iconSrc = activity.querySelector<HTMLImageElement>(
 		"[data-region='activity-icon'], img.activityicon",
 	)?.src;
-	const iconMatch = iconSrc?.match(/\/f\/([a-z0-9]+)(?:[/?#]|$)/i);
+	const iconMatch = iconSrc?.match(/\/f\/([a-z0-9]+)(?:-\d+)?(?:\.[a-z]+)?(?:[/?#]|$)/i);
 	return normalizeMimeLabel(iconMatch?.[1] ?? null);
 }
 
@@ -299,6 +334,14 @@ function normalizeMimeLabel(value: string | null): string | null {
 		xls: "xls",
 		xlsx: "xlsx",
 		zip: "zip",
+		mp3: "mp3",
+		audio: "mp3",
+		mp4: "mp4",
+		video: "mp4",
+		exe: "exe",
+		executable: "exe",
+		htm: "htm",
+		html: "html",
 	};
 
 	return aliases[normalized] ?? null;
