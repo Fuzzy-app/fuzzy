@@ -9,8 +9,8 @@
 //! - [`index::IndexEngine`] — Tantivy を用いた全文索引の構築・検索
 //! - [`duplicate::DuplicateDetector`] — blake3 / simhash による重複・類似ファイル検出
 //!
-//! Phase0 ではトレイト定義と `todo!()` スタブのみ。実装は Phase1 の各issue
-//! （#38 ScanEngine / #39 RuleEngine / #40 DuplicateDetector / #41 IndexEngine）で行う。
+//! Phase1 の各issueで実装する（#38 ScanEngine / #39 RuleEngine /
+//! #40 DuplicateDetector / #41 IndexEngine）。
 //!
 //! 【重要な設計制約】このクレートはファイルの自動移動・自動削除を一切行わない。
 //! すべて推薦・提示・警告のためのデータを返すに留め、実行はユーザー操作のみとする。

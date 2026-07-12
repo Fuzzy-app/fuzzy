@@ -22,7 +22,7 @@ pub struct FileEntry {
 /// 既存フォルダ構成から推定した保存パターン。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavePatternGuess {
-	/// パターンテンプレート（例: `{course}/{week}/{filename}`）。
+	/// パターンテンプレート（例: `{course}/{section}/{filename}`）。
 	pub pattern_template: String,
 	/// 確からしさ（0.0〜1.0）。確からしさ順の提示に使う。
 	pub confidence: f64,
