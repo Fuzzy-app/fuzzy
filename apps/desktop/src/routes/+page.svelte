@@ -6,10 +6,9 @@
 		saveInitialSetupClient,
 		scanExistingStructureClient,
 	} from "$lib/setup/api";
+	import { createCourseOverrides } from "$lib/setup/course-overrides";
 	import type {
-		CourseOverride,
 		InitialRuleOption,
-		PatternCandidate,
 		SetupDraft,
 		SetupStatus,
 	} from "$lib/setup/types";
@@ -31,7 +30,7 @@
 			template: "{year}/{course}/{assignment}",
 			preview: [
 				"2026/情報アーキテクチャ/第03回レポート",
-				"2026/統計学/中間課題",
+				"2026/データベース/正規化レポート",
 			],
 			recommended: true,
 		},
@@ -41,14 +40,17 @@
 			description:
 				"前期・後期の区切りを優先して、履修中の科目を見渡しやすくします。",
 			template: "{term}/{course}/{assignment}",
-			preview: ["2026前期/統計学/中間課題", "2026後期/HCI/発表資料"],
+			preview: ["2026前期/離散数学/小テスト", "2026前期/英語IIB/単語テスト"],
 		},
 		{
 			id: "course-assignment",
 			name: "科目 / 課題",
 			description: "科目名を起点にした、短く扱いやすいルールです。",
 			template: "{course}/{assignment}",
-			preview: ["認知科学/提出物", "情報アーキテクチャ/第03回レポート"],
+			preview: [
+				"認知科学概論/期末レポート",
+				"情報アーキテクチャ/第03回レポート",
+			],
 		},
 	];
 
@@ -95,34 +97,14 @@
 		});
 	}
 
-	function createOverrides(candidates: PatternCandidate[]): CourseOverride[] {
-		const courseNames = Array.from(
-			new Set(
-				candidates
-					.flatMap((candidate) =>
-						candidate.folders
-							.map(
-								(folder) =>
-									folder.split("/").at(-2) ?? folder.split("/").at(0) ?? "",
-							)
-							.filter(Boolean),
-					)
-					.slice(0, 3),
-			),
-		);
-
-		return courseNames.map((courseName, index) => ({
-			id: `course-override-${index + 1}`,
-			courseName,
-			description: "この科目だけ初期ルールから外す候補として保持します。",
-			enabled: false,
-		}));
-	}
-
 	function selectCandidate(candidateId: string): void {
+		const candidate =
+			draft.candidates.find(({ id }) => id === candidateId) ?? null;
+
 		draft = {
 			...draft,
 			selectedCandidateId: candidateId,
+			courseOverrides: createCourseOverrides(candidate, draft.courseOverrides),
 		};
 	}
 
@@ -153,17 +135,17 @@
 
 		try {
 			const candidates = await scanExistingStructureClient(path);
-			const selectedCandidateId =
-				candidates.find((candidate) => candidate.recommended)?.id ??
-				candidates[0]?.id ??
+			const selectedCandidate =
+				candidates.find((candidate) => candidate.recommended) ??
+				candidates[0] ??
 				null;
 
 			draft = {
 				...draft,
 				baseFolderPath: path,
 				candidates,
-				courseOverrides: createOverrides(candidates),
-				selectedCandidateId,
+				courseOverrides: createCourseOverrides(selectedCandidate),
+				selectedCandidateId: selectedCandidate?.id ?? null,
 				lastScannedAt: new Date().toISOString(),
 			};
 		} catch {

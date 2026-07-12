@@ -3,6 +3,7 @@ export type PatternCandidate = {
 	name: string;
 	description: string;
 	folders: string[];
+	courseSegmentIndex: number | null;
 	matchScore: number;
 	reason: string;
 	recommended?: boolean;
