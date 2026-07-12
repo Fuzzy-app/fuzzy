@@ -11,6 +11,9 @@ export default defineConfig({
 			"nativeMessaging",
 			// 保存パネルの「前回と同じ場所」で直近の保存先を記憶するために使用。
 			"storage",
+			// 同期完了を定期確認し、取得結果をブラウザ通知で伝えるために使用。
+			"alarms",
+			"notifications",
 		],
 	},
 });

@@ -23,3 +23,11 @@ pub mod scan;
 pub mod types;
 
 pub use error::{EngineError, EngineResult};
+
+/// SQLiteスキーマ定義（DDL）の正本。native-host が初回起動時に適用する（issue #36）。
+/// 実体は [`crates/engine-core/fixtures/schema.sql`]。
+pub const SCHEMA_SQL: &str = include_str!("../fixtures/schema.sql");
+
+/// 開発・デモ・モックフォールバック用のサンプルデータ（seed）。
+/// 6科目の世界観（docs/データベース設計.md）。スキーマ適用後に投入する。
+pub const SEED_SQL: &str = include_str!("../fixtures/seed.sql");

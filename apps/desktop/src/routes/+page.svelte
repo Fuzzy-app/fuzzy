@@ -1,54 +1,238 @@
 <script lang="ts">
-	type FolderPattern = {
-		id: string;
-		title: string;
-		description: string;
-		exampleTitle: string;
-		exampleLines: string[];
-		recommended?: boolean;
-		selected?: boolean;
-	};
+	import { onMount } from "svelte";
+	import {
+		getSetupStatusClient,
+		pickBaseFolderClient,
+		saveInitialSetupClient,
+		scanExistingStructureClient,
+	} from "$lib/setup/api";
+	import { createCourseOverrides } from "$lib/setup/course-overrides";
+	import type {
+		InitialRuleOption,
+		SetupDraft,
+		SetupStatus,
+	} from "$lib/setup/types";
 
-	const sideItems = ["保存フォルダ", "フォルダの作り方", "データベース登録"];
+	const steps = [
+		{ label: "保存先", state: "done" },
+		{ label: "推定結果", state: "done" },
+		{ label: "初期ルール", state: "current" },
+	] as const;
 
-	const progressItems = [
-		{ label: "フォルダの保存", state: "done" },
-		{ label: "階層ルール", state: "current" },
-		{ label: "完了", state: "upcoming" },
-	];
+	const sidebarItems = ["保存先フォルダ", "保存パターン推定", "初期ルール選択"];
 
-	const patterns: FolderPattern[] = [
+	const ruleOptions: InitialRuleOption[] = [
 		{
-			id: "pattern-course-session",
-			title: "年 / 学期 / 科目",
+			id: "year-course-assignment",
+			name: "年度 / 科目 / 課題",
 			description:
-				"最も多い保存形式をもとに、回ごとの資料を科目単位で整理します",
-			exampleTitle: "2025",
-			exampleLines: ["春学期", "情報アーキテクチャ"],
-			selected: true,
-		},
-		{
-			id: "pattern-simple",
-			title: "科目だけ（シンプル）",
-			description: "科目別に統一し、授業フォルダの中へまとめる形です",
-			exampleTitle: "情報アーキテクチャ",
-			exampleLines: ["データベース", "離散数学"],
-		},
-		{
-			id: "pattern-grade-course",
-			title: "科目 / 回（おすすめ・標準）",
-			description: "回ごとに区切ってテンポよく資料を追える構成です",
-			exampleTitle: "情報アーキテクチャ",
-			exampleLines: ["第1回", "第2回", "第3回"],
+				"学年をまたいで資料が増えても、年度単位で見失いにくい標準ルールです。",
+			template: "{year}/{course}/{assignment}",
+			preview: [
+				"2026/情報アーキテクチャ/第03回レポート",
+				"2026/データベース/正規化レポート",
+			],
 			recommended: true,
 		},
+		{
+			id: "semester-course-assignment",
+			name: "学期 / 科目 / 課題",
+			description:
+				"前期・後期の区切りを優先して、履修中の科目を見渡しやすくします。",
+			template: "{term}/{course}/{assignment}",
+			preview: ["2026前期/離散数学/小テスト", "2026前期/英語IIB/単語テスト"],
+		},
+		{
+			id: "course-assignment",
+			name: "科目 / 課題",
+			description: "科目名を起点にした、短く扱いやすいルールです。",
+			template: "{course}/{assignment}",
+			preview: [
+				"認知科学概論/期末レポート",
+				"情報アーキテクチャ/第03回レポート",
+			],
+		},
 	];
+
+	let draft: SetupDraft = {
+		baseFolderPath: null,
+		selectedCandidateId: null,
+		selectedRuleId: "year-course-assignment",
+		candidates: [],
+		courseOverrides: [],
+		lastScannedAt: null,
+	};
+
+	let setupStatus: SetupStatus = { done: false };
+	let isPickingFolder = false;
+	let isScanning = false;
+	let isSaving = false;
+	let errorMessage: string | null = null;
+	let successMessage: string | null = null;
+	const minimumScanLoadingMs = 450;
+
+	onMount(async () => {
+		setupStatus = await getSetupStatusClient();
+	});
+
+	function formatScannedAt(value: string | null): string {
+		if (!value) {
+			return "未実行";
+		}
+
+		return new Intl.DateTimeFormat("ja-JP", {
+			month: "numeric",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit",
+		}).format(new Date(value));
+	}
+
+	function waitForMinimumLoadingTime(startedAt: number): Promise<void> {
+		const elapsedMs = Date.now() - startedAt;
+		const remainingMs = Math.max(0, minimumScanLoadingMs - elapsedMs);
+
+		return new Promise((resolve) => {
+			setTimeout(resolve, remainingMs);
+		});
+	}
+
+	function selectCandidate(candidateId: string): void {
+		const candidate =
+			draft.candidates.find(({ id }) => id === candidateId) ?? null;
+
+		draft = {
+			...draft,
+			selectedCandidateId: candidateId,
+			courseOverrides: createCourseOverrides(candidate, draft.courseOverrides),
+		};
+	}
+
+	function selectRule(ruleId: string): void {
+		draft = {
+			...draft,
+			selectedRuleId: ruleId,
+		};
+	}
+
+	function toggleOverride(overrideId: string): void {
+		draft = {
+			...draft,
+			courseOverrides: draft.courseOverrides.map((override) =>
+				override.id === overrideId
+					? { ...override, enabled: !override.enabled }
+					: override,
+			),
+		};
+	}
+
+	async function runScan(path: string): Promise<void> {
+		const startedAt = Date.now();
+
+		isScanning = true;
+		errorMessage = null;
+		successMessage = null;
+
+		try {
+			const candidates = await scanExistingStructureClient(path);
+			const selectedCandidate =
+				candidates.find((candidate) => candidate.recommended) ??
+				candidates[0] ??
+				null;
+
+			draft = {
+				...draft,
+				baseFolderPath: path,
+				candidates,
+				courseOverrides: createCourseOverrides(selectedCandidate),
+				selectedCandidateId: selectedCandidate?.id ?? null,
+				lastScannedAt: new Date().toISOString(),
+			};
+		} catch {
+			errorMessage = "スキャン結果の読み込みに失敗しました。";
+		} finally {
+			await waitForMinimumLoadingTime(startedAt);
+			isScanning = false;
+		}
+	}
+
+	async function handlePickFolder(): Promise<void> {
+		isPickingFolder = true;
+		errorMessage = null;
+		successMessage = null;
+
+		try {
+			const path = await pickBaseFolderClient();
+
+			if (!path) {
+				return;
+			}
+
+			await runScan(path);
+		} catch {
+			errorMessage = "フォルダ選択に失敗しました。";
+		} finally {
+			isPickingFolder = false;
+		}
+	}
+
+	async function handleRescan(): Promise<void> {
+		if (!draft.baseFolderPath) {
+			return;
+		}
+
+		await runScan(draft.baseFolderPath);
+	}
+
+	async function handleSaveInitialSetup(): Promise<void> {
+		if (!draft.baseFolderPath || !selectedCandidate || !selectedRule) {
+			return;
+		}
+
+		isSaving = true;
+		errorMessage = null;
+		successMessage = null;
+
+		try {
+			await saveInitialSetupClient({
+				path: draft.baseFolderPath,
+				pattern: selectedCandidate,
+				rule: selectedRule,
+				courseOverrides: draft.courseOverrides.filter(
+					(override) => override.enabled,
+				),
+			});
+
+			setupStatus = await getSetupStatusClient();
+			successMessage = "初期セットアップを保存しました。";
+		} catch {
+			errorMessage = "初期セットアップの保存に失敗しました。";
+		} finally {
+			isSaving = false;
+		}
+	}
+
+	$: selectedCandidate =
+		draft.candidates.find(
+			(candidate) => candidate.id === draft.selectedCandidateId,
+		) ?? null;
+	$: selectedRule =
+		ruleOptions.find((rule) => rule.id === draft.selectedRuleId) ?? null;
+	$: selectedCandidateRank =
+		selectedCandidate === null
+			? null
+			: draft.candidates.findIndex(
+					(candidate) => candidate.id === draft.selectedCandidateId,
+				) + 1;
+	$: canSaveSetup = Boolean(
+		draft.baseFolderPath && selectedCandidate && selectedRule,
+	);
 </script>
 
 <svelte:head>
 	<meta
 		name="description"
-		content="Fuzzy の初期セットアップ画面。保存パターンの候補を比較しながら、フォルダ構成を選べます。"
+		content="Fuzzy の初期セットアップ画面。保存パターン推定結果と初期ルールを選択できます。"
 	/>
 </svelte:head>
 
@@ -70,11 +254,13 @@
 
 	<section class="workspace">
 		<aside class="sidebar">
-			<p class="sidebar-label">セットアップ中: ドキュメントを整理します</p>
-			<nav aria-label="セットアップの項目">
+			<p class="sidebar-label">
+				Issue #47: 推定結果から初期ルールを選び、保存完了まで確認します。
+			</p>
+			<nav aria-label="セットアップの流れ">
 				<ul class="side-list">
-					{#each sideItems as item, index}
-						<li class:active={index === 1}>
+					{#each sidebarItems as item, index}
+						<li class:active={index <= 2}>
 							<span class="side-index">{index + 1}</span>
 							<span>{item}</span>
 						</li>
@@ -85,9 +271,13 @@
 
 		<section class="content">
 			<div class="progress" aria-label="進捗">
-				{#each progressItems as item, index}
+				{#each steps as item, index}
 					<div class="progress-item">
-						<div class="progress-dot {item.state}">
+						<div
+							class:current={item.state === "current"}
+							class:done={item.state === "done"}
+							class="progress-dot"
+						>
 							{#if item.state === "done"}
 								✓
 							{:else}
@@ -99,51 +289,247 @@
 				{/each}
 			</div>
 
-			<section class="chooser">
-				<p class="chip">STEP 2/3</p>
-				<h1>フォルダの作り方を選ぶ</h1>
-				<p class="intro">
-					検出された保存傾向をもとに Fuzzy
-					が候補を並べています。あとから変更できるので、
-					今の運用にもっとも近い形を選んでください。
-				</p>
+			<section class="panel">
+				<div class="panel-header">
+					<div>
+						<p class="chip">STEP 3 / 3</p>
+						<h1>保存パターンを確認して、初期ルールを選ぶ</h1>
+						<p class="intro">
+							スキャン結果に近い保存パターンを確認し、Fuzzy
+							が今後使うフォルダ作成ルールを選びます。
+						</p>
+					</div>
+					<button
+						class="primary-button"
+						type="button"
+						on:click={handlePickFolder}
+						disabled={isPickingFolder || isScanning || isSaving}
+					>
+						{#if isPickingFolder}
+							フォルダを選択中...
+						{:else}
+							保存先フォルダを選ぶ
+						{/if}
+					</button>
+				</div>
 
-				<div class="pattern-list">
-					{#each patterns as pattern}
-						<article class:selected={pattern.selected} class="pattern-card">
-							<div class="pattern-main">
+				<div class="folder-card">
+					<div>
+						<p class="section-label">選択中の保存先</p>
+						<strong>{draft.baseFolderPath ?? "まだ選択されていません"}</strong>
+					</div>
+					<div class="folder-meta">
+						<span>最終スキャン: {formatScannedAt(draft.lastScannedAt)}</span>
+						<button
+							class:loading={isScanning}
+							class="ghost-button"
+							type="button"
+							on:click={handleRescan}
+							disabled={!draft.baseFolderPath || isScanning || isSaving}
+							aria-busy={isScanning}
+						>
+							<span class="ghost-button-label">
+								{#if isScanning}
+									<span class="spinner" aria-hidden="true"></span>
+								{/if}
+								<span>
+									{#if isScanning}
+										再スキャン中...
+									{:else}
+										再スキャン
+									{/if}
+								</span>
+							</span>
+						</button>
+					</div>
+				</div>
+
+				{#if setupStatus.done}
+					<p class="success-banner" role="status">
+						初期セットアップは保存済みです。
+						{#if setupStatus.savedAt}
+							<span>保存日時: {formatScannedAt(setupStatus.savedAt)}</span>
+						{/if}
+					</p>
+				{/if}
+
+				{#if errorMessage}
+					<p class="error-banner" role="alert">{errorMessage}</p>
+				{/if}
+
+				{#if successMessage}
+					<p class="success-banner" role="status">{successMessage}</p>
+				{/if}
+
+				<section class="scan-section">
+					<div class="scan-heading">
+						<div>
+							<p class="section-label">保存パターン推定</p>
+							<h2>推定結果</h2>
+						</div>
+						<span class="scan-count">{draft.candidates.length} 件</span>
+					</div>
+
+					{#if draft.candidates.length === 0}
+						<div class="empty-state">
+							<p>フォルダを選ぶと、保存パターンの候補が表示されます。</p>
+						</div>
+					{:else}
+						<div class="pattern-list">
+							{#each draft.candidates as candidate}
+								<button
+									class:selected={candidate.id === draft.selectedCandidateId}
+									class="pattern-card"
+									type="button"
+									on:click={() => selectCandidate(candidate.id)}
+								>
+									<div class="pattern-main">
+										<div class="pattern-title-row">
+											<h3>{candidate.name}</h3>
+											{#if candidate.recommended}
+												<span class="badge">おすすめ</span>
+											{/if}
+										</div>
+										<p>{candidate.description}</p>
+										<p class="reason">{candidate.reason}</p>
+									</div>
+
+									<div class="pattern-side">
+										<div class="score-box">
+											<span>一致度</span>
+											<strong>{candidate.matchScore}%</strong>
+										</div>
+										<div
+											class="example-box"
+											aria-label={`${candidate.name} の例`}
+										>
+											<p>検出された並び</p>
+											<ul>
+												{#each candidate.folders as folder}
+													<li>{folder}</li>
+												{/each}
+											</ul>
+										</div>
+									</div>
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</section>
+
+				<section class="rule-section">
+					<div class="scan-heading">
+						<div>
+							<p class="section-label">初期ルール</p>
+							<h2>フォルダ作成ルール</h2>
+						</div>
+					</div>
+
+					<div class="rule-grid">
+						{#each ruleOptions as rule}
+							<button
+								class:selected={rule.id === draft.selectedRuleId}
+								class="rule-card"
+								type="button"
+								on:click={() => selectRule(rule.id)}
+							>
 								<div class="pattern-title-row">
-									<h2>{pattern.title}</h2>
-									{#if pattern.recommended}
-										<span class="badge">おすすめ</span>
+									<h3>{rule.name}</h3>
+									{#if rule.recommended}
+										<span class="badge">標準</span>
 									{/if}
 								</div>
-								<p>{pattern.description}</p>
-							</div>
-
-							<div class="example-box" aria-label={`${pattern.title} の例`}>
-								<p>{pattern.exampleTitle}</p>
+								<p>{rule.description}</p>
+								<code>{rule.template}</code>
 								<ul>
-									{#each pattern.exampleLines as line}
-										<li>{line}</li>
+									{#each rule.preview as preview}
+										<li>{preview}</li>
 									{/each}
 								</ul>
-							</div>
-						</article>
-					{/each}
-				</div>
-
-				<div class="helper-row">
-					<div class="helper-note">
-						<span class="helper-icon">i</span>
-						<span>もっとも近い候補を選ぶ</span>
+							</button>
+						{/each}
 					</div>
-					<button class="ghost-button" type="button"
-						>まだレビューを続ける</button
-					>
-				</div>
+				</section>
 
-				<button class="primary-button" type="button">この構成で進める</button>
+				{#if draft.courseOverrides.length > 0}
+					<section class="override-section">
+						<div class="override-explanation">
+							<p class="section-label">初期例外</p>
+							<h2>コース別に外す候補</h2>
+							<p class="override-help">
+								チェックしたコースは、選択中の初期ルールから外して保存します。たとえば
+								`年度 / 科目 / 課題` を選んでいても、そのコースだけは `科目 /
+								課題` のように短い並びで扱う想定です。
+							</p>
+						</div>
+						<div>
+							<p class="section-label">初期例外</p>
+							<h2>コース別に外す候補</h2>
+						</div>
+						<div class="override-list">
+							{#each draft.courseOverrides as override}
+								<label class="override-row">
+									<input
+										type="checkbox"
+										checked={override.enabled}
+										on:change={() => toggleOverride(override.id)}
+									/>
+									<span>
+										<strong>{override.courseName}</strong>
+										<small
+											>このコースだけ共通ルールから外し、科目フォルダ直下で保存します。</small
+										>
+									</span>
+								</label>
+							{/each}
+						</div>
+					</section>
+				{/if}
+
+				<section class="selection-summary">
+					<div>
+						<p class="section-label">保存内容</p>
+						<h2>現在の選択内容</h2>
+					</div>
+					<div class="summary-card">
+						<p><strong>保存先:</strong> {draft.baseFolderPath ?? "未選択"}</p>
+						<p>
+							<strong>推定候補:</strong>
+							{selectedCandidate?.name ?? "未選択"}
+						</p>
+						{#if selectedCandidate}
+							<p>
+								<strong>候補順位:</strong>
+								{selectedCandidateRank} / {draft.candidates.length}
+							</p>
+							<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
+						{/if}
+						<p><strong>初期ルール:</strong> {selectedRule?.name ?? "未選択"}</p>
+						{#if selectedRule}
+							<p><strong>テンプレート:</strong> {selectedRule.template}</p>
+						{/if}
+						<p>
+							<strong>初期例外:</strong>
+							{draft.courseOverrides.filter((override) => override.enabled)
+								.length}件
+						</p>
+					</div>
+				</section>
+
+				<div class="action-row">
+					<button
+						class="primary-button"
+						type="button"
+						on:click={handleSaveInitialSetup}
+						disabled={!canSaveSetup || isSaving || isScanning}
+					>
+						{#if isSaving}
+							保存中...
+						{:else}
+							この内容で初期設定を保存
+						{/if}
+					</button>
+				</div>
 			</section>
 		</section>
 	</section>
@@ -154,11 +540,11 @@
 		margin: 0;
 		font-family: "BIZ UDPGothic", "Yu Gothic UI", "Segoe UI", sans-serif;
 		background:
-			linear-gradient(180deg, #a783ff 0 4px, transparent 4px),
+			linear-gradient(180deg, #9d8bff 0 4px, transparent 4px),
 			radial-gradient(
 				circle at top,
-				rgba(143, 116, 245, 0.16),
-				transparent 24%
+				rgba(134, 118, 239, 0.22),
+				transparent 26%
 			),
 			linear-gradient(180deg, #f6f7fb 0%, #eceef7 100%);
 		color: #27283a;
@@ -182,8 +568,20 @@
 		border-bottom: none;
 	}
 
-	.brand {
+	.brand,
+	.brand-copy,
+	.window-actions,
+	.progress,
+	.progress-item,
+	.panel-header,
+	.folder-card,
+	.scan-heading,
+	.selection-summary,
+	.action-row {
 		display: flex;
+	}
+
+	.brand {
 		align-items: center;
 		gap: 10px;
 	}
@@ -202,7 +600,6 @@
 	}
 
 	.brand-copy {
-		display: flex;
 		align-items: baseline;
 		gap: 8px;
 		font-size: 0.76rem;
@@ -215,7 +612,6 @@
 	}
 
 	.window-actions {
-		display: flex;
 		gap: 8px;
 	}
 
@@ -229,7 +625,7 @@
 	.workspace {
 		min-height: calc(100vh - 56px);
 		display: grid;
-		grid-template-columns: 232px minmax(0, 1fr);
+		grid-template-columns: 248px minmax(0, 1fr);
 		border-radius: 0 0 20px 20px;
 		overflow: hidden;
 		background: rgba(255, 255, 255, 0.64);
@@ -250,6 +646,7 @@
 	.sidebar-label {
 		margin: 0 0 24px;
 		font-size: 0.74rem;
+		line-height: 1.6;
 		color: #8b8fa6;
 	}
 
@@ -266,7 +663,7 @@
 		align-items: center;
 		gap: 10px;
 		padding: 10px 12px;
-		border-radius: 12px;
+		border-radius: 8px;
 		color: #777d98;
 		font-size: 0.88rem;
 	}
@@ -303,7 +700,6 @@
 	}
 
 	.progress {
-		display: flex;
 		justify-content: flex-end;
 		gap: 18px;
 		font-size: 0.74rem;
@@ -311,7 +707,6 @@
 	}
 
 	.progress-item {
-		display: flex;
 		align-items: center;
 		gap: 8px;
 	}
@@ -328,24 +723,32 @@
 		color: #7f84a0;
 	}
 
-	.progress-dot.done {
-		background: #36b37e;
+	.progress-dot.done,
+	.progress-dot.current {
+		background: #6d5cf6;
 		color: #fff;
 	}
 
 	.progress-dot.current {
-		background: #6d5cf6;
-		color: #fff;
 		box-shadow: 0 0 0 4px rgba(109, 92, 246, 0.14);
 	}
 
-	.chooser {
-		width: min(100%, 520px);
+	.panel {
+		width: min(100%, 980px);
 		margin: 22px auto 0;
-		padding: 26px 28px 18px;
-		border-radius: 24px;
+		padding: 26px 28px 24px;
+		border-radius: 12px;
 		background: rgba(255, 255, 255, 0.94);
 		box-shadow: 0 28px 52px rgba(96, 105, 151, 0.16);
+	}
+
+	.panel-header,
+	.folder-card,
+	.scan-heading,
+	.selection-summary {
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 16px;
 	}
 
 	.chip {
@@ -357,11 +760,11 @@
 		color: #6d5cf6;
 		font-size: 0.7rem;
 		font-weight: 700;
-		letter-spacing: 0.04em;
 	}
 
 	h1,
 	h2,
+	h3,
 	p,
 	ul {
 		margin-top: 0;
@@ -369,38 +772,117 @@
 
 	h1 {
 		margin-bottom: 8px;
-		font-size: 1.7rem;
-		letter-spacing: -0.02em;
+		font-size: 1.8rem;
+		letter-spacing: 0;
+	}
+
+	h2 {
+		font-size: 1.05rem;
 	}
 
 	.intro {
-		margin-bottom: 18px;
-		font-size: 0.78rem;
-		line-height: 1.65;
+		max-width: 640px;
+		margin-bottom: 0;
+		font-size: 0.82rem;
+		line-height: 1.7;
 		color: #8085a0;
 	}
 
-	.pattern-list {
-		display: grid;
-		gap: 12px;
+	.section-label {
+		margin-bottom: 6px;
+		font-size: 0.72rem;
+		font-weight: 700;
+		color: #7d83a2;
+		text-transform: uppercase;
 	}
 
-	.pattern-card {
-		padding: 16px;
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) 128px;
-		gap: 14px;
+	.folder-card,
+	.summary-card,
+	.empty-state,
+	.error-banner,
+	.success-banner {
+		border-radius: 8px;
+	}
+
+	.folder-card {
+		margin-top: 20px;
+		padding: 18px 20px;
 		align-items: center;
-		border-radius: 16px;
+		background: linear-gradient(180deg, #f8f9ff 0%, #f1f3fc 100%);
+		border: 1px solid rgba(203, 207, 226, 0.76);
+	}
+
+	.folder-card strong {
+		font-size: 0.98rem;
+		color: #3f4566;
+		word-break: break-all;
+	}
+
+	.folder-meta {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 10px;
+		font-size: 0.76rem;
+		color: #7b809d;
+	}
+
+	.scan-section,
+	.rule-section,
+	.override-section {
+		margin-top: 24px;
+	}
+
+	.scan-heading h2,
+	.selection-summary h2,
+	.override-section h2 {
+		margin-bottom: 0;
+	}
+
+	.scan-count {
+		padding: 6px 10px;
+		border-radius: 999px;
+		background: rgba(124, 104, 246, 0.08);
+		color: #6c5cf2;
+		font-size: 0.74rem;
+		font-weight: 700;
+	}
+
+	.pattern-list,
+	.rule-grid,
+	.override-list {
+		margin-top: 14px;
+		display: grid;
+		gap: 14px;
+	}
+
+	.rule-grid {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.pattern-card,
+	.rule-card {
+		width: 100%;
+		padding: 18px;
+		text-align: left;
+		border-radius: 8px;
 		border: 1px solid rgba(203, 207, 226, 0.76);
 		background: #fff;
+		cursor: pointer;
 		transition:
 			border-color 0.18s ease,
 			box-shadow 0.18s ease,
 			transform 0.18s ease;
 	}
 
-	.pattern-card.selected {
+	.pattern-card {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 260px;
+		gap: 18px;
+	}
+
+	.pattern-card.selected,
+	.rule-card.selected {
 		border-color: #7c68f6;
 		box-shadow: 0 0 0 3px rgba(124, 104, 246, 0.12);
 		transform: translateY(-1px);
@@ -410,107 +892,244 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		margin-bottom: 6px;
+		margin-bottom: 8px;
 	}
 
-	.pattern-title-row h2 {
+	.pattern-title-row h3 {
 		margin-bottom: 0;
-		font-size: 0.96rem;
+		font-size: 1rem;
 	}
 
-	.pattern-main p {
+	.pattern-main p,
+	.rule-card p {
 		margin-bottom: 0;
+		font-size: 0.78rem;
+		line-height: 1.65;
+		color: #747b99;
+	}
+
+	.reason {
+		margin-top: 10px;
+		color: #575f84;
+		font-weight: 700;
+	}
+
+	.pattern-side {
+		display: grid;
+		gap: 12px;
+	}
+
+	.score-box,
+	.example-box {
+		padding: 12px 14px;
+		border-radius: 8px;
+	}
+
+	.score-box {
+		background: linear-gradient(180deg, #f6f0ff 0%, #ece8ff 100%);
+		color: #6457d6;
+	}
+
+	.score-box span {
+		display: block;
+		margin-bottom: 4px;
 		font-size: 0.72rem;
-		line-height: 1.6;
-		color: #7b809d;
+		font-weight: 700;
+	}
+
+	.score-box strong {
+		font-size: 1.3rem;
 	}
 
 	.badge {
 		padding: 3px 8px;
 		border-radius: 999px;
 		background: #fff4d9;
-		color: #bb7a00;
+		color: #9c6c00;
 		font-size: 0.67rem;
 		font-weight: 700;
 	}
 
 	.example-box {
-		padding: 10px 12px;
-		border-radius: 12px;
 		background: #f4f5fb;
 		color: #666d8f;
 		font-size: 0.72rem;
 	}
 
 	.example-box p {
-		margin-bottom: 6px;
+		margin-bottom: 8px;
 		font-weight: 700;
 		color: #555d82;
 	}
 
-	.example-box ul {
+	.example-box ul,
+	.rule-card ul {
 		margin: 0;
 		padding-left: 1rem;
+		line-height: 1.6;
+	}
+
+	.rule-card code {
+		display: block;
+		margin: 12px 0;
+		padding: 8px 10px;
+		border-radius: 6px;
+		background: #f4f5fb;
+		color: #3f4566;
+		font-size: 0.75rem;
+		white-space: normal;
+	}
+
+	.rule-card ul {
+		color: #666d8f;
+		font-size: 0.72rem;
+	}
+
+	.override-row {
+		padding: 12px 14px;
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		border-radius: 8px;
+		background: #f8f9ff;
+		border: 1px solid rgba(203, 207, 226, 0.76);
+		font-size: 0.8rem;
+		color: #43576a;
+	}
+
+	.override-section > div:not(.override-explanation):not(.override-list) {
+		display: none;
+	}
+
+	.override-row input {
+		margin-top: 2px;
+	}
+
+	.override-row small {
+		display: block;
+		margin-top: 3px;
+		color: #7b809d;
 		line-height: 1.5;
 	}
 
-	.helper-row {
+	.override-help {
+		max-width: 680px;
+		margin: 8px 0 0;
+		font-size: 0.78rem;
+		line-height: 1.7;
+		color: #7b809d;
+	}
+
+	.selection-summary {
+		margin-top: 26px;
+	}
+
+	.summary-card {
 		margin-top: 14px;
-		padding: 12px 14px;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		border-radius: 14px;
-		background: linear-gradient(180deg, #fff7d7 0%, #ffedaa 100%);
+		padding: 16px 18px;
+		background: linear-gradient(180deg, #fff8dd 0%, #ffefb5 100%);
+		color: #6f5600;
+		font-size: 0.8rem;
+		line-height: 1.7;
 	}
 
-	.helper-note {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 0.74rem;
-		font-weight: 700;
-		color: #8f6a00;
+	.summary-card strong {
+		color: #5b4600;
 	}
 
-	.helper-icon {
-		width: 18px;
-		height: 18px;
-		display: grid;
-		place-items: center;
-		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.72);
+	.empty-state,
+	.error-banner,
+	.success-banner {
+		margin-top: 14px;
+		padding: 14px 16px;
+		font-size: 0.8rem;
+	}
+
+	.empty-state {
+		background: rgba(244, 245, 251, 0.82);
+		border: 1px dashed rgba(179, 184, 210, 0.8);
+		color: #7d83a2;
+		text-align: center;
+	}
+
+	.error-banner {
+		background: #fff2f0;
+		border: 1px solid #f2c5bd;
+		color: #ab3e2d;
+	}
+
+	.success-banner {
+		background: #edf8f1;
+		border: 1px solid #b9e2c7;
+		color: #2e6b43;
+	}
+
+	.success-banner span {
+		display: block;
+		margin-top: 4px;
+	}
+
+	.action-row {
+		margin-top: 18px;
+		justify-content: flex-end;
 	}
 
 	.ghost-button,
 	.primary-button {
 		border: none;
+		border-radius: 8px;
 		font: inherit;
 		cursor: pointer;
 	}
 
+	.ghost-button:disabled,
+	.primary-button:disabled {
+		cursor: default;
+		opacity: 0.7;
+	}
+
 	.ghost-button {
 		padding: 8px 10px;
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.65);
-		color: #d08400;
-		font-size: 0.72rem;
+		background: rgba(255, 255, 255, 0.78);
+		color: #6256ca;
+		font-size: 0.74rem;
 		font-weight: 700;
 	}
 
+	.ghost-button.loading {
+		background: rgba(109, 92, 246, 0.1);
+	}
+
+	.ghost-button-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.spinner {
+		width: 12px;
+		height: 12px;
+		border: 2px solid rgba(98, 86, 202, 0.22);
+		border-top-color: #6256ca;
+		border-radius: 999px;
+		animation: spin 0.8s linear infinite;
+	}
+
 	.primary-button {
-		width: 100%;
-		margin-top: 12px;
 		padding: 13px 16px;
-		border-radius: 12px;
 		background: linear-gradient(180deg, #7f6cff 0%, #6958f5 100%);
 		color: #fff;
 		font-weight: 700;
 		box-shadow: 0 14px 28px rgba(109, 92, 246, 0.28);
 	}
 
-	@media (max-width: 920px) {
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	@media (max-width: 980px) {
 		.workspace {
 			grid-template-columns: 1fr;
 		}
@@ -525,12 +1144,20 @@
 			flex-wrap: wrap;
 		}
 
-		.chooser {
-			width: 100%;
+		.panel-header,
+		.folder-card,
+		.scan-heading,
+		.selection-summary {
+			flex-direction: column;
+			align-items: stretch;
+		}
+
+		.rule-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 
-	@media (max-width: 640px) {
+	@media (max-width: 720px) {
 		.window {
 			padding: 8px;
 		}
@@ -539,21 +1166,20 @@
 			padding: 16px;
 		}
 
-		.chooser {
-			padding: 20px 16px 16px;
+		.panel {
+			padding: 20px 16px 18px;
 		}
 
 		.pattern-card {
 			grid-template-columns: 1fr;
 		}
 
-		.helper-row {
-			flex-direction: column;
-			align-items: stretch;
+		.folder-meta {
+			align-items: flex-start;
 		}
 
-		.ghost-button,
-		.primary-button {
+		.primary-button,
+		.action-row {
 			width: 100%;
 		}
 
@@ -561,10 +1187,6 @@
 			flex-direction: column;
 			align-items: flex-start;
 			gap: 0;
-		}
-
-		.side-list {
-			grid-template-columns: 1fr;
 		}
 	}
 </style>
