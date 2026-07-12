@@ -306,14 +306,26 @@ function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
 	);
 	if (!activity) return null;
 
-	const badge = normalizeText(
-		activity.querySelector(".activitybadge, .badge")?.textContent,
-	).toLowerCase();
-	if (badge) return normalizeMimeLabel(badge);
-
+	const badge = activity.querySelector(".activitybadge, .badge")?.textContent;
 	const iconSrc = activity.querySelector<HTMLImageElement>(
 		"[data-region='activity-icon'], img.activityicon",
 	)?.src;
+	return resolveMoodleActivityMimeHint(badge, iconSrc);
+}
+
+/**
+ * MoodleアクティビティのバッジとアイコンURLからファイル種別を推定する。
+ *
+ * バッジが「ファイル」のように種別を表さない場合もあるため、認識できない値では
+ * アイコンURL（`/f/mp3-24.png` 等）を続けて確認する。
+ */
+export function resolveMoodleActivityMimeHint(
+	badgeText: string | null | undefined,
+	iconSrc: string | null | undefined,
+): string | null {
+	const badgeHint = normalizeMimeLabel(badgeText ?? null);
+	if (badgeHint) return badgeHint;
+
 	const iconMatch = iconSrc?.match(/\/f\/([a-z0-9]+)(?:-\d+)?(?:\.[a-z]+)?(?:[/?#]|$)/i);
 	return normalizeMimeLabel(iconMatch?.[1] ?? null);
 }
