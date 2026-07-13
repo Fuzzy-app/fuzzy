@@ -4,10 +4,11 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use crate::error::{EngineError, EngineResult};
+use crate::section::{parse_section_file_prefix, parse_section_name};
 use crate::types::{FileEntry, SavePatternGuess};
 
 const COURSE_SECTION_PATTERN: &str = "{course}/{section}/{filename}";
@@ -61,11 +62,14 @@ impl ScanEngine for DefaultScanEngine {
 		let mut counts = BTreeMap::new();
 		for entry in entries {
 			let parent_name = entry.path.parent().and_then(Path::file_name);
-			if parent_name.is_some_and(|name| is_section_name(&name.to_string_lossy())) {
+			if parent_name
+				.and_then(|name| parse_section_name(&name.to_string_lossy()))
+				.is_some()
+			{
 				increment(&mut counts, COURSE_SECTION_PATTERN);
 			} else {
 				increment(&mut counts, COURSE_PATTERN);
-				if has_section_marker(&entry.file_name) {
+				if parse_section_file_prefix(&entry.file_name).is_some() {
 					increment(&mut counts, SECTION_IN_FILE_NAME_PATTERN);
 				}
 			}
@@ -133,47 +137,6 @@ fn modified_at(metadata: &fs::Metadata) -> Option<i64> {
 
 fn increment<'a>(counts: &mut BTreeMap<&'a str, usize>, pattern: &'a str) {
 	*counts.entry(pattern).or_default() += 1;
-}
-
-fn is_section_name(name: &str) -> bool {
-	let normalized = name.trim().to_ascii_lowercase();
-	let japanese = normalized
-		.strip_prefix('第')
-		.and_then(|rest| rest.strip_suffix(['回', '週']))
-		.is_some_and(is_ascii_or_full_width_number);
-	let english = ["week", "unit", "lesson"].iter().any(|prefix| {
-		normalized
-			.strip_prefix(prefix)
-			.is_some_and(is_number_with_separator)
-	});
-	let numbered = normalized
-		.strip_suffix(['回', '週'])
-		.is_some_and(is_ascii_or_full_width_number);
-	japanese || english || numbered
-}
-
-fn has_section_marker(file_name: &str) -> bool {
-	let stem = PathBuf::from(file_name)
-		.file_stem()
-		.map(|value| value.to_string_lossy().into_owned())
-		.unwrap_or_default();
-	let first_part = stem.split(['_', '-', ' ']).next().unwrap_or_default();
-	is_section_name(first_part)
-		|| (!first_part.is_empty()
-			&& first_part
-				.chars()
-				.all(|character| character.is_ascii_digit() || ('０'..='９').contains(&character)))
-}
-
-fn is_number_with_separator(value: &str) -> bool {
-	is_ascii_or_full_width_number(value.trim_start_matches([' ', '_', '-']))
-}
-
-fn is_ascii_or_full_width_number(value: &str) -> bool {
-	!value.is_empty()
-		&& value
-			.chars()
-			.all(|character| character.is_ascii_digit() || ('０'..='９').contains(&character))
 }
 
 #[cfg(test)]
@@ -271,6 +234,25 @@ mod tests {
 		assert_eq!(guesses[0].pattern_template, "{course}/{section}/{filename}");
 		assert_eq!(guesses[0].matched_count, 5);
 		assert!((guesses[0].confidence - 5.0 / 6.0).abs() < f64::EPSILON);
+	}
+
+	#[test]
+	fn estimates_layouts_with_kanji_section_numbers() {
+		let directory = TestDirectory::new("kanji-sections");
+		directory.create_file("データベース/第十二回/正規化.pdf", b"sample");
+		directory.create_file("離散数学/第二十週/グラフ理論.pdf", b"sample");
+		let entries = DefaultScanEngine
+			.scan(&directory.path)
+			.expect("漢数字のセクションを走査できる");
+
+		let guesses = DefaultScanEngine
+			.estimate_patterns(&entries)
+			.expect("漢数字のセクションから保存パターンを推定できる");
+
+		assert_eq!(guesses.len(), 1);
+		assert_eq!(guesses[0].pattern_template, "{course}/{section}/{filename}");
+		assert_eq!(guesses[0].matched_count, 2);
+		assert_eq!(guesses[0].confidence, 1.0);
 	}
 
 	#[test]

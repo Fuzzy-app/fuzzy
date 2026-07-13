@@ -20,6 +20,7 @@ pub mod error;
 pub mod index;
 pub mod rule;
 pub mod scan;
+pub mod section;
 pub mod types;
 
 pub use error::{EngineError, EngineResult};
