@@ -14,10 +14,17 @@ import {
 	type DashboardSummary,
 	type DataSyncEvent,
 	type FuzzyApiClient,
+	type NotificationRule,
 	type SearchResult,
 	createApiClient,
 } from "@fuzzy/shared";
+import { BackgroundApiClient } from "../../lib/api/backgroundApi";
 import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
+import {
+	buildDeadlineIcs,
+	deadlineIcsFileName,
+	exportableAssignments,
+} from "../../lib/calendar/ics";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -286,6 +293,7 @@ export function mountFuzzyShell(): void {
 
 	// --- 状態 ---
 	const apiPromise = createApiClient();
+	const notificationApi = new BackgroundApiClient();
 	let page: HTMLElement | null = null;
 	let mainEl: HTMLElement | null = null;
 	let statusBadge: HTMLElement | null = null;
@@ -302,6 +310,13 @@ export function mountFuzzyShell(): void {
 	let loadingDeadlines = false;
 	let deadlineError: string | null = null;
 	let submissionError: string | null = null;
+	let notificationRules: NotificationRule[] = [];
+	let notificationRulesLoaded = false;
+	let loadingNotificationRules = false;
+	let savingNotificationRules = false;
+	let notificationRulesError: string | null = null;
+	let notificationRulesErrorKind: "load" | "save" | null = null;
+	let calendarExportMessage: string | null = null;
 	let dashboard: DashboardSummary | null = null;
 	let dashboardCachedAt: string | null = null;
 	let dashboardUsesCache = false;
@@ -628,6 +643,20 @@ export function mountFuzzyShell(): void {
 		}
 	};
 
+	const loadNotificationRules = async () => {
+		if (notificationRulesLoaded) return;
+		try {
+			notificationRules = await notificationApi.getNotificationRules();
+			notificationRulesLoaded = true;
+			notificationRulesError = null;
+			notificationRulesErrorKind = null;
+		} catch (error) {
+			notificationRulesError = error instanceof Error ? error.message : String(error);
+			notificationRulesErrorKind = "load";
+			notificationRulesLoaded = false;
+		}
+	};
+
 	const loadDashboard = async () => {
 		if (dashboardLoaded) return;
 		const cached = await readDashboardCache();
@@ -875,6 +904,132 @@ export function mountFuzzyShell(): void {
 		return panel;
 	};
 
+	const updateNotificationRule = async (ruleId: number, enabled: boolean) => {
+		if (savingNotificationRules) return;
+		const previousRules = notificationRules;
+		notificationRules = notificationRules.map((rule) =>
+			rule.id === ruleId ? { ...rule, enabled } : rule,
+		);
+		savingNotificationRules = true;
+		notificationRulesError = null;
+		notificationRulesErrorKind = null;
+		renderScreen();
+
+		try {
+			const result = await notificationApi.updateNotificationRules(notificationRules);
+			if (!result.ok) throw new Error("通知設定を保存できませんでした");
+		} catch (error) {
+			notificationRules = previousRules;
+			notificationRulesError =
+				error instanceof Error ? error.message : "通知設定を保存できませんでした";
+			notificationRulesErrorKind = "save";
+		} finally {
+			savingNotificationRules = false;
+			if (activeScreen === "deadlines") renderScreen();
+		}
+	};
+
+	const downloadDeadlineIcs = () => {
+		const exportable = exportableAssignments(assignments);
+		if (exportable.length === 0) return;
+
+		const blob = new Blob([buildDeadlineIcs(exportable)], { type: "text/calendar;charset=utf-8" });
+		const url = URL.createObjectURL(blob);
+		const link = el("a") as HTMLAnchorElement;
+		link.href = url;
+		link.download = deadlineIcsFileName();
+		link.hidden = true;
+		document.body.append(link);
+		link.click();
+		link.remove();
+		// ダウンロード開始前にURLを破棄しないよう、クリック処理の次のタイミングで解放する。
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
+
+		calendarExportMessage = `${exportable.length}件の締切をICSファイルに書き出しました。`;
+		renderScreen();
+	};
+
+	const buildCalendarPanel = (): HTMLElement => {
+		const panel = el("section", "fuzzy-calendar-panel");
+		const exportableCount = exportableAssignments(assignments).length;
+		const exportArea = el("div", "fuzzy-calendar-export");
+		const exportCopy = el("div");
+		exportCopy.append(
+			el("h2", "", "カレンダーへ追加"),
+			el(
+				"p",
+				"fuzzy-toolbar-copy",
+				"期限が確認できる課題をICSファイルにまとめます。Googleカレンダーにも読み込めます。",
+			),
+		);
+		const exportButton = el("button", "fuzzy-primary-button", "ICSを書き出す");
+		exportButton.type = "button";
+		exportButton.disabled = exportableCount === 0;
+		exportButton.addEventListener("click", downloadDeadlineIcs);
+		exportArea.append(exportCopy, exportButton);
+
+		const exportStatus = el("p", "fuzzy-calendar-status");
+		exportStatus.setAttribute("aria-live", "polite");
+		exportStatus.textContent = calendarExportMessage ?? `書き出し対象: ${exportableCount}件`;
+		exportArea.append(exportStatus);
+		panel.append(exportArea);
+
+		const notificationArea = el("div", "fuzzy-notification-settings");
+		notificationArea.append(
+			el("h2", "", "締切通知"),
+			el(
+				"p",
+				"fuzzy-toolbar-copy",
+				"通知したいタイミングを個別に選べます。未提出の課題だけをブラウザ通知します。",
+			),
+		);
+
+		if (loadingNotificationRules && !notificationRulesLoaded) {
+			notificationArea.append(el("p", "fuzzy-calendar-status", "通知設定を読み込んでいます…"));
+		} else if (notificationRulesError) {
+			const error = el("div", "fuzzy-inline-error");
+			const retry = el("button", "fuzzy-secondary-button", "再読み込み");
+			retry.type = "button";
+			retry.addEventListener("click", () => {
+				notificationRulesError = null;
+				notificationRulesErrorKind = null;
+				notificationRulesLoaded = false;
+				renderScreen();
+			});
+			const errorAction = notificationRulesErrorKind === "save" ? "保存" : "取得";
+			error.append(
+				el("p", "", `通知設定を${errorAction}できませんでした: ${notificationRulesError}`),
+				retry,
+			);
+			notificationArea.append(error);
+		} else {
+			const ruleList = el("div", "fuzzy-notification-rule-list");
+			for (const rule of notificationRules) {
+				const label = el("label", "fuzzy-notification-rule");
+				const copy = el("span");
+				copy.append(el("strong", "", rule.label), el("small", "", "通知する"));
+				const checkbox = el("input") as HTMLInputElement;
+				checkbox.type = "checkbox";
+				checkbox.checked = rule.enabled;
+				checkbox.disabled = savingNotificationRules;
+				checkbox.setAttribute("role", "switch");
+				checkbox.setAttribute("aria-label", `${rule.label}の通知`);
+				checkbox.addEventListener("change", () => {
+					void updateNotificationRule(rule.id, checkbox.checked);
+				});
+				label.append(copy, checkbox);
+				ruleList.append(label);
+			}
+			notificationArea.append(ruleList);
+			if (savingNotificationRules) {
+				notificationArea.append(el("p", "fuzzy-calendar-status", "通知設定を保存しています…"));
+			}
+		}
+
+		panel.append(notificationArea);
+		return panel;
+	};
+
 	const buildDeadlineScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
 		screen.append(buildScreenHeader("締切ハブ", "課題と提出状況をまとめて確認"));
@@ -972,7 +1127,7 @@ export function mountFuzzyShell(): void {
 			listHost.append(...visible.map(buildDeadlineCard));
 		}
 
-		screen.append(metricGrid, syncPanel, toolbar, listHost);
+		screen.append(metricGrid, syncPanel, buildCalendarPanel(), toolbar, listHost);
 		return screen;
 	};
 
@@ -1123,6 +1278,13 @@ export function mountFuzzyShell(): void {
 				loadingSyncSummary = true;
 				void loadSyncSummary().finally(() => {
 					loadingSyncSummary = false;
+					if (activeScreen === "deadlines") renderScreen();
+				});
+			}
+			if (!notificationRulesLoaded && !loadingNotificationRules && !notificationRulesError) {
+				loadingNotificationRules = true;
+				void loadNotificationRules().finally(() => {
+					loadingNotificationRules = false;
 					if (activeScreen === "deadlines") renderScreen();
 				});
 			}
@@ -1712,6 +1874,23 @@ function ensureStyle(): void {
 			cursor: pointer;
 		}
 
+		.fuzzy-primary-button:disabled {
+			cursor: not-allowed;
+			opacity: 0.55;
+		}
+
+		.fuzzy-secondary-button {
+			border: 1px solid #d9dcf0;
+			border-radius: 10px;
+			padding: 8px 12px;
+			background: #ffffff;
+			color: #59607d;
+			font: inherit;
+			font-size: 0.8rem;
+			font-weight: 800;
+			cursor: pointer;
+		}
+
 		.fuzzy-search-meta {
 			display: flex;
 			align-items: center;
@@ -2167,6 +2346,100 @@ function ensureStyle(): void {
 			line-height: 1.7;
 		}
 
+		.fuzzy-calendar-panel {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+			gap: 18px;
+			padding: 18px;
+			border-radius: 14px;
+			background: #ffffff;
+			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+		}
+
+		.fuzzy-calendar-export,
+		.fuzzy-notification-settings {
+			display: grid;
+			align-content: start;
+			gap: 12px;
+		}
+
+		.fuzzy-calendar-export {
+			grid-template-columns: minmax(0, 1fr) auto;
+			align-items: start;
+			padding-right: 18px;
+			border-right: 1px solid #e5e7f2;
+		}
+
+		.fuzzy-calendar-panel h2 {
+			margin: 0 0 6px;
+			font-size: 1.04rem;
+			font-weight: 900;
+		}
+
+		.fuzzy-calendar-status {
+			grid-column: 1 / -1;
+			margin: -6px 0 0;
+			color: #737a99;
+			font-size: 0.78rem;
+			font-weight: 700;
+		}
+
+		.fuzzy-notification-rule-list {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 8px;
+		}
+
+		.fuzzy-notification-rule {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 10px;
+			border: 1px solid #e2e4f2;
+			border-radius: 12px;
+			padding: 10px 12px;
+			background: #f8f8fd;
+			cursor: pointer;
+		}
+
+		.fuzzy-notification-rule span {
+			display: grid;
+			gap: 2px;
+		}
+
+		.fuzzy-notification-rule strong {
+			font-size: 0.84rem;
+		}
+
+		.fuzzy-notification-rule small {
+			color: #7a81a1;
+			font-size: 0.7rem;
+			font-weight: 700;
+		}
+
+		.fuzzy-notification-rule input {
+			width: 18px;
+			height: 18px;
+			accent-color: #6c63ff;
+		}
+
+		.fuzzy-inline-error {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			border-radius: 10px;
+			padding: 10px;
+			background: #fff0ec;
+			color: #b43d24;
+		}
+
+		.fuzzy-inline-error p {
+			margin: 0;
+			font-size: 0.8rem;
+			font-weight: 800;
+		}
+
 		.fuzzy-deadline-toolbar {
 			padding: 14px;
 			border-radius: 14px;
@@ -2376,6 +2649,7 @@ function ensureStyle(): void {
 		.fuzzy-side-link:focus,
 		.fuzzy-close-button:focus,
 		.fuzzy-primary-button:focus,
+		.fuzzy-secondary-button:focus,
 		.fuzzy-sync-action:focus,
 		.fuzzy-error-close:focus,
 		.fuzzy-result-row:focus,
@@ -2442,6 +2716,17 @@ function ensureStyle(): void {
 				grid-template-columns: 1fr;
 			}
 
+			.fuzzy-calendar-panel {
+				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-calendar-export {
+				padding-right: 0;
+				padding-bottom: 18px;
+				border-right: 0;
+				border-bottom: 1px solid #e5e7f2;
+			}
+
 			.fuzzy-dashboard-course-list,
 			.fuzzy-sync-counts,
 			.fuzzy-change-row {
@@ -2476,6 +2761,14 @@ function ensureStyle(): void {
 
 			.fuzzy-deadline-badges {
 				justify-content: flex-start;
+			}
+
+			.fuzzy-calendar-export {
+				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-notification-rule-list {
+				grid-template-columns: 1fr;
 			}
 
 			.fuzzy-dashboard-actions {
