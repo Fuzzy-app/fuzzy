@@ -18,6 +18,8 @@ import {
 	createApiClient,
 } from "@fuzzy/shared";
 import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
+import { createRuleManagementStore } from "../../lib/rules/state";
+import { type RuleManagementScreen, createRuleManagementScreen } from "./rulesScreen";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -27,7 +29,7 @@ const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "organize";
+type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "rules" | "organize";
 // 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
 // import 時の衝突・混同を避けるため View 用として別名にしている。
 type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -44,11 +46,12 @@ const menuItems: readonly MenuItem[] = [
 	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
 	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
 	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
+	{ id: "rules", label: "整理ルール", enabled: true, description: "issue52" },
 	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
 ];
 
 const placeholderCopy: Record<
-	Exclude<ScreenId, "search" | "dashboard">,
+	Exclude<ScreenId, "search" | "dashboard" | "rules">,
 	{ title: string; copy: string }
 > = {
 	deadlines: {
@@ -286,10 +289,12 @@ export function mountFuzzyShell(): void {
 
 	// --- 状態 ---
 	const apiPromise = createApiClient();
+	const ruleStore = createRuleManagementStore();
 	let page: HTMLElement | null = null;
 	let mainEl: HTMLElement | null = null;
 	let statusBadge: HTMLElement | null = null;
 	let searchScreen: SearchScreen | null = null;
+	let ruleScreen: RuleManagementScreen | null = null;
 	let drawerButton: HTMLAnchorElement | null = null;
 	const sideLinks: HTMLButtonElement[] = [];
 	let isOpen = false;
@@ -612,6 +617,22 @@ export function mountFuzzyShell(): void {
 			renderSearchResults();
 		}
 		return searchScreen;
+	};
+
+	const getRuleScreen = (): RuleManagementScreen => {
+		if (!ruleScreen) {
+			ruleScreen = createRuleManagementScreen({
+				store: ruleStore,
+				loadCourses: async () => {
+					const api = await apiPromise;
+					const summary = await api.getDashboard();
+					setTopMode(api.mode);
+					return summary.courses;
+				},
+			});
+		}
+		ruleScreen.activate();
+		return ruleScreen;
 	};
 
 	const loadAssignments = async () => {
@@ -1077,7 +1098,7 @@ export function mountFuzzyShell(): void {
 	};
 
 	const buildPlaceholderScreen = (
-		screenId: Exclude<ScreenId, "search" | "dashboard">,
+		screenId: Exclude<ScreenId, "search" | "dashboard" | "rules">,
 	): HTMLElement => {
 		const { title, copy } = placeholderCopy[screenId];
 		const screen = el("div", "fuzzy-screen");
@@ -1127,6 +1148,8 @@ export function mountFuzzyShell(): void {
 				});
 			}
 			mainEl.replaceChildren(buildDeadlineScreen());
+		} else if (activeScreen === "rules") {
+			mainEl.replaceChildren(getRuleScreen().root);
 		} else {
 			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
