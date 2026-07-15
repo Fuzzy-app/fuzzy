@@ -49,13 +49,29 @@ function validDueDate(assignment: Assignment): Date | null {
 	return Number.isNaN(time) ? null : new Date(time);
 }
 
+function submissionModeLabel(assignment: Assignment): string {
+	switch (assignment.submissionMode) {
+		case "moodle_auto":
+			return "Moodleから自動反映";
+		case "manual":
+			return "手動で提出状態を管理";
+		case "notify_only":
+			return "締切通知のみ";
+		default:
+			return "提出方法は未確認";
+	}
+}
+
+/** 確定済みの期限を履歴も含めて出力し、要確認の期限だけは誤登録を避けて除外する。 */
 export function exportableAssignments(assignments: Assignment[]): Assignment[] {
-	return assignments.filter((assignment) => validDueDate(assignment) !== null);
+	return assignments.filter(
+		(assignment) => assignment.dueAtStatus === "normal" && validDueDate(assignment) !== null,
+	);
 }
 
 /**
  * Moodleから取得した締切を、Googleカレンダー等へ読み込めるICS形式へ変換する。
- * 日付未設定・不正な日付は誤った予定を作らないよう書き出し対象から除外する。
+ * 日付未設定・不正な日付・要確認の期限は、誤った予定を作らないよう書き出し対象から除外する。
  */
 export function buildDeadlineIcs(assignments: Assignment[], generatedAt = new Date()): string {
 	const lines = [
@@ -76,7 +92,7 @@ export function buildDeadlineIcs(assignments: Assignment[], generatedAt = new Da
 			`DTSTAMP:${formatUtcDate(generatedAt)}`,
 			`DTSTART:${formatUtcDate(dueDate)}`,
 			`SUMMARY:${escapeIcsText(`${assignment.courseName}: ${assignment.title}`)}`,
-			`DESCRIPTION:${escapeIcsText(`Fuzzyから書き出した締切です。提出方法: ${assignment.submissionMode}`)}`,
+			`DESCRIPTION:${escapeIcsText(`Fuzzyから書き出した締切です。提出方法: ${submissionModeLabel(assignment)}`)}`,
 			`X-FUZZY-ASSIGNMENT-ID:${assignment.id}`,
 			"END:VEVENT",
 		);

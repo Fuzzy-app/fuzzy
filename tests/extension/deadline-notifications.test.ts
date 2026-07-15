@@ -39,6 +39,12 @@ describe("締切通知判定", () => {
 		);
 	});
 
+	test("要確認の期限は誤通知を避けるため通知しない", () => {
+		expect(
+			deadlineNotificationCandidates([{ ...assignment, dueAtStatus: "needs_review" }], rules, now),
+		).toHaveLength(0);
+	});
+
 	test("ブラウザ再開が遅れても前回確認後の通知を拾う", () => {
 		const fiveMinutesLater = now + 5 * 60 * 1000;
 		const result = deadlineNotificationCandidates(

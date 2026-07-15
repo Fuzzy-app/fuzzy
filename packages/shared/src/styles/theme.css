@@ -1,0 +1,32 @@
+:root {
+	--fuzzy-color-primary: #6c63ff;
+	--fuzzy-color-primary-strong: #5d5ce2;
+	--fuzzy-color-primary-soft: #f0efff;
+	--fuzzy-color-surface: #ffffff;
+	--fuzzy-color-surface-muted: #eef0fb;
+	--fuzzy-color-page: #f7f8ff;
+	--fuzzy-color-background: #f4f5fb;
+	--fuzzy-color-warm-background: #fffdf6;
+	--fuzzy-color-text: #20243a;
+	--fuzzy-color-text-strong: #151515;
+	--fuzzy-color-text-secondary: #4e5672;
+	--fuzzy-color-text-muted: #555e79;
+	--fuzzy-color-text-subtle: #626b87;
+	--fuzzy-color-border: #e7e9f7;
+	--fuzzy-color-border-soft: #eef1f6;
+	--fuzzy-color-accent: #ffd54f;
+	--fuzzy-color-success: #14935b;
+	--fuzzy-color-success-soft: #dcf9e8;
+	--fuzzy-color-warning: #8a6410;
+	--fuzzy-color-warning-soft: #fff8df;
+	--fuzzy-color-danger: #b43d24;
+	--fuzzy-color-danger-soft: #fff0ec;
+	--fuzzy-shadow-card: 0 10px 28px rgba(58, 69, 120, 0.08);
+	--fuzzy-shadow-floating: 0 18px 48px rgba(58, 69, 120, 0.16);
+	--fuzzy-focus-ring: rgba(108, 99, 255, 0.28);
+	--fuzzy-font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, sans-serif;
+	--fuzzy-font-size-caption: 0.82rem;
+	--fuzzy-font-size-small: 0.9rem;
+	--fuzzy-font-size-body: 1rem;
+	--fuzzy-line-height-body: 1.7;
+}

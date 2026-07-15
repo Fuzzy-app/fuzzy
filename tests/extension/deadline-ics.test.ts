@@ -21,9 +21,11 @@ const assignment: Assignment = {
 describe("締切ICS", () => {
 	test("有効な締切をカレンダーイベントへ変換する", () => {
 		const ics = buildDeadlineIcs([assignment], new Date("2026-07-14T00:00:00.000Z"));
+		const unfoldedIcs = ics.replace(/\r\n[ \t]/g, "");
 		expect(ics).toContain("BEGIN:VCALENDAR\r\n");
 		expect(ics).toContain("DTSTART:20260720T123000Z");
 		expect(ics).toContain("SUMMARY:データベース\\,演習: 課題\\;最終レポート");
+		expect(unfoldedIcs).toContain("提出方法: Moodleから自動反映");
 		expect(ics).toContain("UID:fuzzy-assignment-10@fuzzy.local");
 		expect(ics.endsWith("END:VCALENDAR\r\n")).toBe(true);
 	});
@@ -32,6 +34,17 @@ describe("締切ICS", () => {
 		const noDate = { ...assignment, id: 11, dueAt: null };
 		const invalidDate = { ...assignment, id: 12, dueAt: "invalid" };
 		expect(exportableAssignments([assignment, noDate, invalidDate])).toEqual([assignment]);
+	});
+
+	test("提出済み・期限切れは履歴として含め、要確認の課題は書き出さない", () => {
+		const submitted = { ...assignment, id: 11, submitted: true };
+		const needsReview = { ...assignment, id: 12, dueAtStatus: "needs_review" as const };
+		const past = { ...assignment, id: 13, dueAt: "2026-07-13T12:30:00.000Z" };
+		expect(exportableAssignments([assignment, submitted, needsReview, past])).toEqual([
+			assignment,
+			submitted,
+			past,
+		]);
 	});
 
 	test("ファイル名にローカル日付を含める", () => {

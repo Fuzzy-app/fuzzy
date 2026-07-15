@@ -14,17 +14,13 @@ import {
 	type DashboardSummary,
 	type DataSyncEvent,
 	type FuzzyApiClient,
-	type NotificationRule,
 	type SearchResult,
 	createApiClient,
 } from "@fuzzy/shared";
-import { BackgroundApiClient } from "../../lib/api/backgroundApi";
 import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
-import {
-	buildDeadlineIcs,
-	deadlineIcsFileName,
-	exportableAssignments,
-} from "../../lib/calendar/ics";
+import { createRuleManagementStore } from "../../lib/rules/state";
+import { createCalendarPanelController } from "./calendarPanel";
+import { type RuleManagementScreen, createRuleManagementScreen } from "./rulesScreen";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -34,7 +30,7 @@ const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "organize";
+type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "rules" | "organize";
 // 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
 // import 時の衝突・混同を避けるため View 用として別名にしている。
 type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -51,11 +47,12 @@ const menuItems: readonly MenuItem[] = [
 	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
 	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
 	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
+	{ id: "rules", label: "整理ルール", enabled: true, description: "issue52" },
 	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
 ];
 
 const placeholderCopy: Record<
-	Exclude<ScreenId, "search" | "dashboard">,
+	Exclude<ScreenId, "search" | "dashboard" | "rules">,
 	{ title: string; copy: string }
 > = {
 	deadlines: {
@@ -293,11 +290,12 @@ export function mountFuzzyShell(): void {
 
 	// --- 状態 ---
 	const apiPromise = createApiClient();
-	const notificationApi = new BackgroundApiClient();
+	const ruleStore = createRuleManagementStore();
 	let page: HTMLElement | null = null;
 	let mainEl: HTMLElement | null = null;
 	let statusBadge: HTMLElement | null = null;
 	let searchScreen: SearchScreen | null = null;
+	let ruleScreen: RuleManagementScreen | null = null;
 	let drawerButton: HTMLAnchorElement | null = null;
 	const sideLinks: HTMLButtonElement[] = [];
 	let isOpen = false;
@@ -310,13 +308,6 @@ export function mountFuzzyShell(): void {
 	let loadingDeadlines = false;
 	let deadlineError: string | null = null;
 	let submissionError: string | null = null;
-	let notificationRules: NotificationRule[] = [];
-	let notificationRulesLoaded = false;
-	let loadingNotificationRules = false;
-	let savingNotificationRules = false;
-	let notificationRulesError: string | null = null;
-	let notificationRulesErrorKind: "load" | "save" | null = null;
-	let calendarExportMessage: string | null = null;
 	let dashboard: DashboardSummary | null = null;
 	let dashboardCachedAt: string | null = null;
 	let dashboardUsesCache = false;
@@ -337,6 +328,11 @@ export function mountFuzzyShell(): void {
 		loading: false,
 		error: null,
 	};
+	const calendarPanel = createCalendarPanelController({
+		onChange: () => {
+			if (activeScreen === "deadlines") renderScreen();
+		},
+	});
 
 	const moveMainContentToStash = () => {
 		while (mainHost.firstChild) stash.append(mainHost.firstChild);
@@ -629,6 +625,22 @@ export function mountFuzzyShell(): void {
 		return searchScreen;
 	};
 
+	const getRuleScreen = (): RuleManagementScreen => {
+		if (!ruleScreen) {
+			ruleScreen = createRuleManagementScreen({
+				store: ruleStore,
+				loadCourses: async () => {
+					const api = await apiPromise;
+					const summary = await api.getDashboard();
+					setTopMode(api.mode);
+					return summary.courses;
+				},
+			});
+		}
+		ruleScreen.activate();
+		return ruleScreen;
+	};
+
 	const loadAssignments = async () => {
 		if (assignmentsLoaded) return;
 		try {
@@ -640,20 +652,6 @@ export function mountFuzzyShell(): void {
 		} catch (error) {
 			deadlineError = error instanceof Error ? error.message : String(error);
 			assignmentsLoaded = false;
-		}
-	};
-
-	const loadNotificationRules = async () => {
-		if (notificationRulesLoaded) return;
-		try {
-			notificationRules = await notificationApi.getNotificationRules();
-			notificationRulesLoaded = true;
-			notificationRulesError = null;
-			notificationRulesErrorKind = null;
-		} catch (error) {
-			notificationRulesError = error instanceof Error ? error.message : String(error);
-			notificationRulesErrorKind = "load";
-			notificationRulesLoaded = false;
 		}
 	};
 
@@ -904,132 +902,6 @@ export function mountFuzzyShell(): void {
 		return panel;
 	};
 
-	const updateNotificationRule = async (ruleId: number, enabled: boolean) => {
-		if (savingNotificationRules) return;
-		const previousRules = notificationRules;
-		notificationRules = notificationRules.map((rule) =>
-			rule.id === ruleId ? { ...rule, enabled } : rule,
-		);
-		savingNotificationRules = true;
-		notificationRulesError = null;
-		notificationRulesErrorKind = null;
-		renderScreen();
-
-		try {
-			const result = await notificationApi.updateNotificationRules(notificationRules);
-			if (!result.ok) throw new Error("通知設定を保存できませんでした");
-		} catch (error) {
-			notificationRules = previousRules;
-			notificationRulesError =
-				error instanceof Error ? error.message : "通知設定を保存できませんでした";
-			notificationRulesErrorKind = "save";
-		} finally {
-			savingNotificationRules = false;
-			if (activeScreen === "deadlines") renderScreen();
-		}
-	};
-
-	const downloadDeadlineIcs = () => {
-		const exportable = exportableAssignments(assignments);
-		if (exportable.length === 0) return;
-
-		const blob = new Blob([buildDeadlineIcs(exportable)], { type: "text/calendar;charset=utf-8" });
-		const url = URL.createObjectURL(blob);
-		const link = el("a") as HTMLAnchorElement;
-		link.href = url;
-		link.download = deadlineIcsFileName();
-		link.hidden = true;
-		document.body.append(link);
-		link.click();
-		link.remove();
-		// ダウンロード開始前にURLを破棄しないよう、クリック処理の次のタイミングで解放する。
-		window.setTimeout(() => URL.revokeObjectURL(url), 0);
-
-		calendarExportMessage = `${exportable.length}件の締切をICSファイルに書き出しました。`;
-		renderScreen();
-	};
-
-	const buildCalendarPanel = (): HTMLElement => {
-		const panel = el("section", "fuzzy-calendar-panel");
-		const exportableCount = exportableAssignments(assignments).length;
-		const exportArea = el("div", "fuzzy-calendar-export");
-		const exportCopy = el("div");
-		exportCopy.append(
-			el("h2", "", "カレンダーへ追加"),
-			el(
-				"p",
-				"fuzzy-toolbar-copy",
-				"期限が確認できる課題をICSファイルにまとめます。Googleカレンダーにも読み込めます。",
-			),
-		);
-		const exportButton = el("button", "fuzzy-primary-button", "ICSを書き出す");
-		exportButton.type = "button";
-		exportButton.disabled = exportableCount === 0;
-		exportButton.addEventListener("click", downloadDeadlineIcs);
-		exportArea.append(exportCopy, exportButton);
-
-		const exportStatus = el("p", "fuzzy-calendar-status");
-		exportStatus.setAttribute("aria-live", "polite");
-		exportStatus.textContent = calendarExportMessage ?? `書き出し対象: ${exportableCount}件`;
-		exportArea.append(exportStatus);
-		panel.append(exportArea);
-
-		const notificationArea = el("div", "fuzzy-notification-settings");
-		notificationArea.append(
-			el("h2", "", "締切通知"),
-			el(
-				"p",
-				"fuzzy-toolbar-copy",
-				"通知したいタイミングを個別に選べます。未提出の課題だけをブラウザ通知します。",
-			),
-		);
-
-		if (loadingNotificationRules && !notificationRulesLoaded) {
-			notificationArea.append(el("p", "fuzzy-calendar-status", "通知設定を読み込んでいます…"));
-		} else if (notificationRulesError) {
-			const error = el("div", "fuzzy-inline-error");
-			const retry = el("button", "fuzzy-secondary-button", "再読み込み");
-			retry.type = "button";
-			retry.addEventListener("click", () => {
-				notificationRulesError = null;
-				notificationRulesErrorKind = null;
-				notificationRulesLoaded = false;
-				renderScreen();
-			});
-			const errorAction = notificationRulesErrorKind === "save" ? "保存" : "取得";
-			error.append(
-				el("p", "", `通知設定を${errorAction}できませんでした: ${notificationRulesError}`),
-				retry,
-			);
-			notificationArea.append(error);
-		} else {
-			const ruleList = el("div", "fuzzy-notification-rule-list");
-			for (const rule of notificationRules) {
-				const label = el("label", "fuzzy-notification-rule");
-				const copy = el("span");
-				copy.append(el("strong", "", rule.label), el("small", "", "通知する"));
-				const checkbox = el("input") as HTMLInputElement;
-				checkbox.type = "checkbox";
-				checkbox.checked = rule.enabled;
-				checkbox.disabled = savingNotificationRules;
-				checkbox.setAttribute("role", "switch");
-				checkbox.setAttribute("aria-label", `${rule.label}の通知`);
-				checkbox.addEventListener("change", () => {
-					void updateNotificationRule(rule.id, checkbox.checked);
-				});
-				label.append(copy, checkbox);
-				ruleList.append(label);
-			}
-			notificationArea.append(ruleList);
-			if (savingNotificationRules) {
-				notificationArea.append(el("p", "fuzzy-calendar-status", "通知設定を保存しています…"));
-			}
-		}
-
-		panel.append(notificationArea);
-		return panel;
-	};
-
 	const buildDeadlineScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
 		screen.append(buildScreenHeader("締切ハブ", "課題と提出状況をまとめて確認"));
@@ -1127,7 +999,7 @@ export function mountFuzzyShell(): void {
 			listHost.append(...visible.map(buildDeadlineCard));
 		}
 
-		screen.append(metricGrid, syncPanel, buildCalendarPanel(), toolbar, listHost);
+		screen.append(metricGrid, syncPanel, calendarPanel.render(assignments), toolbar, listHost);
 		return screen;
 	};
 
@@ -1232,7 +1104,7 @@ export function mountFuzzyShell(): void {
 	};
 
 	const buildPlaceholderScreen = (
-		screenId: Exclude<ScreenId, "search" | "dashboard">,
+		screenId: Exclude<ScreenId, "search" | "dashboard" | "rules">,
 	): HTMLElement => {
 		const { title, copy } = placeholderCopy[screenId];
 		const screen = el("div", "fuzzy-screen");
@@ -1281,14 +1153,10 @@ export function mountFuzzyShell(): void {
 					if (activeScreen === "deadlines") renderScreen();
 				});
 			}
-			if (!notificationRulesLoaded && !loadingNotificationRules && !notificationRulesError) {
-				loadingNotificationRules = true;
-				void loadNotificationRules().finally(() => {
-					loadingNotificationRules = false;
-					if (activeScreen === "deadlines") renderScreen();
-				});
-			}
+			calendarPanel.ensureNotificationRulesLoaded();
 			mainEl.replaceChildren(buildDeadlineScreen());
+		} else if (activeScreen === "rules") {
+			mainEl.replaceChildren(getRuleScreen().root);
 		} else {
 			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
@@ -1575,13 +1443,13 @@ function ensureStyle(): void {
 			gap: 10px;
 			border-bottom: 3px solid transparent;
 			padding: 12px 16px 10px;
-			font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+			font-family: var(--fuzzy-font-family);
 			font-weight: 700;
 		}
 
 		.fuzzy-nav-button:hover,
 		.fuzzy-nav-button.is-active {
-			border-bottom-color: #6c63ff;
+			border-bottom-color: var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-nav-mark {
@@ -1590,8 +1458,8 @@ function ensureStyle(): void {
 			width: 28px;
 			height: 28px;
 			border-radius: 10px;
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 			font-weight: 900;
 			line-height: 1;
 		}
@@ -1608,9 +1476,9 @@ function ensureStyle(): void {
 			overflow: hidden;
 			background:
 				radial-gradient(circle at top left, rgba(108, 99, 255, 0.12), transparent 22%),
-				linear-gradient(180deg, #eef1ff 0%, #f7f8ff 100%);
-			color: #151515;
-			font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+				linear-gradient(180deg, #eef1ff 0%, var(--fuzzy-color-page) 100%);
+			color: var(--fuzzy-color-text-strong);
+			font-family: var(--fuzzy-font-family);
 		}
 
 		.fuzzy-sidebar {
@@ -1618,7 +1486,7 @@ function ensureStyle(): void {
 			grid-template-rows: auto 1fr auto;
 			gap: 24px;
 			padding: 18px 12px;
-			background: #20243a;
+			background: var(--fuzzy-color-text);
 			color: #f4f6ff;
 		}
 
@@ -1657,7 +1525,7 @@ function ensureStyle(): void {
 			background: transparent;
 			color: #c6c9de;
 			font: inherit;
-			font-size: 0.84rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 700;
 			text-align: left;
 			cursor: pointer;
@@ -1665,12 +1533,12 @@ function ensureStyle(): void {
 
 		.fuzzy-side-link.is-active {
 			background: #353b67;
-			color: #ffffff;
+			color: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-side-link.is-disabled {
 			cursor: not-allowed;
-			opacity: 0.52;
+			opacity: 0.65;
 		}
 
 		.fuzzy-side-dot {
@@ -1688,7 +1556,9 @@ function ensureStyle(): void {
 			border-radius: 10px;
 			padding: 12px 10px;
 			background: rgba(255, 255, 255, 0.08);
-			font-size: 0.72rem;
+			font-size: var(--fuzzy-font-size-caption);
+			font-weight: 600;
+			line-height: 1.6;
 		}
 
 		.fuzzy-sidebar-footer p,
@@ -1725,9 +1595,9 @@ function ensureStyle(): void {
 			margin: 0;
 			border-radius: 999px;
 			padding: 6px 12px;
-			background: #dcf9e8;
-			color: #14935b;
-			font-size: 0.74rem;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 		}
 
@@ -1745,10 +1615,10 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 10px;
 			padding: 10px 14px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			color: #515873;
 			font: inherit;
-			font-size: 0.84rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 700;
 			cursor: pointer;
 		}
@@ -1774,8 +1644,8 @@ function ensureStyle(): void {
 		.fuzzy-screen-kicker,
 		.fuzzy-section-label {
 			margin: 0 0 8px;
-			color: #61688c;
-			font-size: 0.75rem;
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 		}
 
@@ -1799,8 +1669,8 @@ function ensureStyle(): void {
 		.fuzzy-empty {
 			padding: 16px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-search-tabs {
@@ -1813,7 +1683,7 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 10px;
 			padding: 8px 14px;
-			background: #eef0fb;
+			background: var(--fuzzy-color-surface-muted);
 			color: #515873;
 			font: inherit;
 			font-size: 0.8rem;
@@ -1821,7 +1691,7 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-chip.is-active {
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			color: #171a27;
 			box-shadow: inset 0 0 0 1px #e0e4fb;
 		}
@@ -1837,17 +1707,17 @@ function ensureStyle(): void {
 			display: flex;
 			align-items: center;
 			gap: 12px;
-			border: 2px solid #6c63ff;
+			border: 2px solid var(--fuzzy-color-primary);
 			border-radius: 14px;
 			padding: 12px 14px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-search-dot {
 			width: 14px;
 			height: 14px;
 			border-radius: 5px;
-			background: #6c63ff;
+			background: var(--fuzzy-color-primary);
 			flex: 0 0 auto;
 		}
 
@@ -1857,7 +1727,7 @@ function ensureStyle(): void {
 			border: 0;
 			outline: 0;
 			background: transparent;
-			color: #151515;
+			color: var(--fuzzy-color-text-strong);
 			font: inherit;
 			font-size: 1rem;
 			font-weight: 800;
@@ -1867,26 +1737,9 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 12px;
 			padding: 12px 22px;
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 			font: inherit;
-			font-weight: 800;
-			cursor: pointer;
-		}
-
-		.fuzzy-primary-button:disabled {
-			cursor: not-allowed;
-			opacity: 0.55;
-		}
-
-		.fuzzy-secondary-button {
-			border: 1px solid #d9dcf0;
-			border-radius: 10px;
-			padding: 8px 12px;
-			background: #ffffff;
-			color: #59607d;
-			font: inherit;
-			font-size: 0.8rem;
 			font-weight: 800;
 			cursor: pointer;
 		}
@@ -1929,7 +1782,7 @@ function ensureStyle(): void {
 			width: 14px;
 			height: 14px;
 			border-radius: 50%;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-search-layout {
@@ -1951,7 +1804,7 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 12px;
 			padding: 14px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: inset 0 0 0 1px #eceefd;
 			color: inherit;
 			text-align: left;
@@ -1959,8 +1812,8 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-result-row.is-selected {
-			box-shadow: inset 0 0 0 2px #6c63ff;
-			background: #f7f8ff;
+			box-shadow: inset 0 0 0 2px var(--fuzzy-color-primary);
+			background: var(--fuzzy-color-page);
 		}
 
 		.fuzzy-result-kind {
@@ -1969,7 +1822,7 @@ function ensureStyle(): void {
 			border-radius: 8px;
 			padding: 8px 0;
 			background: #ff6b6b;
-			color: #ffffff;
+			color: var(--fuzzy-color-surface);
 			font-size: 0.68rem;
 			font-weight: 900;
 		}
@@ -1998,7 +1851,7 @@ function ensureStyle(): void {
 
 		.fuzzy-result-sub {
 			margin-top: 4px;
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.74rem;
 			font-weight: 700;
 		}
@@ -2013,7 +1866,7 @@ function ensureStyle(): void {
 			display: grid;
 			gap: 8px;
 			justify-items: end;
-			color: #6c63ff;
+			color: var(--fuzzy-color-primary);
 			font-size: 0.78rem;
 			font-weight: 900;
 		}
@@ -2027,7 +1880,7 @@ function ensureStyle(): void {
 		.fuzzy-search-note {
 			background:
 				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
-				#ffffff;
+				var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-search-note h2,
@@ -2057,7 +1910,7 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-note-grid dt {
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -2078,11 +1931,11 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-metric-card.is-warn {
-			background: #fff8df;
+			background: var(--fuzzy-color-warning-soft);
 		}
 
 		.fuzzy-metric-card.is-soft {
-			background: #f4f5fb;
+			background: var(--fuzzy-color-background);
 		}
 
 		.fuzzy-metric-label {
@@ -2106,13 +1959,13 @@ function ensureStyle(): void {
 			gap: 14px;
 			padding: 14px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-dashboard-cache-note {
 			margin: 0;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 			line-height: 1.6;
@@ -2130,14 +1983,14 @@ function ensureStyle(): void {
 			gap: 16px;
 			padding: 16px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-dashboard-course.is-warn {
 			box-shadow:
 				inset 4px 0 0 #f2bd41,
-				0 10px 28px rgba(58, 69, 120, 0.08);
+				var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-dashboard-course-head {
@@ -2157,7 +2010,7 @@ function ensureStyle(): void {
 			flex: 0 0 auto;
 			border-radius: 999px;
 			padding: 6px 10px;
-			background: #eef0fb;
+			background: var(--fuzzy-color-surface-muted);
 			color: #5b61a0;
 			font-size: 0.74rem;
 			font-weight: 900;
@@ -2176,7 +2029,7 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-dashboard-course-details dt {
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -2194,8 +2047,8 @@ function ensureStyle(): void {
 			border-radius: 14px;
 			background:
 				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
-				#ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+				var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-sync-head {
@@ -2223,8 +2076,8 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 999px;
 			padding: 8px 12px;
-			background: #eef0fb;
-			color: #59607d;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
 			font: inherit;
 			font-size: 0.78rem;
 			font-weight: 800;
@@ -2249,7 +2102,7 @@ function ensureStyle(): void {
 
 		.fuzzy-sync-meta,
 		.fuzzy-change-field {
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 		}
@@ -2269,13 +2122,13 @@ function ensureStyle(): void {
 			padding: 10px 12px;
 			background: rgba(255, 255, 255, 0.72);
 			box-shadow: inset 0 0 0 1px #eceefd;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 		}
 
 		.fuzzy-sync-count strong {
-			color: #151515;
+			color: var(--fuzzy-color-text-strong);
 			font-size: 1.2rem;
 			font-weight: 900;
 		}
@@ -2287,7 +2140,7 @@ function ensureStyle(): void {
 
 		.fuzzy-change-list-label {
 			margin: 0;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 		}
@@ -2299,7 +2152,7 @@ function ensureStyle(): void {
 			align-items: center;
 			border-radius: 12px;
 			padding: 12px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: inset 0 0 0 1px #eceefd;
 		}
 
@@ -2318,19 +2171,19 @@ function ensureStyle(): void {
 		.fuzzy-change-value {
 			border-radius: 10px;
 			padding: 8px 10px;
-			background: #f4f5fb;
+			background: var(--fuzzy-color-background);
 			font-size: 0.78rem;
 			font-weight: 800;
 			line-height: 1.5;
 		}
 
 		.fuzzy-change-value.is-new {
-			background: #dcf9e8;
-			color: #14935b;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success);
 		}
 
 		.fuzzy-change-arrow {
-			color: #6c63ff;
+			color: var(--fuzzy-color-primary);
 			font-weight: 900;
 		}
 
@@ -2339,112 +2192,18 @@ function ensureStyle(): void {
 			gap: 6px;
 			border-radius: 12px;
 			padding: 12px;
-			background: #fff0ec;
-			color: #b43d24;
+			background: var(--fuzzy-color-danger-soft);
+			color: var(--fuzzy-color-danger);
 			font-size: 0.86rem;
 			font-weight: 800;
 			line-height: 1.7;
 		}
 
-		.fuzzy-calendar-panel {
-			display: grid;
-			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-			gap: 18px;
-			padding: 18px;
-			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
-		}
-
-		.fuzzy-calendar-export,
-		.fuzzy-notification-settings {
-			display: grid;
-			align-content: start;
-			gap: 12px;
-		}
-
-		.fuzzy-calendar-export {
-			grid-template-columns: minmax(0, 1fr) auto;
-			align-items: start;
-			padding-right: 18px;
-			border-right: 1px solid #e5e7f2;
-		}
-
-		.fuzzy-calendar-panel h2 {
-			margin: 0 0 6px;
-			font-size: 1.04rem;
-			font-weight: 900;
-		}
-
-		.fuzzy-calendar-status {
-			grid-column: 1 / -1;
-			margin: -6px 0 0;
-			color: #737a99;
-			font-size: 0.78rem;
-			font-weight: 700;
-		}
-
-		.fuzzy-notification-rule-list {
-			display: grid;
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-			gap: 8px;
-		}
-
-		.fuzzy-notification-rule {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 10px;
-			border: 1px solid #e2e4f2;
-			border-radius: 12px;
-			padding: 10px 12px;
-			background: #f8f8fd;
-			cursor: pointer;
-		}
-
-		.fuzzy-notification-rule span {
-			display: grid;
-			gap: 2px;
-		}
-
-		.fuzzy-notification-rule strong {
-			font-size: 0.84rem;
-		}
-
-		.fuzzy-notification-rule small {
-			color: #7a81a1;
-			font-size: 0.7rem;
-			font-weight: 700;
-		}
-
-		.fuzzy-notification-rule input {
-			width: 18px;
-			height: 18px;
-			accent-color: #6c63ff;
-		}
-
-		.fuzzy-inline-error {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 12px;
-			border-radius: 10px;
-			padding: 10px;
-			background: #fff0ec;
-			color: #b43d24;
-		}
-
-		.fuzzy-inline-error p {
-			margin: 0;
-			font-size: 0.8rem;
-			font-weight: 800;
-		}
-
 		.fuzzy-deadline-toolbar {
 			padding: 14px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-filter-row {
@@ -2458,8 +2217,8 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 999px;
 			padding: 8px 14px;
-			background: #eef0fb;
-			color: #59607d;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
 			font: inherit;
 			font-size: 0.8rem;
 			font-weight: 800;
@@ -2467,13 +2226,13 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-filter-chip.is-active {
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-toolbar-copy {
 			margin: 0;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.84rem;
 			line-height: 1.7;
 		}
@@ -2486,18 +2245,18 @@ function ensureStyle(): void {
 		.fuzzy-deadline-card {
 			padding: 16px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-deadline-card.is-review {
-			background: #fff8df;
+			background: var(--fuzzy-color-warning-soft);
 		}
 
 		.fuzzy-deadline-card.is-overdue {
 			box-shadow:
 				inset 4px 0 0 #ff8a5b,
-				0 10px 28px rgba(58, 69, 120, 0.08);
+				var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-deadline-card.is-submitted {
@@ -2513,7 +2272,7 @@ function ensureStyle(): void {
 
 		.fuzzy-course-name {
 			margin: 0 0 4px;
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -2534,7 +2293,7 @@ function ensureStyle(): void {
 		.fuzzy-badge {
 			border-radius: 999px;
 			padding: 6px 10px;
-			background: #eef0fb;
+			background: var(--fuzzy-color-surface-muted);
 			font-size: 0.74rem;
 			font-weight: 800;
 		}
@@ -2563,7 +2322,7 @@ function ensureStyle(): void {
 
 		.fuzzy-deadline-label {
 			margin: 0;
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -2613,9 +2372,9 @@ function ensureStyle(): void {
 		.fuzzy-error-panel {
 			padding: 16px;
 			border-radius: 14px;
-			background: #fff0ec;
-			color: #b43d24;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-danger-soft);
+			color: var(--fuzzy-color-danger);
+			box-shadow: var(--fuzzy-shadow-card);
 			font-size: 0.9rem;
 			font-weight: 800;
 			line-height: 1.7;
@@ -2637,7 +2396,7 @@ function ensureStyle(): void {
 			border-radius: 999px;
 			padding: 6px 12px;
 			background: rgba(180, 61, 36, 0.12);
-			color: #b43d24;
+			color: var(--fuzzy-color-danger);
 			font: inherit;
 			font-size: 0.78rem;
 			font-weight: 800;
@@ -2649,14 +2408,13 @@ function ensureStyle(): void {
 		.fuzzy-side-link:focus,
 		.fuzzy-close-button:focus,
 		.fuzzy-primary-button:focus,
-		.fuzzy-secondary-button:focus,
 		.fuzzy-sync-action:focus,
 		.fuzzy-error-close:focus,
 		.fuzzy-result-row:focus,
 		.fuzzy-filter-chip:focus,
 		.fuzzy-checkline input:focus,
 		.fuzzy-search-input-wrap:focus-within {
-			outline: 3px solid rgba(108, 99, 255, 0.28);
+			outline: 3px solid var(--fuzzy-focus-ring);
 			outline-offset: 2px;
 		}
 
@@ -2716,17 +2474,6 @@ function ensureStyle(): void {
 				grid-template-columns: 1fr;
 			}
 
-			.fuzzy-calendar-panel {
-				grid-template-columns: 1fr;
-			}
-
-			.fuzzy-calendar-export {
-				padding-right: 0;
-				padding-bottom: 18px;
-				border-right: 0;
-				border-bottom: 1px solid #e5e7f2;
-			}
-
 			.fuzzy-dashboard-course-list,
 			.fuzzy-sync-counts,
 			.fuzzy-change-row {
@@ -2761,14 +2508,6 @@ function ensureStyle(): void {
 
 			.fuzzy-deadline-badges {
 				justify-content: flex-start;
-			}
-
-			.fuzzy-calendar-export {
-				grid-template-columns: 1fr;
-			}
-
-			.fuzzy-notification-rule-list {
-				grid-template-columns: 1fr;
 			}
 
 			.fuzzy-dashboard-actions {

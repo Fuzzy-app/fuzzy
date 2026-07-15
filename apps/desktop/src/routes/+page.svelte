@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import {
+		RULE_PRESETS,
+		createRulePreviewValues,
+		previewRulePattern,
+	} from "@fuzzy/shared";
+	import {
 		getSetupStatusClient,
 		pickBaseFolderClient,
 		saveInitialSetupClient,
@@ -21,38 +26,21 @@
 
 	const sidebarItems = ["保存先フォルダ", "保存パターン推定", "初期ルール選択"];
 
-	const ruleOptions: InitialRuleOption[] = [
-		{
-			id: "year-course-assignment",
-			name: "年度 / 科目 / 課題",
-			description:
-				"学年をまたいで資料が増えても、年度単位で見失いにくい標準ルールです。",
-			template: "{year}/{course}/{assignment}",
-			preview: [
-				"2026/情報アーキテクチャ/第03回レポート",
-				"2026/データベース/正規化レポート",
-			],
-			recommended: true,
-		},
-		{
-			id: "semester-course-assignment",
-			name: "学期 / 科目 / 課題",
-			description:
-				"前期・後期の区切りを優先して、履修中の科目を見渡しやすくします。",
-			template: "{term}/{course}/{assignment}",
-			preview: ["2026前期/離散数学/小テスト", "2026前期/英語IIB/単語テスト"],
-		},
-		{
-			id: "course-assignment",
-			name: "科目 / 課題",
-			description: "科目名を起点にした、短く扱いやすいルールです。",
-			template: "{course}/{assignment}",
-			preview: [
-				"認知科学概論/期末レポート",
-				"情報アーキテクチャ/第03回レポート",
-			],
-		},
-	];
+	const rulePreviewExamples = [
+		{ course: "情報アーキテクチャ", assignment: "第03回レポート" },
+		{ course: "データベース", assignment: "正規化レポート" },
+	] as const;
+	const basePreviewValues = createRulePreviewValues();
+	const ruleOptions: InitialRuleOption[] = RULE_PRESETS.map((rule) => ({
+		...rule,
+		preview: rulePreviewExamples.map(({ course, assignment }) =>
+			previewRulePattern(rule.template, {
+				...basePreviewValues,
+				course,
+				assignment,
+			}),
+		),
+	}));
 
 	let draft: SetupDraft = {
 		baseFolderPath: null,
@@ -725,7 +713,7 @@
 
 	.progress-dot.done,
 	.progress-dot.current {
-		background: #6d5cf6;
+		background: var(--fuzzy-color-primary);
 		color: #fff;
 	}
 
@@ -757,7 +745,7 @@
 		padding: 4px 10px;
 		border-radius: 999px;
 		background: rgba(122, 107, 246, 0.1);
-		color: #6d5cf6;
+		color: var(--fuzzy-color-primary);
 		font-size: 0.7rem;
 		font-weight: 700;
 	}
@@ -951,7 +939,7 @@
 	}
 
 	.example-box {
-		background: #f4f5fb;
+		background: var(--fuzzy-color-background);
 		color: #666d8f;
 		font-size: 0.72rem;
 	}
@@ -974,7 +962,7 @@
 		margin: 12px 0;
 		padding: 8px 10px;
 		border-radius: 6px;
-		background: #f4f5fb;
+		background: var(--fuzzy-color-background);
 		color: #3f4566;
 		font-size: 0.75rem;
 		white-space: normal;

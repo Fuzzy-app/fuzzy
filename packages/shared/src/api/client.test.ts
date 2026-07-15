@@ -118,6 +118,16 @@ describe("MockApiClient（サンプルデータ）", () => {
 		expect(result).toEqual(updated);
 	});
 
+	test("通知設定はモッククライアントを作り直すとサンプルへ戻る", async () => {
+		const freshClient = new MockApiClient();
+		const result = await freshClient.getNotificationRules();
+		expect(result.find((rule) => rule.id === 1)?.enabled).toBe(true);
+		expect(result.find((rule) => rule.id === 3)).toMatchObject({
+			offsetMinutes: 540,
+			label: "9時間前",
+		});
+	});
+
 	test("getLatestSyncEvent: 直近の同期結果（データ取得通知用）が返る", async () => {
 		const event = await client.getLatestSyncEvent();
 		expect(event?.changedAssignmentCount).toBe(2);

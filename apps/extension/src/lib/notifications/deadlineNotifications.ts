@@ -20,7 +20,7 @@ export function deadlineNotificationCandidates(
 	const latestCandidateByAssignment = new Map<number, DeadlineNotificationCandidate>();
 
 	for (const assignment of assignments) {
-		if (assignment.submitted || !assignment.dueAt) continue;
+		if (assignment.submitted || assignment.dueAtStatus !== "normal" || !assignment.dueAt) continue;
 		const dueAt = Date.parse(assignment.dueAt);
 		if (Number.isNaN(dueAt) || dueAt <= now) continue;
 

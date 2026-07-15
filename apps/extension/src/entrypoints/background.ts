@@ -13,19 +13,15 @@ import {
 	type FuzzyApiResponseMessage,
 	isFuzzyApiRequestMessage,
 } from "../lib/api/backgroundApi";
+import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
-	DEADLINE_NOTIFICATION_WINDOW_MS,
-	deadlineNotificationCandidates,
-	dispatchDeadlineNotifications,
-} from "../lib/notifications/deadlineNotifications";
+	isRuleManagementRequestMessage,
+	respondToRuleManagementRequest,
+} from "../lib/rules/backgroundApi";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
 const SYNC_CHECK_INTERVAL_MINUTES = 1;
-const DEADLINE_CHECK_ALARM = "fuzzy-check-deadline-notifications";
-const DEADLINE_CHECK_INTERVAL_MINUTES = 1;
-const MOCK_NOTIFICATION_RULES_STORAGE_KEY = "fuzzy-mock-notification-rules";
-const DEADLINE_LAST_CHECKED_KEY_PREFIX = "fuzzy-deadline-last-checked";
 
 function syncChangeTotal(event: DataSyncEvent): number {
 	return event.newAssignmentCount + event.changedAssignmentCount + event.removedAssignmentCount;
@@ -57,81 +53,16 @@ async function notifyWhenSyncEventIsNew(client: FuzzyApiClient): Promise<void> {
 	await browser.storage.local.set({ [storageKey]: event.id });
 }
 
-async function getEffectiveNotificationRules(client: FuzzyApiClient): Promise<NotificationRule[]> {
-	const apiRules = await client.getNotificationRules();
-	if (client.mode !== "mock") return apiRules;
-
-	const stored = await browser.storage.local.get(MOCK_NOTIFICATION_RULES_STORAGE_KEY);
-	const storedRules = stored[MOCK_NOTIFICATION_RULES_STORAGE_KEY];
-	if (Array.isArray(storedRules)) return storedRules as NotificationRule[];
-
-	await browser.storage.local.set({ [MOCK_NOTIFICATION_RULES_STORAGE_KEY]: apiRules });
-	return apiRules;
-}
-
-async function updateEffectiveNotificationRules(
-	client: FuzzyApiClient,
-	rules: NotificationRule[],
-): Promise<{ ok: boolean }> {
-	const result = await client.updateNotificationRules(rules);
-	if (result.ok && client.mode === "mock") {
-		await browser.storage.local.set({ [MOCK_NOTIFICATION_RULES_STORAGE_KEY]: rules });
-	}
-	return result;
-}
-
-async function notifyDueDeadlines(client: FuzzyApiClient): Promise<void> {
-	const checkedAt = Date.now();
-	const [assignments, rules] = await Promise.all([
-		client.getDeadlines({ includePast: false }),
-		getEffectiveNotificationRules(client),
-	]);
-
-	const lastCheckedKey = `${DEADLINE_LAST_CHECKED_KEY_PREFIX}:${client.mode}`;
-	const lastCheckedRecord = await browser.storage.local.get(lastCheckedKey);
-	const storedLastCheckedAt = lastCheckedRecord[lastCheckedKey];
-	const lastCheckedAt =
-		typeof storedLastCheckedAt === "number" &&
-		Number.isFinite(storedLastCheckedAt) &&
-		storedLastCheckedAt <= checkedAt
-			? storedLastCheckedAt
-			: checkedAt - DEADLINE_NOTIFICATION_WINDOW_MS;
-	const candidates = deadlineNotificationCandidates(assignments, rules, checkedAt, lastCheckedAt);
-
-	await dispatchDeadlineNotifications(client.mode, candidates, {
-		isDelivered: async (storageKey) => {
-			const stored = await browser.storage.local.get(storageKey);
-			return Boolean(stored[storageKey]);
-		},
-		deliver: async (candidate) => {
-			await browser.notifications.create(
-				`fuzzy-deadline-${client.mode}-${candidate.assignment.id}-${candidate.rule.id}`,
-				{
-					type: "basic",
-					iconUrl: browser.runtime.getURL("/icon/128.png"),
-					title: `Fuzzy: 締切${candidate.rule.label}`,
-					message: `${candidate.assignment.courseName}「${candidate.assignment.title}」の締切が近づいています。`,
-				},
-			);
-		},
-		markDelivered: async (storageKey) => {
-			await browser.storage.local.set({ [storageKey]: true });
-		},
-	});
-	// API取得や通知処理が失敗した場合はここへ到達しない。前回時刻を進めず、次回に再試行する。
-	await browser.storage.local.set({ [lastCheckedKey]: checkedAt });
-}
-
 // Native Messaging接続（native-host疎通）はbackgroundに集約する（仕様書3.4節）。
 // content script側は lib/api/backgroundApi.ts の BackgroundApiClient から
 // runtimeメッセージでここへ委譲する。
 export default defineBackground(() => {
 	let clientPromise: Promise<FuzzyApiClient> | null = null;
-	let deadlineCheckPromise: Promise<void> | null = null;
 	const getClient = (): Promise<FuzzyApiClient> => {
 		if (!clientPromise) clientPromise = createApiClient();
 		return clientPromise;
 	};
+	const deadlineNotificationMonitor = createDeadlineNotificationMonitor(getClient);
 
 	const checkLatestSyncEvent = async () => {
 		try {
@@ -141,20 +72,6 @@ export default defineBackground(() => {
 		}
 	};
 
-	const checkDeadlineNotifications = () => {
-		if (deadlineCheckPromise) return deadlineCheckPromise;
-		deadlineCheckPromise = (async () => {
-			try {
-				await notifyDueDeadlines(await getClient());
-			} catch (error) {
-				console.warn("[fuzzy] 締切通知の確認に失敗しました", error);
-			} finally {
-				deadlineCheckPromise = null;
-			}
-		})();
-		return deadlineCheckPromise;
-	};
-
 	const startSyncNotificationMonitoring = () => {
 		browser.alarms.create(SYNC_CHECK_ALARM, {
 			periodInMinutes: SYNC_CHECK_INTERVAL_MINUTES,
@@ -162,27 +79,26 @@ export default defineBackground(() => {
 		void checkLatestSyncEvent();
 	};
 
-	const startDeadlineNotificationMonitoring = () => {
-		browser.alarms.create(DEADLINE_CHECK_ALARM, {
-			periodInMinutes: DEADLINE_CHECK_INTERVAL_MINUTES,
-		});
-		void checkDeadlineNotifications();
-	};
-
 	const startNotificationMonitoring = () => {
 		startSyncNotificationMonitoring();
-		startDeadlineNotificationMonitoring();
+		deadlineNotificationMonitor.start();
 	};
 
 	browser.runtime.onInstalled.addListener(startNotificationMonitoring);
 	browser.runtime.onStartup.addListener(startNotificationMonitoring);
 	browser.alarms.onAlarm.addListener((alarm) => {
 		if (alarm.name === SYNC_CHECK_ALARM) void checkLatestSyncEvent();
-		if (alarm.name === DEADLINE_CHECK_ALARM) void checkDeadlineNotifications();
+		if (alarm.name === deadlineNotificationMonitor.alarmName) {
+			void deadlineNotificationMonitor.check();
+		}
 	});
 	startNotificationMonitoring();
 
 	browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+		if (isRuleManagementRequestMessage(message)) {
+			void respondToRuleManagementRequest(getClient(), message).then(sendResponse);
+			return true;
+		}
 		if (!isFuzzyApiRequestMessage(message)) return false;
 
 		void respondToApiRequest(getClient(), message).then(sendResponse);
@@ -222,8 +138,8 @@ async function callBackgroundApi(
 		case "extractZip":
 			return client.extractZip(message.request as ExtractZipRequest);
 		case "getNotificationRules":
-			return getEffectiveNotificationRules(client);
+			return client.getNotificationRules();
 		case "updateNotificationRules":
-			return updateEffectiveNotificationRules(client, message.request as NotificationRule[]);
+			return client.updateNotificationRules(message.request as NotificationRule[]);
 	}
 }

@@ -1,3 +1,4 @@
+import { validateCourseRuleOverride, validateRulePattern } from "../rules";
 import assignmentChanges from "../sample-data/assignment-changes.json" with { type: "json" };
 import courses from "../sample-data/courses.json" with { type: "json" };
 import dashboard from "../sample-data/dashboard.json" with { type: "json" };
@@ -5,13 +6,15 @@ import deadlines from "../sample-data/deadlines.json" with { type: "json" };
 import duplicateGroups from "../sample-data/duplicate-groups.json" with { type: "json" };
 import notificationRules from "../sample-data/notification-rules.json" with { type: "json" };
 import ruleViolations from "../sample-data/rule-violations.json" with { type: "json" };
-import rules from "../sample-data/rules.json" with { type: "json" };
+import sampleRules from "../sample-data/rules.json" with { type: "json" };
 import searchResults from "../sample-data/search-results.json" with { type: "json" };
 import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
 import type {
 	Assignment,
 	AssignmentChange,
 	CheckSimilarFilesRequest,
+	CourseRuleOverride,
+	CourseRuleOverrideInput,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
@@ -20,6 +23,7 @@ import type {
 	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
+	RuleUpdateResult,
 	RuleViolation,
 	SaveFilesRequest,
 	SaveFilesResult,
@@ -27,8 +31,10 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest,
 } from "../types";
-import type { FuzzyApiClient } from "./client";
+import { ApiError, type FuzzyApiClient } from "./client";
 
 const LATENCY_MS = 30;
 const delay = <T>(value: T) =>
@@ -45,6 +51,8 @@ export class MockApiClient implements FuzzyApiClient {
 	// 更新系コマンドの結果をプロセス内に保持し、デモ中の見た目の一貫性を保つ
 	private deadlines: Assignment[] = deadlines as Assignment[];
 	private notificationRules: NotificationRule[] = notificationRules as NotificationRule[];
+	private rules: RuleSet = cloneRuleSet(sampleRules as RuleSet);
+	private ruleMutationQueue: Promise<void> = Promise.resolve();
 
 	async ping(): Promise<boolean> {
 		return delay(true);
@@ -136,7 +144,63 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async getRules(): Promise<RuleSet> {
-		return delay(rules as RuleSet);
+		return delay(cloneRuleSet(this.rules));
+	}
+
+	async updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult> {
+		if (!request || typeof request.patternTemplate !== "string") {
+			throw new ApiError("RULE_CONFLICT", "グローバルルールを入力してください。");
+		}
+		const patternTemplate = request.patternTemplate.trim();
+		const patternError = validateRulePattern(patternTemplate);
+		if (patternError) throw new ApiError("RULE_CONFLICT", patternError);
+
+		return this.enqueueRuleMutation(() => {
+			for (const override of this.rules.courseOverrides) {
+				const consistencyError = validateCourseRuleOverride(override, patternTemplate);
+				if (consistencyError) {
+					throw new ApiError(
+						"RULE_CONFLICT",
+						`${override.courseName}の例外ルールと矛盾しています: ${consistencyError}`,
+					);
+				}
+			}
+			this.rules = { ...this.rules, globalPatternTemplate: patternTemplate };
+		});
+	}
+
+	async updateCourseRuleOverride(
+		request: UpdateCourseRuleOverrideRequest,
+	): Promise<RuleUpdateResult> {
+		if (!request || !Number.isInteger(request.courseId) || request.courseId <= 0) {
+			throw new ApiError("NOT_FOUND", "コースを選択してください。");
+		}
+		const override = normalizeCourseRuleOverrideInput(request.override);
+
+		return this.enqueueRuleMutation(() => {
+			const course = (dashboard as DashboardSummary).courses.find(
+				(candidate) => candidate.courseId === request.courseId,
+			);
+			if (!course) throw new ApiError("NOT_FOUND", "対象のコースが見つかりません。");
+			const consistencyError = validateCourseRuleOverride(
+				override,
+				this.rules.globalPatternTemplate,
+			);
+			if (consistencyError) throw new ApiError("RULE_CONFLICT", consistencyError);
+
+			const nextOverride: CourseRuleOverride = {
+				courseId: request.courseId,
+				courseName: course.courseName,
+				...override,
+			};
+			const existingIndex = this.rules.courseOverrides.findIndex(
+				(candidate) => candidate.courseId === request.courseId,
+			);
+			const courseOverrides = this.rules.courseOverrides.map((candidate) => ({ ...candidate }));
+			if (existingIndex === -1) courseOverrides.push(nextOverride);
+			else courseOverrides[existingIndex] = nextOverride;
+			this.rules = { ...this.rules, courseOverrides };
+		});
 	}
 
 	async getRuleViolations(): Promise<RuleViolation[]> {
@@ -171,4 +235,45 @@ export class MockApiClient implements FuzzyApiClient {
 		}
 		return delay(assignmentChanges as AssignmentChange[]);
 	}
+
+	private async enqueueRuleMutation(mutate: () => void): Promise<RuleUpdateResult> {
+		const operation = this.ruleMutationQueue.then(async () => {
+			mutate();
+			await delay(undefined);
+		});
+		this.ruleMutationQueue = operation.catch(() => undefined);
+		await operation;
+		return { ok: true };
+	}
+}
+
+function normalizeCourseRuleOverrideInput(value: unknown): CourseRuleOverrideInput {
+	if (!value || typeof value !== "object") {
+		throw new ApiError("RULE_CONFLICT", "コース別例外を入力してください。");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.splitBySection !== "boolean") {
+		throw new ApiError("RULE_CONFLICT", "回ごとの整理方法を選択してください。");
+	}
+	if (candidate.patternTemplate !== null && typeof candidate.patternTemplate !== "string") {
+		throw new ApiError("RULE_CONFLICT", "例外ルールを入力してください。");
+	}
+	if (candidate.note !== null && typeof candidate.note !== "string") {
+		throw new ApiError("RULE_CONFLICT", "メモを文字列で入力してください。");
+	}
+	return {
+		splitBySection: candidate.splitBySection,
+		patternTemplate:
+			typeof candidate.patternTemplate === "string"
+				? candidate.patternTemplate.trim() || null
+				: null,
+		note: typeof candidate.note === "string" ? candidate.note.trim() || null : null,
+	};
+}
+
+function cloneRuleSet(rules: RuleSet): RuleSet {
+	return {
+		globalPatternTemplate: rules.globalPatternTemplate,
+		courseOverrides: rules.courseOverrides.map((override) => ({ ...override })),
+	};
 }
