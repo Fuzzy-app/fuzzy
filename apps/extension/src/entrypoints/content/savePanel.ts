@@ -59,7 +59,7 @@ export function mountSavePanel(): void {
 	let awaitingConfirm = false;
 	let loading = true;
 	let saving = false;
-	let isPanelOpen = true;
+	let isPanelOpen = false;
 	let message: string | null = "Moodleページ内の資料を読み込んでいます。";
 
 	injectPanelStyle();
@@ -75,7 +75,7 @@ export function mountSavePanel(): void {
 			snapshot = fullSnapshot;
 			lastSavePath = storedPath;
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadSuggestions(api, snapshot);
+			suggestions = rankSuggestions(await loadSuggestions(api, snapshot));
 			selectedPath = suggestions[0]?.path ?? "";
 			message = null;
 		} catch (error) {
@@ -94,7 +94,7 @@ export function mountSavePanel(): void {
 		try {
 			snapshot = await collectMoodlePageSnapshotWithNestedFolders();
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadSuggestions(api, snapshot);
+			suggestions = rankSuggestions(await loadSuggestions(api, snapshot));
 			selectedPath = suggestions[0]?.path ?? "";
 			message = null;
 		} catch (error) {
@@ -200,6 +200,10 @@ export function mountSavePanel(): void {
 	}
 
 	function render() {
+		// 選択状態の更新でもパネルを再描画するため、現在位置を引き継ぐ。
+		// これがないと、下部の「すべて選択」を押した際にスクロール領域が先頭へ戻る。
+		const previousScrollTop =
+			panel.querySelector<HTMLElement>(".fuzzy-panel-scroll")?.scrollTop ?? 0;
 		panel.classList.toggle("is-collapsed", !isPanelOpen);
 		// 開閉ハンドルは開いている間だけ表示（閉じている間は「Fuzzy」タブで再オープン）。
 		collapseHandle.style.display = isPanelOpen ? "grid" : "none";
@@ -216,17 +220,17 @@ export function mountSavePanel(): void {
 		scroll.className = "fuzzy-panel-scroll";
 		scroll.append(renderHeader());
 		if (message) scroll.append(renderNote());
-		scroll.append(renderFileList(snapshot.files));
-		scroll.append(renderPathSection());
-
 		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
 		const zipFiles = selectedFiles.filter(isZipFile);
+		scroll.append(renderFileList(snapshot.files));
 		if (zipFiles.length > 0)
 			scroll.append(renderZipSection(zipFiles.length, currentDestinationPath()));
+		scroll.append(renderPathSection());
 		if (awaitingConfirm && similarWarnings.length > 0) scroll.append(renderSimilarConfirm());
 		scroll.append(renderActions(selectedFiles, zipFiles));
 
 		panel.append(scroll);
+		scroll.scrollTop = previousScrollTop;
 	}
 
 	function renderOpenTab() {
@@ -277,23 +281,26 @@ export function mountSavePanel(): void {
 		const section = document.createElement("section");
 		section.className = "fuzzy-section";
 		const list = files
-			.map(
-				(file) => `
+			.map((file) => {
+				const type = fileTypeInfo(file);
+				const title = displayFileTitle(file, type.label);
+				return `
 					<label class="fuzzy-file-row">
 						<input type="checkbox" data-file-id="${escapeHtml(fileId(file))}" ${
 							selectedFileIds.has(fileId(file)) ? "checked" : ""
 						} />
-						<span class="fuzzy-file-type" data-kind="${escapeHtml(fileType(file).toLowerCase())}">${escapeHtml(fileType(file).toUpperCase())}</span>
-						<strong>${escapeHtml(file.title)}</strong>
-						<small>${escapeHtml(file.sectionTitle ?? snapshot.sectionTitle ?? "セクション未取得")}</small>
+						<span class="fuzzy-file-type" data-kind="${type.kind}">${escapeHtml(type.label)}</span>
+						<span class="fuzzy-file-details">
+							<strong>${escapeHtml(title)}</strong>
+							<small>${escapeHtml(file.sectionTitle ?? snapshot.sectionTitle ?? "セクション未取得")}</small>
+						</span>
 					</label>
-				`,
-			)
+				`;
+			})
 			.join("");
 		section.innerHTML = `
 			<div class="fuzzy-section-heading">
 				<h3>保存できるファイル（このページ）</h3>
-				<button type="button" data-action="toggle-all">全選択</button>
 			</div>
 			<div class="fuzzy-file-list">${
 				files.length > 0
@@ -312,9 +319,6 @@ export function mountSavePanel(): void {
 				onSelectionChanged();
 			});
 		}
-		section
-			.querySelector<HTMLButtonElement>("[data-action='toggle-all']")
-			?.addEventListener("click", () => toggleAllFiles(files));
 		return section;
 	}
 
@@ -325,22 +329,19 @@ export function mountSavePanel(): void {
 		const suggestionOptions = suggestions
 			.slice(1)
 			.map(
-				(suggestion) => `
+				(suggestion, index) => `
 					<label class="fuzzy-path-option">
 						<input type="radio" name="fuzzy-save-path" value="${escapeHtml(suggestion.path)}" ${
 							isPathChecked(suggestion.path) ? "checked" : ""
 						} />
 						<span>
-							<strong>${escapeHtml(suggestion.path)}</strong>
-							<small>${Math.round(suggestion.confidence * 100)}%</small>
+							<strong>${escapeHtml(displayPath(suggestion.path))}</strong>
+							<small>候補 ${index + 2}位 · 一致度 ${Math.round(suggestion.confidence * 100)}%</small>
 						</span>
 					</label>
 				`,
 			)
 			.join("");
-		const suggestionLabel = primarySuggestion
-			? toShortPathLabel(primarySuggestion.path)
-			: "おすすめの場所";
 		section.innerHTML = `
 			<div class="fuzzy-section-heading"><h3>保存先（提案）</h3></div>
 			${
@@ -350,15 +351,15 @@ export function mountSavePanel(): void {
 							isPathChecked(primarySuggestion.path) ? "checked" : ""
 						} />
 						<span>
-							<strong>${escapeHtml(primarySuggestion.path)}</strong>
-							<small>ルールに一致</small>
+							<strong>${escapeHtml(displayPath(primarySuggestion.path))}</strong>
+							<small>候補 1位 · コースと資料情報から推定 · 一致度 ${Math.round(primarySuggestion.confidence * 100)}%</small>
 						</span>
 						<em>おすすめ</em>
 					</label>`
 					: "<p class='fuzzy-empty'>保存先候補はまだありません。</p>"
 			}
 			<div class="fuzzy-path-chips">
-				<button type="button" data-action="use-suggested" ${primarySuggestion ? "" : "disabled"}>${escapeHtml(suggestionLabel)}</button>
+				<button type="button" data-action="use-suggested" ${primarySuggestion ? "" : "disabled"}>この候補を使う</button>
 				<button type="button" data-action="use-last-path" ${lastSavePath ? "" : "disabled"}>前回と同じ場所</button>
 			</div>
 			<div class="fuzzy-path-list">${suggestions.length > 1 ? suggestionOptions : ""}</div>
@@ -403,9 +404,10 @@ export function mountSavePanel(): void {
 
 	function renderZipSection(zipCount: number, destinationPath: string) {
 		const section = document.createElement("section");
-		section.className = "fuzzy-section";
+		section.className = "fuzzy-section fuzzy-zip-section";
 		section.innerHTML = `
-			<div class="fuzzy-section-heading"><h3>ZIPファイル</h3><span>${zipCount}件</span></div>
+			<div class="fuzzy-section-heading"><h3>ZIP の扱い</h3><span>${zipCount}件</span></div>
+			<p class="fuzzy-section-description">ZIP を展開するか、そのまま保存するかを先に選べます。</p>
 			<label class="fuzzy-path-option">
 				<input type="radio" name="fuzzy-zip-mode" value="extract" ${zipMode === "extract" ? "checked" : ""} />
 				<span><strong>保存後に展開する</strong><small>授業資料としてすぐ使える形にします。</small></span>
@@ -487,12 +489,16 @@ export function mountSavePanel(): void {
 		const actions = document.createElement("div");
 		actions.className = "fuzzy-actions";
 		const targetPath = currentTargetPath();
+		const allSelected = snapshot.files.length > 0 && selectedFileIds.size === snapshot.files.length;
 		const canSave =
 			selectedFiles.length > 0 && targetPath.length > 0 && !saving && !checkingSimilar;
 		actions.innerHTML = `
 			<p data-role="save-summary">${escapeHtml(buildSummaryText(selectedFiles, zipFiles, targetPath, currentDestinationPath()))}</p>
 			<div class="fuzzy-action-meta">
-				<button type="button" data-action="toggle-all-footer">すべて選択 / 解除</button>
+				<button type="button" class="fuzzy-toggle-all-button" data-action="toggle-all-footer">
+					<span aria-hidden="true">${allSelected ? "✓" : "+"}</span>
+					${allSelected ? "すべて解除" : "すべて選択"}
+				</button>
 				<span>選択中: ${selectedFiles.length}件</span>
 			</div>
 			<button type="button" data-action="save" ${canSave ? "" : "disabled"}>
@@ -556,9 +562,9 @@ export function mountSavePanel(): void {
 		if (selectedFiles.length === 0) return "保存する資料を選択してください。";
 		if (targetPath.length === 0) return "保存先を選択してください。";
 		if (zipFiles.length > 0 && zipMode === "extract") {
-			return `${selectedFiles.length}件を保存し、ZIP ${zipFiles.length}件を ${destinationPath} に展開します。`;
+			return `${selectedFiles.length}件を保存し、ZIP ${zipFiles.length}件を ${displayPath(destinationPath)} に展開します。`;
 		}
-		return `${selectedFiles.length}件を ${targetPath} に保存します。`;
+		return `${selectedFiles.length}件を ${displayPath(targetPath)} に保存します。`;
 	}
 
 	function currentTargetPath(): string {
@@ -620,16 +626,74 @@ function fileId(file: MoodleFileLink): string {
 }
 
 function fileType(file: MoodleFileLink): string {
-	return file.mimeHint ?? file.title.split(".").pop()?.toLowerCase() ?? "file";
+	return (
+		fileExtensionFromMimeHint(file.mimeHint) ??
+		fileExtensionFromName(file.title) ??
+		fileExtensionFromName(file.url) ??
+		"file"
+	);
 }
 
 function isZipFile(file: MoodleFileLink): boolean {
 	return fileType(file) === "zip" || /\.zip(?:$|[?#])/i.test(file.url);
 }
 
-function toShortPathLabel(path: string): string {
-	const parts = path.split(/[\\/]+/).filter(Boolean);
-	return parts.length > 0 ? `…/${parts.slice(-2).join("/")}/` : "…/保存先/";
+function rankSuggestions(suggestions: SaveSuggestion[]): SaveSuggestion[] {
+	return [...suggestions]
+		.filter(
+			(suggestion, index, all) => all.findIndex((item) => item.path === suggestion.path) === index,
+		)
+		.sort((a, b) => b.confidence - a.confidence);
+}
+
+function fileTypeInfo(file: MoodleFileLink): { kind: string; label: string } {
+	const kind = fileType(file).toLowerCase();
+	if (kind === "pdf") return { kind, label: "PDF" };
+	if (["doc", "docx"].includes(kind)) return { kind: "document", label: kind.toUpperCase() };
+	if (["ppt", "pptx"].includes(kind)) return { kind: "presentation", label: kind.toUpperCase() };
+	if (["xls", "xlsx", "csv"].includes(kind))
+		return { kind: "spreadsheet", label: kind.toUpperCase() };
+	if (kind === "zip") return { kind, label: "ZIP" };
+	if (["png", "jpg", "jpeg", "gif", "webp"].includes(kind))
+		return { kind: "image", label: kind.toUpperCase() };
+	return { kind: "other", label: /^[a-z0-9]{1,10}$/.test(kind) ? kind.toUpperCase() : "FILE" };
+}
+
+function fileExtensionFromMimeHint(mimeHint: string | null): string | null {
+	const value = mimeHint?.trim().toLowerCase() ?? "";
+	// Moodle の pluginfile.php / resource/view.php はダウンロードURLの経路であり、
+	// 資料のファイル形式ではない。アイコンなど別の情報が取れない限り表示に使わない。
+	if (value === "php") return null;
+	if (/^[a-z0-9]{1,10}$/.test(value)) return value;
+
+	const mimeTypeExtensions: Record<string, string> = {
+		"application/pdf": "pdf",
+		"application/zip": "zip",
+		"application/vnd.google-earth.kmz": "kmz",
+		"application/vnd.google-earth.kml+xml": "kml",
+		"application/gpx+xml": "gpx",
+		"application/vnd.ms-excel": "xls",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+		"image/jpeg": "jpg",
+	};
+	return mimeTypeExtensions[value] ?? null;
+}
+
+function fileExtensionFromName(value: string): string | null {
+	const extension = value.match(/\.([a-z0-9]{1,10})(?:$|[?#])/i)?.[1]?.toLowerCase();
+	return extension === "php" ? null : (extension ?? null);
+}
+
+function displayFileTitle(file: MoodleFileLink, extensionLabel: string): string {
+	const extension = fileExtensionFromName(file.title);
+	if (!extension || extension.toUpperCase() !== extensionLabel) return file.title;
+	return file.title.replace(new RegExp(`\\.${extension}$`, "i"), "");
+}
+
+function displayPath(path: string): string {
+	return path.replace(/[\\/]+/g, "\\");
 }
 
 function escapeHtml(value: string): string {

@@ -33,7 +33,7 @@ export interface MoodlePageSnapshot {
 export const MOODLE_PAGE_SNAPSHOT_MESSAGE = "fuzzy:getMoodlePageSnapshot";
 
 const FILE_EXTENSION_PATTERN =
-	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|png|jpe?g|gif)(?:$|[?#])/i;
+	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|kmz|kml|gpx|png|jpe?g|gif)(?:$|[?#])/i;
 const MOODLE_FILE_PATTERN = /\/pluginfile\.php\/|\/mod\/resource\/view\.php/i;
 const MOODLE_FOLDER_PATTERN = /\/mod\/folder\/view\.php/i;
 const ASSIGNMENT_KEYWORD_PATTERN =
@@ -266,21 +266,50 @@ function extractMimeHint(link: HTMLAnchorElement, url: string): string | null {
 }
 
 function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
-	const activity = link.closest(
-		".activity-item, li.activity, .activity, [data-region='activity-card']",
-	);
-	if (!activity) return null;
+	for (const scope of fileTypeScopes(link)) {
+		// pluginfile.php や resource/view.php は URL から拡張子を取り出せない。
+		// Moodle のテーマ差分を吸収するため、画像だけでなくアイコン文字・alt・クラス名も読む。
+		const elements = [
+			scope,
+			...scope.querySelectorAll<HTMLElement>(
+				"[data-region='activity-icon'], [class*='activityicon'], [class*='file'], img, svg, i",
+			),
+		];
+		for (const element of elements) {
+			const labels = [
+				normalizeText(element.textContent),
+				normalizeText(element.getAttribute("alt")),
+				normalizeText(element.getAttribute("aria-label")),
+				normalizeText(element.getAttribute("title")),
+				normalizeText(element.getAttribute("data-file-type")),
+				normalizeText(element.getAttribute("data-mimetype")),
+				normalizeText(element.getAttribute("class")),
+			];
+			for (const label of labels) {
+				const mimeHint = normalizeMimeLabel(label);
+				if (mimeHint) return mimeHint;
+			}
 
-	const badge = normalizeText(
-		activity.querySelector(".activitybadge, .badge")?.textContent,
-	).toLowerCase();
-	if (badge) return normalizeMimeLabel(badge);
+			const source = element.getAttribute("src") ?? "";
+			const iconName = source.match(
+				/\/(?:f|file)\/([a-z0-9]+)(?:-\d+)?(?:\.(?:svg|png|gif|webp))?(?:[?#]|$)/i,
+			)?.[1];
+			const mimeHint = normalizeMimeLabel(iconName ?? null);
+			if (mimeHint) return mimeHint;
+		}
+	}
 
-	const iconSrc = activity.querySelector<HTMLImageElement>(
-		"[data-region='activity-icon'], img.activityicon",
-	)?.src;
-	const iconMatch = iconSrc?.match(/\/f\/([a-z0-9]+)(?:[/?#]|$)/i);
-	return normalizeMimeLabel(iconMatch?.[1] ?? null);
+	return null;
+}
+
+function fileTypeScopes(link: HTMLAnchorElement): Element[] {
+	const candidates = [
+		link,
+		link.parentElement,
+		link.closest(".activity-item, li.activity, .activity, [data-region='activity-card']"),
+		link.closest("li, tr, .card, .resource, [role='listitem']"),
+	];
+	return candidates.filter((candidate): candidate is Element => candidate !== null);
 }
 
 function normalizeMimeLabel(value: string | null): string | null {
@@ -299,9 +328,17 @@ function normalizeMimeLabel(value: string | null): string | null {
 		xls: "xls",
 		xlsx: "xlsx",
 		zip: "zip",
+		kmz: "kmz",
+		kml: "kml",
+		gpx: "gpx",
 	};
 
-	return aliases[normalized] ?? null;
+	if (aliases[normalized]) return aliases[normalized];
+	if (/(word|ワード|文書)/i.test(normalized)) return "docx";
+	if (/(powerpoint|パワーポイント|プレゼン)/i.test(normalized)) return "pptx";
+	if (/(excel|エクセル|表計算)/i.test(normalized)) return "xlsx";
+	if (/(pdf|ピーディーエフ)/i.test(normalized)) return "pdf";
+	return null;
 }
 
 function extractAssignmentTitle(line: string): string {
