@@ -9,13 +9,10 @@ export type PatternCandidate = {
 	recommended?: boolean;
 };
 
-export type InitialRuleOption = {
-	id: string;
-	name: string;
-	description: string;
-	template: string;
+import type { RulePreset } from "@fuzzy/shared";
+
+export type InitialRuleOption = RulePreset & {
 	preview: string[];
-	recommended?: boolean;
 };
 
 export type CourseOverride = {

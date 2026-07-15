@@ -25,6 +25,7 @@ CREATE TABLE global_rule (
 
 CREATE TABLE course_rule_overrides (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
+	-- コース名はクライアント入力として重複保持せず、course_idからcourses.nameを参照する
 	course_id        INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
 	split_by_section INTEGER NOT NULL DEFAULT 1,
 	pattern_template TEXT,

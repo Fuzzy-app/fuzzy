@@ -18,6 +18,8 @@ import {
 	createApiClient,
 } from "@fuzzy/shared";
 import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
+import { createRuleManagementStore } from "../../lib/rules/state";
+import { type RuleManagementScreen, createRuleManagementScreen } from "./rulesScreen";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -27,7 +29,7 @@ const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "organize";
+type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "rules" | "organize";
 // 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
 // import 時の衝突・混同を避けるため View 用として別名にしている。
 type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -44,11 +46,12 @@ const menuItems: readonly MenuItem[] = [
 	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
 	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
 	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
+	{ id: "rules", label: "整理ルール", enabled: true, description: "issue52" },
 	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
 ];
 
 const placeholderCopy: Record<
-	Exclude<ScreenId, "search" | "dashboard">,
+	Exclude<ScreenId, "search" | "dashboard" | "rules">,
 	{ title: string; copy: string }
 > = {
 	deadlines: {
@@ -286,10 +289,12 @@ export function mountFuzzyShell(): void {
 
 	// --- 状態 ---
 	const apiPromise = createApiClient();
+	const ruleStore = createRuleManagementStore();
 	let page: HTMLElement | null = null;
 	let mainEl: HTMLElement | null = null;
 	let statusBadge: HTMLElement | null = null;
 	let searchScreen: SearchScreen | null = null;
+	let ruleScreen: RuleManagementScreen | null = null;
 	let drawerButton: HTMLAnchorElement | null = null;
 	const sideLinks: HTMLButtonElement[] = [];
 	let isOpen = false;
@@ -612,6 +617,22 @@ export function mountFuzzyShell(): void {
 			renderSearchResults();
 		}
 		return searchScreen;
+	};
+
+	const getRuleScreen = (): RuleManagementScreen => {
+		if (!ruleScreen) {
+			ruleScreen = createRuleManagementScreen({
+				store: ruleStore,
+				loadCourses: async () => {
+					const api = await apiPromise;
+					const summary = await api.getDashboard();
+					setTopMode(api.mode);
+					return summary.courses;
+				},
+			});
+		}
+		ruleScreen.activate();
+		return ruleScreen;
 	};
 
 	const loadAssignments = async () => {
@@ -1077,7 +1098,7 @@ export function mountFuzzyShell(): void {
 	};
 
 	const buildPlaceholderScreen = (
-		screenId: Exclude<ScreenId, "search" | "dashboard">,
+		screenId: Exclude<ScreenId, "search" | "dashboard" | "rules">,
 	): HTMLElement => {
 		const { title, copy } = placeholderCopy[screenId];
 		const screen = el("div", "fuzzy-screen");
@@ -1127,6 +1148,8 @@ export function mountFuzzyShell(): void {
 				});
 			}
 			mainEl.replaceChildren(buildDeadlineScreen());
+		} else if (activeScreen === "rules") {
+			mainEl.replaceChildren(getRuleScreen().root);
 		} else {
 			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
@@ -1413,13 +1436,13 @@ function ensureStyle(): void {
 			gap: 10px;
 			border-bottom: 3px solid transparent;
 			padding: 12px 16px 10px;
-			font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+			font-family: var(--fuzzy-font-family);
 			font-weight: 700;
 		}
 
 		.fuzzy-nav-button:hover,
 		.fuzzy-nav-button.is-active {
-			border-bottom-color: #6c63ff;
+			border-bottom-color: var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-nav-mark {
@@ -1428,8 +1451,8 @@ function ensureStyle(): void {
 			width: 28px;
 			height: 28px;
 			border-radius: 10px;
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 			font-weight: 900;
 			line-height: 1;
 		}
@@ -1446,9 +1469,9 @@ function ensureStyle(): void {
 			overflow: hidden;
 			background:
 				radial-gradient(circle at top left, rgba(108, 99, 255, 0.12), transparent 22%),
-				linear-gradient(180deg, #eef1ff 0%, #f7f8ff 100%);
-			color: #151515;
-			font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+				linear-gradient(180deg, #eef1ff 0%, var(--fuzzy-color-page) 100%);
+			color: var(--fuzzy-color-text-strong);
+			font-family: var(--fuzzy-font-family);
 		}
 
 		.fuzzy-sidebar {
@@ -1456,7 +1479,7 @@ function ensureStyle(): void {
 			grid-template-rows: auto 1fr auto;
 			gap: 24px;
 			padding: 18px 12px;
-			background: #20243a;
+			background: var(--fuzzy-color-text);
 			color: #f4f6ff;
 		}
 
@@ -1495,7 +1518,7 @@ function ensureStyle(): void {
 			background: transparent;
 			color: #c6c9de;
 			font: inherit;
-			font-size: 0.84rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 700;
 			text-align: left;
 			cursor: pointer;
@@ -1503,12 +1526,12 @@ function ensureStyle(): void {
 
 		.fuzzy-side-link.is-active {
 			background: #353b67;
-			color: #ffffff;
+			color: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-side-link.is-disabled {
 			cursor: not-allowed;
-			opacity: 0.52;
+			opacity: 0.65;
 		}
 
 		.fuzzy-side-dot {
@@ -1526,7 +1549,9 @@ function ensureStyle(): void {
 			border-radius: 10px;
 			padding: 12px 10px;
 			background: rgba(255, 255, 255, 0.08);
-			font-size: 0.72rem;
+			font-size: var(--fuzzy-font-size-caption);
+			font-weight: 600;
+			line-height: 1.6;
 		}
 
 		.fuzzy-sidebar-footer p,
@@ -1563,9 +1588,9 @@ function ensureStyle(): void {
 			margin: 0;
 			border-radius: 999px;
 			padding: 6px 12px;
-			background: #dcf9e8;
-			color: #14935b;
-			font-size: 0.74rem;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 		}
 
@@ -1583,10 +1608,10 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 10px;
 			padding: 10px 14px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			color: #515873;
 			font: inherit;
-			font-size: 0.84rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 700;
 			cursor: pointer;
 		}
@@ -1612,8 +1637,8 @@ function ensureStyle(): void {
 		.fuzzy-screen-kicker,
 		.fuzzy-section-label {
 			margin: 0 0 8px;
-			color: #61688c;
-			font-size: 0.75rem;
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 		}
 
@@ -1637,8 +1662,8 @@ function ensureStyle(): void {
 		.fuzzy-empty {
 			padding: 16px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-search-tabs {
@@ -1651,7 +1676,7 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 10px;
 			padding: 8px 14px;
-			background: #eef0fb;
+			background: var(--fuzzy-color-surface-muted);
 			color: #515873;
 			font: inherit;
 			font-size: 0.8rem;
@@ -1659,7 +1684,7 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-chip.is-active {
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			color: #171a27;
 			box-shadow: inset 0 0 0 1px #e0e4fb;
 		}
@@ -1675,17 +1700,17 @@ function ensureStyle(): void {
 			display: flex;
 			align-items: center;
 			gap: 12px;
-			border: 2px solid #6c63ff;
+			border: 2px solid var(--fuzzy-color-primary);
 			border-radius: 14px;
 			padding: 12px 14px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-search-dot {
 			width: 14px;
 			height: 14px;
 			border-radius: 5px;
-			background: #6c63ff;
+			background: var(--fuzzy-color-primary);
 			flex: 0 0 auto;
 		}
 
@@ -1695,7 +1720,7 @@ function ensureStyle(): void {
 			border: 0;
 			outline: 0;
 			background: transparent;
-			color: #151515;
+			color: var(--fuzzy-color-text-strong);
 			font: inherit;
 			font-size: 1rem;
 			font-weight: 800;
@@ -1705,8 +1730,8 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 12px;
 			padding: 12px 22px;
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 			font: inherit;
 			font-weight: 800;
 			cursor: pointer;
@@ -1750,7 +1775,7 @@ function ensureStyle(): void {
 			width: 14px;
 			height: 14px;
 			border-radius: 50%;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-search-layout {
@@ -1772,7 +1797,7 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 12px;
 			padding: 14px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: inset 0 0 0 1px #eceefd;
 			color: inherit;
 			text-align: left;
@@ -1780,8 +1805,8 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-result-row.is-selected {
-			box-shadow: inset 0 0 0 2px #6c63ff;
-			background: #f7f8ff;
+			box-shadow: inset 0 0 0 2px var(--fuzzy-color-primary);
+			background: var(--fuzzy-color-page);
 		}
 
 		.fuzzy-result-kind {
@@ -1790,7 +1815,7 @@ function ensureStyle(): void {
 			border-radius: 8px;
 			padding: 8px 0;
 			background: #ff6b6b;
-			color: #ffffff;
+			color: var(--fuzzy-color-surface);
 			font-size: 0.68rem;
 			font-weight: 900;
 		}
@@ -1819,7 +1844,7 @@ function ensureStyle(): void {
 
 		.fuzzy-result-sub {
 			margin-top: 4px;
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.74rem;
 			font-weight: 700;
 		}
@@ -1834,7 +1859,7 @@ function ensureStyle(): void {
 			display: grid;
 			gap: 8px;
 			justify-items: end;
-			color: #6c63ff;
+			color: var(--fuzzy-color-primary);
 			font-size: 0.78rem;
 			font-weight: 900;
 		}
@@ -1848,7 +1873,7 @@ function ensureStyle(): void {
 		.fuzzy-search-note {
 			background:
 				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
-				#ffffff;
+				var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-search-note h2,
@@ -1878,7 +1903,7 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-note-grid dt {
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -1899,11 +1924,11 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-metric-card.is-warn {
-			background: #fff8df;
+			background: var(--fuzzy-color-warning-soft);
 		}
 
 		.fuzzy-metric-card.is-soft {
-			background: #f4f5fb;
+			background: var(--fuzzy-color-background);
 		}
 
 		.fuzzy-metric-label {
@@ -1927,13 +1952,13 @@ function ensureStyle(): void {
 			gap: 14px;
 			padding: 14px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-dashboard-cache-note {
 			margin: 0;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 			line-height: 1.6;
@@ -1951,14 +1976,14 @@ function ensureStyle(): void {
 			gap: 16px;
 			padding: 16px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-dashboard-course.is-warn {
 			box-shadow:
 				inset 4px 0 0 #f2bd41,
-				0 10px 28px rgba(58, 69, 120, 0.08);
+				var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-dashboard-course-head {
@@ -1978,7 +2003,7 @@ function ensureStyle(): void {
 			flex: 0 0 auto;
 			border-radius: 999px;
 			padding: 6px 10px;
-			background: #eef0fb;
+			background: var(--fuzzy-color-surface-muted);
 			color: #5b61a0;
 			font-size: 0.74rem;
 			font-weight: 900;
@@ -1997,7 +2022,7 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-dashboard-course-details dt {
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -2015,8 +2040,8 @@ function ensureStyle(): void {
 			border-radius: 14px;
 			background:
 				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
-				#ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+				var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-sync-head {
@@ -2044,8 +2069,8 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 999px;
 			padding: 8px 12px;
-			background: #eef0fb;
-			color: #59607d;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
 			font: inherit;
 			font-size: 0.78rem;
 			font-weight: 800;
@@ -2070,7 +2095,7 @@ function ensureStyle(): void {
 
 		.fuzzy-sync-meta,
 		.fuzzy-change-field {
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 		}
@@ -2090,13 +2115,13 @@ function ensureStyle(): void {
 			padding: 10px 12px;
 			background: rgba(255, 255, 255, 0.72);
 			box-shadow: inset 0 0 0 1px #eceefd;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 		}
 
 		.fuzzy-sync-count strong {
-			color: #151515;
+			color: var(--fuzzy-color-text-strong);
 			font-size: 1.2rem;
 			font-weight: 900;
 		}
@@ -2108,7 +2133,7 @@ function ensureStyle(): void {
 
 		.fuzzy-change-list-label {
 			margin: 0;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.8rem;
 			font-weight: 800;
 		}
@@ -2120,7 +2145,7 @@ function ensureStyle(): void {
 			align-items: center;
 			border-radius: 12px;
 			padding: 12px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: inset 0 0 0 1px #eceefd;
 		}
 
@@ -2139,19 +2164,19 @@ function ensureStyle(): void {
 		.fuzzy-change-value {
 			border-radius: 10px;
 			padding: 8px 10px;
-			background: #f4f5fb;
+			background: var(--fuzzy-color-background);
 			font-size: 0.78rem;
 			font-weight: 800;
 			line-height: 1.5;
 		}
 
 		.fuzzy-change-value.is-new {
-			background: #dcf9e8;
-			color: #14935b;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success);
 		}
 
 		.fuzzy-change-arrow {
-			color: #6c63ff;
+			color: var(--fuzzy-color-primary);
 			font-weight: 900;
 		}
 
@@ -2160,8 +2185,8 @@ function ensureStyle(): void {
 			gap: 6px;
 			border-radius: 12px;
 			padding: 12px;
-			background: #fff0ec;
-			color: #b43d24;
+			background: var(--fuzzy-color-danger-soft);
+			color: var(--fuzzy-color-danger);
 			font-size: 0.86rem;
 			font-weight: 800;
 			line-height: 1.7;
@@ -2170,8 +2195,8 @@ function ensureStyle(): void {
 		.fuzzy-deadline-toolbar {
 			padding: 14px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-filter-row {
@@ -2185,8 +2210,8 @@ function ensureStyle(): void {
 			border: 0;
 			border-radius: 999px;
 			padding: 8px 14px;
-			background: #eef0fb;
-			color: #59607d;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
 			font: inherit;
 			font-size: 0.8rem;
 			font-weight: 800;
@@ -2194,13 +2219,13 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-filter-chip.is-active {
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-toolbar-copy {
 			margin: 0;
-			color: #636b8b;
+			color: var(--fuzzy-color-text-muted);
 			font-size: 0.84rem;
 			line-height: 1.7;
 		}
@@ -2213,18 +2238,18 @@ function ensureStyle(): void {
 		.fuzzy-deadline-card {
 			padding: 16px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-deadline-card.is-review {
-			background: #fff8df;
+			background: var(--fuzzy-color-warning-soft);
 		}
 
 		.fuzzy-deadline-card.is-overdue {
 			box-shadow:
 				inset 4px 0 0 #ff8a5b,
-				0 10px 28px rgba(58, 69, 120, 0.08);
+				var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-deadline-card.is-submitted {
@@ -2240,7 +2265,7 @@ function ensureStyle(): void {
 
 		.fuzzy-course-name {
 			margin: 0 0 4px;
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -2261,7 +2286,7 @@ function ensureStyle(): void {
 		.fuzzy-badge {
 			border-radius: 999px;
 			padding: 6px 10px;
-			background: #eef0fb;
+			background: var(--fuzzy-color-surface-muted);
 			font-size: 0.74rem;
 			font-weight: 800;
 		}
@@ -2290,7 +2315,7 @@ function ensureStyle(): void {
 
 		.fuzzy-deadline-label {
 			margin: 0;
-			color: #7a81a1;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.76rem;
 			font-weight: 800;
 		}
@@ -2340,9 +2365,9 @@ function ensureStyle(): void {
 		.fuzzy-error-panel {
 			padding: 16px;
 			border-radius: 14px;
-			background: #fff0ec;
-			color: #b43d24;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-danger-soft);
+			color: var(--fuzzy-color-danger);
+			box-shadow: var(--fuzzy-shadow-card);
 			font-size: 0.9rem;
 			font-weight: 800;
 			line-height: 1.7;
@@ -2364,7 +2389,7 @@ function ensureStyle(): void {
 			border-radius: 999px;
 			padding: 6px 12px;
 			background: rgba(180, 61, 36, 0.12);
-			color: #b43d24;
+			color: var(--fuzzy-color-danger);
 			font: inherit;
 			font-size: 0.78rem;
 			font-weight: 800;

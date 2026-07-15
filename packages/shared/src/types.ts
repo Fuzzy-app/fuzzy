@@ -117,6 +117,25 @@ export interface RuleSet {
 	courseOverrides: CourseRuleOverride[];
 }
 
+export interface UpdateGlobalRuleRequest {
+	patternTemplate: string;
+}
+
+export interface CourseRuleOverrideInput {
+	splitBySection: boolean;
+	patternTemplate: string | null;
+	note: string | null;
+}
+
+export interface UpdateCourseRuleOverrideRequest {
+	courseId: number;
+	override: CourseRuleOverrideInput;
+}
+
+export interface RuleUpdateResult {
+	ok: true;
+}
+
 export interface RuleViolation {
 	fileId: number;
 	fileName: string;

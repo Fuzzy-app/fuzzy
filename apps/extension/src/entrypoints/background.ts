@@ -1,6 +1,6 @@
 import {
-	type DataSyncEvent,
 	type CheckSimilarFilesRequest,
+	type DataSyncEvent,
 	type ExtractZipRequest,
 	type FuzzyApiClient,
 	type SaveFilesRequest,
@@ -12,6 +12,10 @@ import {
 	type FuzzyApiResponseMessage,
 	isFuzzyApiRequestMessage,
 } from "../lib/api/backgroundApi";
+import {
+	isRuleManagementRequestMessage,
+	respondToRuleManagementRequest,
+} from "../lib/rules/backgroundApi";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
@@ -41,7 +45,8 @@ async function notifyWhenSyncEventIsNew(client: FuzzyApiClient): Promise<void> {
 		type: "basic",
 		iconUrl: browser.runtime.getURL("/icon/128.png"),
 		title: "Fuzzy: Moodleデータを取得しました",
-		message: total > 0 ? `変更が${total}件あります。締切ハブで確認できます。` : "変更はありません。",
+		message:
+			total > 0 ? `変更が${total}件あります。締切ハブで確認できます。` : "変更はありません。",
 	});
 	await browser.storage.local.set({ [storageKey]: event.id });
 }
@@ -79,6 +84,10 @@ export default defineBackground(() => {
 	startSyncNotificationMonitoring();
 
 	browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+		if (isRuleManagementRequestMessage(message)) {
+			void respondToRuleManagementRequest(getClient(), message).then(sendResponse);
+			return true;
+		}
 		if (!isFuzzyApiRequestMessage(message)) return false;
 
 		void respondToApiRequest(getClient(), message).then(sendResponse);
