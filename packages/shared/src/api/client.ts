@@ -9,6 +9,8 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolation,
@@ -64,7 +66,7 @@ export interface FuzzyApiClient {
 
 	getNotificationRules(): Promise<NotificationRule[]>;
 
-	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }>;
+	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult>;
 
 	/** 直近の同期（Moodleからのデータ取得）結果。データ取得通知の表示に使う。同期実績が無ければnull */
 	getLatestSyncEvent(): Promise<DataSyncEvent | null>;

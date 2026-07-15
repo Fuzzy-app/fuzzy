@@ -1,4 +1,13 @@
-import type { Assignment, FuzzyApiClient, NotificationRule } from "@fuzzy/shared";
+import {
+	type Assignment,
+	type FuzzyApiClient,
+	MAX_NOTIFICATION_OFFSET_DAYS,
+	type NotificationOffsetUnit,
+	type NotificationRule,
+	type NotificationRuleInput,
+	notificationOffsetMinutes,
+	notificationRuleLabel,
+} from "@fuzzy/shared";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
 import {
 	buildDeadlineIcs,
@@ -42,6 +51,9 @@ export function createCalendarPanelController(
 	let errorMessage: string | null = null;
 	let errorKind: ErrorKind = "load";
 	let exportMessage: string | null = null;
+	let customAmount = "30";
+	let customUnit: NotificationOffsetUnit = "minutes";
+	let customError: string | null = null;
 
 	const ensureNotificationRulesLoaded = (): void => {
 		if (loadState !== "idle") return;
@@ -68,24 +80,72 @@ export function createCalendarPanelController(
 		options.onChange();
 	};
 
-	const updateRule = async (ruleId: number, enabled: boolean): Promise<void> => {
-		if (saving) return;
+	const saveRules = async (
+		nextRules: NotificationRuleInput[],
+		optimisticRules: NotificationRule[] | null,
+	): Promise<boolean> => {
+		if (saving) return false;
 		const previousRules = rules;
-		rules = rules.map((rule) => (rule.id === ruleId ? { ...rule, enabled } : rule));
+		if (optimisticRules) rules = optimisticRules;
 		saving = true;
 		errorMessage = null;
 		options.onChange();
 
 		try {
-			const result = await api.updateNotificationRules(rules);
+			const result = await api.updateNotificationRules(nextRules);
 			if (!result.ok) throw new Error("通知設定を保存できませんでした");
+			rules = result.rules;
+			loadState = "loaded";
+			return true;
 		} catch (error) {
 			rules = previousRules;
 			loadState = "error";
 			errorKind = "save";
 			errorMessage = error instanceof Error ? error.message : "通知設定を保存できませんでした";
+			return false;
 		} finally {
 			saving = false;
+			options.onChange();
+		}
+	};
+
+	const updateRule = (ruleId: number, enabled: boolean): Promise<boolean> => {
+		const nextRules = rules.map((rule) => (rule.id === ruleId ? { ...rule, enabled } : rule));
+		return saveRules(nextRules.map(toNotificationRuleInput), nextRules);
+	};
+
+	const deleteRule = (ruleId: number): Promise<boolean> => {
+		const nextRules = rules.filter((rule) => rule.id !== ruleId);
+		return saveRules(nextRules.map(toNotificationRuleInput), nextRules);
+	};
+
+	const addCustomRule = async (): Promise<void> => {
+		const amount = Number(customAmount);
+		const offsetMinutes = notificationOffsetMinutes(amount, customUnit);
+		if (offsetMinutes === null) {
+			customError = `0以上の整数で、${MAX_NOTIFICATION_OFFSET_DAYS}日前以内になる値を入力してください。`;
+			options.onChange();
+			return;
+		}
+		if (rules.some((rule) => rule.offsetMinutes === offsetMinutes)) {
+			customError = `${notificationRuleLabel(offsetMinutes)}はすでに登録されています。`;
+			options.onChange();
+			return;
+		}
+
+		customError = null;
+		const saved = await saveRules(
+			[
+				...rules.map(toNotificationRuleInput),
+				{
+					offsetMinutes,
+					enabled: true,
+				},
+			],
+			null,
+		);
+		if (saved) {
+			customAmount = "30";
 			options.onChange();
 		}
 	};
@@ -146,7 +206,7 @@ export function createCalendarPanelController(
 		} else if (loadState === "error" && errorMessage) {
 			area.append(buildError());
 		} else {
-			area.append(buildRuleList());
+			area.append(buildRuleList(), buildCustomRuleForm());
 			if (saving) {
 				area.append(element("p", "fuzzy-calendar-status", "通知設定を保存しています…"));
 			}
@@ -176,7 +236,8 @@ export function createCalendarPanelController(
 	const buildRuleList = (): HTMLElement => {
 		const list = element("div", "fuzzy-notification-rule-list");
 		for (const rule of rules) {
-			const label = element("label", "fuzzy-notification-rule");
+			const item = element("div", "fuzzy-notification-rule");
+			const label = element("label", "fuzzy-notification-toggle");
 			const copy = element("span");
 			copy.append(element("strong", "", rule.label), element("small", "", "通知する"));
 			const checkbox = element("input");
@@ -189,12 +250,82 @@ export function createCalendarPanelController(
 				void updateRule(rule.id, checkbox.checked);
 			});
 			label.append(copy, checkbox);
-			list.append(label);
+			const deleteButton = element("button", "fuzzy-notification-delete", "削除");
+			deleteButton.type = "button";
+			deleteButton.disabled = saving;
+			deleteButton.setAttribute("aria-label", `${rule.label}の通知を削除`);
+			deleteButton.addEventListener("click", () => {
+				void deleteRule(rule.id);
+			});
+			item.append(label, deleteButton);
+			list.append(item);
 		}
 		return list;
 	};
 
+	const buildCustomRuleForm = (): HTMLElement => {
+		const form = element("form", "fuzzy-notification-custom");
+		form.append(element("strong", "", "任意のタイミングを追加"));
+		const fields = element("div", "fuzzy-notification-custom-fields");
+		const amountInput = element("input");
+		amountInput.type = "number";
+		amountInput.min = "0";
+		amountInput.step = "1";
+		amountInput.value = customAmount;
+		amountInput.disabled = saving;
+		amountInput.setAttribute("aria-label", "通知タイミングの数値");
+		amountInput.addEventListener("input", () => {
+			customAmount = amountInput.value;
+		});
+		const unitSelect = element("select");
+		unitSelect.disabled = saving;
+		unitSelect.setAttribute("aria-label", "通知タイミングの単位");
+		for (const [value, label] of [
+			["minutes", "分前"],
+			["hours", "時間前"],
+			["days", "日前"],
+		] as const) {
+			const option = element("option", "", label);
+			option.value = value;
+			option.selected = value === customUnit;
+			unitSelect.append(option);
+		}
+		unitSelect.addEventListener("change", () => {
+			customUnit = unitSelect.value as NotificationOffsetUnit;
+		});
+		const addButton = element("button", "fuzzy-calendar-button", "追加");
+		addButton.type = "submit";
+		addButton.disabled = saving;
+		fields.append(amountInput, unitSelect, addButton);
+		form.append(
+			fields,
+			element(
+				"small",
+				"",
+				`0なら締切時刻、最大${MAX_NOTIFICATION_OFFSET_DAYS}日前まで設定できます。`,
+			),
+		);
+		if (customError) {
+			const error = element("p", "fuzzy-notification-custom-error", customError);
+			error.setAttribute("aria-live", "polite");
+			form.append(error);
+		}
+		form.addEventListener("submit", (event) => {
+			event.preventDefault();
+			void addCustomRule();
+		});
+		return form;
+	};
+
 	return { ensureNotificationRulesLoaded, render };
+}
+
+function toNotificationRuleInput(rule: NotificationRule): NotificationRuleInput {
+	return {
+		id: rule.id,
+		offsetMinutes: rule.offsetMinutes,
+		enabled: rule.enabled,
+	};
 }
 
 function downloadIcsFile(content: string, fileName: string): void {

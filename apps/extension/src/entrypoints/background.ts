@@ -3,7 +3,7 @@ import {
 	type DataSyncEvent,
 	type ExtractZipRequest,
 	type FuzzyApiClient,
-	type NotificationRule,
+	type NotificationRuleInput,
 	type SaveFilesRequest,
 	type SuggestSavePathRequest,
 	createApiClient,
@@ -140,6 +140,6 @@ async function callBackgroundApi(
 		case "getNotificationRules":
 			return client.getNotificationRules();
 		case "updateNotificationRules":
-			return client.updateNotificationRules(message.request as NotificationRule[]);
+			return client.updateNotificationRules(message.request as NotificationRuleInput[]);
 	}
 }

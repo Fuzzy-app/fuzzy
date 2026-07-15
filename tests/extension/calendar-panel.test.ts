@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { Assignment, NotificationRule } from "@fuzzy/shared";
+import {
+	type Assignment,
+	type NotificationRule,
+	type NotificationRuleInput,
+	notificationRuleLabel,
+} from "@fuzzy/shared";
 import { parseHTML } from "linkedom";
 import { createCalendarPanelController } from "../../apps/extension/src/entrypoints/content/calendarPanel";
 
@@ -29,13 +34,13 @@ describe("カレンダー・通知設定パネル", () => {
 			HTMLElement: window.HTMLElement,
 			HTMLInputElement: window.HTMLInputElement,
 		});
-		const updates: NotificationRule[][] = [];
+		const updates: NotificationRuleInput[][] = [];
 		const api = {
 			mode: "mock" as const,
 			getNotificationRules: async () => rules,
-			updateNotificationRules: async (nextRules: NotificationRule[]) => {
+			updateNotificationRules: async (nextRules: NotificationRuleInput[]) => {
 				updates.push(nextRules);
-				return { ok: true };
+				return { ok: true, rules: normalizeRules(nextRules) };
 			},
 		};
 		const controller = createCalendarPanelController({
@@ -62,6 +67,68 @@ describe("カレンダー・通知設定パネル", () => {
 		expect(updates[0]?.find((rule) => rule.id === 1)?.enabled).toBe(false);
 	});
 
+	test("任意の相対時間を追加し、保存側が採番したルールを削除できる", async () => {
+		const { document, window } = parseHTML("<html><head></head><body></body></html>");
+		Object.assign(globalThis, {
+			document,
+			window,
+			HTMLElement: window.HTMLElement,
+			HTMLInputElement: window.HTMLInputElement,
+		});
+		const updates: NotificationRuleInput[][] = [];
+		const api = {
+			mode: "mock" as const,
+			getNotificationRules: async () => rules,
+			updateNotificationRules: async (nextRules: NotificationRuleInput[]) => {
+				updates.push(nextRules);
+				return { ok: true, rules: normalizeRules(nextRules) };
+			},
+		};
+		const controller = createCalendarPanelController({
+			api,
+			onChange: () => undefined,
+		});
+
+		controller.ensureNotificationRulesLoaded();
+		await nextTask();
+		const panel = controller.render([assignment]);
+		document.body.append(panel);
+		const amount = panel.querySelector<HTMLInputElement>(
+			'input[aria-label="通知タイミングの数値"]',
+		);
+		const unit = panel.querySelector<HTMLSelectElement>(
+			'select[aria-label="通知タイミングの単位"]',
+		);
+		const form = panel.querySelector<HTMLFormElement>(".fuzzy-notification-custom");
+		expect(amount).not.toBeNull();
+		expect(unit).not.toBeNull();
+		expect(form).not.toBeNull();
+		if (!amount || !unit || !form) return;
+		amount.value = "2";
+		amount.dispatchEvent(new window.Event("input"));
+		for (const option of unit.querySelectorAll("option")) option.removeAttribute("selected");
+		unit.querySelector('option[value="days"]')?.setAttribute("selected", "");
+		unit.dispatchEvent(new window.Event("change"));
+		form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+		await nextTask();
+
+		expect(updates).toHaveLength(1);
+		expect(updates[0]?.at(-1)).toEqual({
+			offsetMinutes: 2880,
+			enabled: true,
+		});
+
+		const updatedPanel = controller.render([assignment]);
+		const deleteButton = updatedPanel.querySelector<HTMLButtonElement>(
+			'button[aria-label="2日前の通知を削除"]',
+		);
+		expect(deleteButton).not.toBeNull();
+		deleteButton?.click();
+		await nextTask();
+		expect(updates).toHaveLength(2);
+		expect(updates[1]?.some((rule) => rule.offsetMinutes === 2880)).toBe(false);
+	});
+
 	test("対象課題だけをICSとしてダウンロード処理へ渡す", async () => {
 		const { document, window } = parseHTML("<html><head></head><body></body></html>");
 		Object.assign(globalThis, {
@@ -75,7 +142,10 @@ describe("カレンダー・通知設定パネル", () => {
 			api: {
 				mode: "native" as const,
 				getNotificationRules: async () => rules,
-				updateNotificationRules: async () => ({ ok: true }),
+				updateNotificationRules: async (nextRules) => ({
+					ok: true,
+					rules: normalizeRules(nextRules),
+				}),
 			},
 			onChange: () => undefined,
 			now: () => Date.parse("2026-07-14T00:00:00.000Z"),
@@ -99,4 +169,12 @@ describe("カレンダー・通知設定パネル", () => {
 
 function nextTask(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function normalizeRules(inputs: NotificationRuleInput[]): NotificationRule[] {
+	return inputs.map((rule, index) => ({
+		...rule,
+		id: rule.id ?? 100 + index,
+		label: notificationRuleLabel(rule.offsetMinutes),
+	}));
 }

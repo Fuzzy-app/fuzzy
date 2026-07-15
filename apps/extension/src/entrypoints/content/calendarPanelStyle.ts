@@ -68,34 +68,95 @@ export function ensureCalendarPanelStyle(): void {
 		.fuzzy-notification-rule {
 			display: flex;
 			align-items: center;
-			justify-content: space-between;
 			gap: 10px;
 			border: 1px solid var(--fuzzy-color-border);
 			border-radius: 12px;
 			padding: 10px 12px;
 			background: var(--fuzzy-color-page);
+		}
+
+		.fuzzy-notification-toggle {
+			display: flex;
+			flex: 1;
+			align-items: center;
+			justify-content: space-between;
+			gap: 10px;
 			cursor: pointer;
 		}
 
-		.fuzzy-notification-rule span {
+		.fuzzy-notification-toggle span {
 			display: grid;
 			gap: 2px;
 		}
 
-		.fuzzy-notification-rule strong {
+		.fuzzy-notification-toggle strong {
 			font-size: var(--fuzzy-font-size-small);
 		}
 
-		.fuzzy-notification-rule small {
+		.fuzzy-notification-toggle small,
+		.fuzzy-notification-custom small {
 			color: var(--fuzzy-color-text-subtle);
 			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 700;
 		}
 
-		.fuzzy-notification-rule input {
+		.fuzzy-notification-toggle input {
 			width: 18px;
 			height: 18px;
 			accent-color: var(--fuzzy-color-primary);
+		}
+
+		.fuzzy-notification-delete {
+			border: 0;
+			padding: 4px;
+			background: transparent;
+			color: var(--fuzzy-color-danger);
+			font: inherit;
+			font-size: var(--fuzzy-font-size-caption);
+			font-weight: 800;
+			cursor: pointer;
+		}
+
+		.fuzzy-notification-delete:disabled {
+			cursor: not-allowed;
+			opacity: 0.6;
+		}
+
+		.fuzzy-notification-custom {
+			display: grid;
+			gap: 7px;
+			border-top: 1px solid var(--fuzzy-color-border);
+			padding-top: 12px;
+		}
+
+		.fuzzy-notification-custom > strong {
+			font-size: var(--fuzzy-font-size-small);
+		}
+
+		.fuzzy-notification-custom-fields {
+			display: grid;
+			grid-template-columns: minmax(80px, 1fr) minmax(100px, 1fr) auto;
+			gap: 8px;
+		}
+
+		.fuzzy-notification-custom input,
+		.fuzzy-notification-custom select {
+			min-width: 0;
+			border: 1px solid var(--fuzzy-color-border);
+			border-radius: 10px;
+			padding: 9px 10px;
+			background: var(--fuzzy-color-surface);
+			color: var(--fuzzy-color-text);
+			font: inherit;
+			font-size: var(--fuzzy-font-size-small);
+			font-weight: 700;
+		}
+
+		.fuzzy-notification-custom-error {
+			margin: 0;
+			color: var(--fuzzy-color-danger);
+			font-size: var(--fuzzy-font-size-caption);
+			font-weight: 800;
 		}
 
 		.fuzzy-calendar-button {
@@ -121,7 +182,10 @@ export function ensureCalendarPanelStyle(): void {
 		}
 
 		.fuzzy-calendar-button:focus,
-		.fuzzy-notification-rule input:focus {
+		.fuzzy-notification-toggle input:focus,
+		.fuzzy-notification-delete:focus,
+		.fuzzy-notification-custom input:focus,
+		.fuzzy-notification-custom select:focus {
 			outline: 3px solid var(--fuzzy-focus-ring);
 			outline-offset: 2px;
 		}
@@ -161,6 +225,14 @@ export function ensureCalendarPanelStyle(): void {
 			.fuzzy-calendar-export,
 			.fuzzy-notification-rule-list {
 				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-notification-custom-fields {
+				grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+			}
+
+			.fuzzy-notification-custom-fields .fuzzy-calendar-button {
+				grid-column: 1 / -1;
 			}
 		}
 	`;

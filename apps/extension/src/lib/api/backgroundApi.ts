@@ -12,6 +12,8 @@ import type {
 	ExtractZipResult,
 	FuzzyApiClient,
 	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	SaveFilesRequest,
 	SaveFilesResult,
 	SaveSuggestion,
@@ -87,7 +89,7 @@ export class BackgroundApiClient implements BackgroundApi {
 		return this.#call("getNotificationRules", {});
 	}
 
-	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
+	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult> {
 		return this.#call("updateNotificationRules", rules);
 	}
 

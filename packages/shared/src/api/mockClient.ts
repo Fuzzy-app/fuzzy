@@ -1,3 +1,4 @@
+import { isValidNotificationOffsetMinutes, notificationRuleLabel } from "../notificationRules";
 import { validateCourseRuleOverride, validateRulePattern } from "../rules";
 import assignmentChanges from "../sample-data/assignment-changes.json" with { type: "json" };
 import courses from "../sample-data/courses.json" with { type: "json" };
@@ -22,6 +23,8 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolation,
@@ -50,7 +53,14 @@ export class MockApiClient implements FuzzyApiClient {
 
 	// 更新系コマンドの結果をプロセス内に保持し、デモ中の見た目の一貫性を保つ
 	private deadlines: Assignment[] = deadlines as Assignment[];
-	private notificationRules: NotificationRule[] = notificationRules as NotificationRule[];
+	private notificationRules: NotificationRule[] = (notificationRules as NotificationRule[]).map(
+		(rule) => ({
+			...rule,
+			label: notificationRuleLabel(rule.offsetMinutes),
+		}),
+	);
+	private nextNotificationRuleId =
+		this.notificationRules.reduce((max, rule) => Math.max(max, rule.id), 0) + 1;
 	private rules: RuleSet = cloneRuleSet(sampleRules as RuleSet);
 	private ruleMutationQueue: Promise<void> = Promise.resolve();
 
@@ -212,12 +222,38 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async getNotificationRules(): Promise<NotificationRule[]> {
-		return delay(this.notificationRules);
+		return delay(this.notificationRules.map((rule) => ({ ...rule })));
 	}
 
-	async updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
-		this.notificationRules = rules;
-		return delay({ ok: true });
+	async updateNotificationRules(
+		rules: NotificationRuleInput[],
+	): Promise<NotificationRuleUpdateResult> {
+		const knownIds = new Set(this.notificationRules.map((rule) => rule.id));
+		const offsets = new Set<number>();
+		for (const rule of rules) {
+			if (typeof rule.enabled !== "boolean") {
+				throw new ApiError("RULE_CONFLICT", "通知の有効・無効を選択してください。");
+			}
+			if (!isValidNotificationOffsetMinutes(rule.offsetMinutes)) {
+				throw new ApiError(
+					"RULE_CONFLICT",
+					"通知タイミングは締切時刻から365日前までの整数で指定してください。",
+				);
+			}
+			if (offsets.has(rule.offsetMinutes)) {
+				throw new ApiError("RULE_CONFLICT", "同じ通知タイミングは重複して登録できません。");
+			}
+			if (rule.id !== undefined && !knownIds.has(rule.id)) {
+				throw new ApiError("NOT_FOUND", "更新対象の通知ルールが見つかりません。");
+			}
+			offsets.add(rule.offsetMinutes);
+		}
+		this.notificationRules = rules.map((rule) => ({
+			...rule,
+			id: rule.id ?? this.nextNotificationRuleId++,
+			label: notificationRuleLabel(rule.offsetMinutes),
+		}));
+		return delay({ ok: true, rules: this.notificationRules.map((rule) => ({ ...rule })) });
 	}
 
 	async getLatestSyncEvent(): Promise<DataSyncEvent | null> {
