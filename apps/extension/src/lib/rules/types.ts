@@ -1,50 +1,15 @@
-/**
- * ルール管理画面が利用する拡張機能内の型境界。
- * native-host 接続時も画面側はこの形を維持し、API アダプターだけを差し替える。
- */
-export interface CourseRuleOverride {
-	courseId: number;
-	courseName: string;
-	splitBySection: boolean;
-	patternTemplate: string | null;
-	note: string | null;
-}
+import type {
+	FuzzyApiClient,
+	RuleSet,
+	UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest,
+} from "@fuzzy/shared";
 
-export interface RuleSet {
-	globalPatternTemplate: string;
-	courseOverrides: CourseRuleOverride[];
-}
-
-export interface UpdateGlobalRuleRequest {
-	patternTemplate: string;
-}
-
-export interface CourseRuleOverrideInput {
-	courseName: string;
-	splitBySection: boolean;
-	patternTemplate: string | null;
-	note: string | null;
-}
-
-export interface UpdateCourseRuleOverrideRequest {
-	courseId: number;
-	override: CourseRuleOverrideInput;
-}
-
-export interface RuleUpdateResult {
-	ok: true;
-}
-
-/** issue #53 の警告表示からも同じスナップショットを参照できる API 境界。 */
-export interface RuleManagementApi {
-	readonly mode: "local-mock" | "native";
-
-	getRules(): Promise<RuleSet>;
-
-	updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult>;
-
-	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult>;
-}
+/** issue #53 の警告表示からも同じスナップショットを参照できる共有API境界。 */
+export type RuleManagementApi = Pick<
+	FuzzyApiClient,
+	"mode" | "getRules" | "updateGlobalRule" | "updateCourseRuleOverride"
+>;
 
 export type RuleManagementStatus = "idle" | "loading" | "ready" | "error";
 
@@ -59,3 +24,5 @@ export interface RuleManagementState {
 	lastSavedTarget: RuleSaveTarget | null;
 	lastSavedAt: string | null;
 }
+
+export type { RuleSet, UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest };

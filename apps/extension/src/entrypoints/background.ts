@@ -12,7 +12,6 @@ import {
 	type FuzzyApiResponseMessage,
 	isFuzzyApiRequestMessage,
 } from "../lib/api/backgroundApi";
-import { createLocalRuleManagementApi } from "../lib/rules/api";
 import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
@@ -57,7 +56,6 @@ async function notifyWhenSyncEventIsNew(client: FuzzyApiClient): Promise<void> {
 // runtimeメッセージでここへ委譲する。
 export default defineBackground(() => {
 	let clientPromise: Promise<FuzzyApiClient> | null = null;
-	const ruleManagementApi = createLocalRuleManagementApi();
 	const getClient = (): Promise<FuzzyApiClient> => {
 		if (!clientPromise) clientPromise = createApiClient();
 		return clientPromise;
@@ -87,7 +85,7 @@ export default defineBackground(() => {
 
 	browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 		if (isRuleManagementRequestMessage(message)) {
-			void respondToRuleManagementRequest(ruleManagementApi, message).then(sendResponse);
+			void respondToRuleManagementRequest(getClient(), message).then(sendResponse);
 			return true;
 		}
 		if (!isFuzzyApiRequestMessage(message)) return false;

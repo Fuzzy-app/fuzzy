@@ -1,7 +1,7 @@
+import type { RuleUpdateResult } from "@fuzzy/shared";
 import type {
 	RuleManagementApi,
 	RuleSet,
-	RuleUpdateResult,
 	UpdateCourseRuleOverrideRequest,
 	UpdateGlobalRuleRequest,
 } from "./types";
@@ -44,10 +44,11 @@ export function isRuleManagementRequestMessage(
 
 /** background の単一APIへ処理を集約し、複数タブ間の更新競合を防ぐ。 */
 export async function respondToRuleManagementRequest(
-	api: RuleManagementApi,
+	apiPromise: Promise<RuleManagementApi>,
 	message: RuleManagementRequestMessage,
 ): Promise<RuleManagementResponseMessage> {
 	try {
+		const api = await apiPromise;
 		let data: unknown;
 		switch (message.method) {
 			case "getRules":
@@ -74,7 +75,7 @@ export async function respondToRuleManagementRequest(
 /** content script から background のルールAPIを呼ぶクライアント。 */
 export class BackgroundRuleManagementApi implements RuleManagementApi {
 	readonly #transport: RuleManagementMessageTransport;
-	#mode: RuleManagementApi["mode"] = "local-mock";
+	#mode: RuleManagementApi["mode"] = "mock";
 
 	constructor(transport: RuleManagementMessageTransport) {
 		this.#transport = transport;
@@ -122,7 +123,7 @@ function isResponseMessage(value: unknown): value is RuleManagementResponseMessa
 	if (candidate.ok === false) return typeof candidate.error === "string";
 	return (
 		candidate.ok === true &&
-		(candidate.mode === "local-mock" || candidate.mode === "native") &&
+		(candidate.mode === "mock" || candidate.mode === "native") &&
 		"data" in value
 	);
 }

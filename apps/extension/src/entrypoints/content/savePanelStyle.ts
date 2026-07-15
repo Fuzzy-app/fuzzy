@@ -16,12 +16,12 @@ export const SAVE_PANEL_STYLE = `
 			   パネル自身はclipしない（左端の外へ飛び出す開閉ハンドルを隠さないため）。 */
 			overflow: visible;
 			border-left: 1px solid #e2e6f0;
-			border-top: 3px solid #635bff;
+			border-top: 3px solid var(--fuzzy-color-primary);
 			border-radius: 0;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: -18px 0 36px rgb(22 34 51 / 10%);
 			color: #202537;
-			font-family: "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+			font-family: var(--fuzzy-font-family);
 		}
 
 		#${SAVE_PANEL_ID}.is-collapsed {
@@ -57,7 +57,7 @@ export const SAVE_PANEL_STYLE = `
 		.fuzzy-panel-header,
 		.fuzzy-section,
 		.fuzzy-actions {
-			border-top: 1px solid #eef1f6;
+			border-top: 1px solid var(--fuzzy-color-border-soft);
 			padding: 9px 12px;
 		}
 
@@ -69,7 +69,7 @@ export const SAVE_PANEL_STYLE = `
 			align-items: center;
 			justify-content: space-between;
 			border-top: 0;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: 0 2px 8px rgb(22 34 51 / 6%);
 		}
 
@@ -113,17 +113,17 @@ export const SAVE_PANEL_STYLE = `
 			width: 22px;
 			height: 22px;
 			border-radius: 6px;
-			background: #635bff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 			font-size: 13px;
 			font-weight: 900;
 		}
 
 		.fuzzy-pill {
 			border-radius: 999px;
-			background: #f0efff;
+			background: var(--fuzzy-color-primary-soft);
 			padding: 2px 7px;
-			color: #635bff;
+			color: var(--fuzzy-color-primary);
 			font-size: 10px;
 			font-weight: 900;
 		}
@@ -144,9 +144,9 @@ export const SAVE_PANEL_STYLE = `
 			margin: 0;
 			border: 0;
 			border-radius: 12px 0 0 12px;
-			background: #5d5ce2;
-			color: #ffffff;
-			font-family: "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+			background: var(--fuzzy-color-primary-strong);
+			color: var(--fuzzy-color-surface);
+			font-family: var(--fuzzy-font-family);
 			font-size: 22px;
 			font-weight: 900;
 			line-height: 1;
@@ -172,9 +172,9 @@ export const SAVE_PANEL_STYLE = `
 		#${SAVE_PANEL_ID} button {
 			border: 0;
 			border-radius: 8px;
-			background: #5d5ce2;
+			background: var(--fuzzy-color-primary-strong);
 			padding: 7px 9px;
-			color: #ffffff;
+			color: var(--fuzzy-color-surface);
 			font-weight: 800;
 			cursor: pointer;
 			line-height: 1.2;
@@ -201,7 +201,7 @@ export const SAVE_PANEL_STYLE = `
 			grid-template-columns: repeat(3, minmax(0, 1fr));
 			gap: 8px;
 			padding: 12px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-panel-summary div {
@@ -258,7 +258,7 @@ export const SAVE_PANEL_STYLE = `
 
 		.fuzzy-section-heading button {
 			background: transparent;
-			color: #5d5ce2;
+			color: var(--fuzzy-color-primary-strong);
 			font-size: 10px;
 		}
 
@@ -300,7 +300,7 @@ export const SAVE_PANEL_STYLE = `
 		.fuzzy-path-option input,
 		.fuzzy-path-feature input,
 		.fuzzy-check input {
-			accent-color: #635bff;
+			accent-color: var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-file-type {
@@ -309,7 +309,7 @@ export const SAVE_PANEL_STYLE = `
 			border-radius: 4px;
 			background: #ef4444;
 			padding: 2px 7px;
-			color: #ffffff;
+			color: var(--fuzzy-color-surface);
 			font-size: 10px;
 			font-weight: 900;
 		}
@@ -373,7 +373,7 @@ export const SAVE_PANEL_STYLE = `
 
 		.fuzzy-path-chips button {
 			overflow: hidden;
-			background: #eef1f6 !important;
+			background: var(--fuzzy-color-border-soft) !important;
 			color: #657086 !important;
 			text-overflow: ellipsis;
 			white-space: nowrap;
@@ -395,7 +395,7 @@ export const SAVE_PANEL_STYLE = `
 			bottom: 0;
 			display: grid;
 			gap: 7px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: 0 -8px 22px rgb(22 34 51 / 8%);
 		}
 
@@ -422,7 +422,7 @@ export const SAVE_PANEL_STYLE = `
 		.fuzzy-action-meta button {
 			background: transparent !important;
 			padding: 0 !important;
-			color: #5d5ce2 !important;
+			color: var(--fuzzy-color-primary-strong) !important;
 			font-size: 11px;
 		}
 
@@ -441,7 +441,7 @@ export const SAVE_PANEL_STYLE = `
 		.fuzzy-similar-row strong { overflow-wrap: anywhere; font-size: 12px; }
 		.fuzzy-similar-row small { color: #8a6d3b; font-size: 10px; font-weight: 700; }
 		.fuzzy-confirm-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
-		.fuzzy-confirm-buttons button[data-action="cancel-save"] { background: #eef1f6; color: #657086; }
+		.fuzzy-confirm-buttons button[data-action="cancel-save"] { background: var(--fuzzy-color-border-soft); color: #657086; }
 		.fuzzy-note-warning { background: #fff4e0; color: #8a5b00; }
 		.fuzzy-pill-mock { background: #ffe9e3; color: #c2410c; }
 		.fuzzy-path-chips button:disabled { background: #f5f6f9 !important; color: #b3bac9 !important; box-shadow: none; cursor: not-allowed; }

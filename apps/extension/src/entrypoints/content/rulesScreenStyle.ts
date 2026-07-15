@@ -16,29 +16,29 @@ export function ensureRulesScreenStyle(): void {
 			gap: 10px;
 			padding: 10px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-rules-tab {
 			border: 0;
 			border-radius: 10px;
 			padding: 9px 14px;
-			background: #eef0fb;
-			color: #59607d;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
 			font: inherit;
-			font-size: 0.8rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 800;
 		}
 
 		.fuzzy-rules-tab.is-active {
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-rules-tab:disabled {
 			cursor: not-allowed;
-			opacity: 0.62;
+			opacity: 0.72;
 		}
 
 		.fuzzy-rules-overview {
@@ -52,16 +52,16 @@ export function ensureRulesScreenStyle(): void {
 			gap: 8px;
 			padding: 16px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-rules-summary-card.is-accent {
-			background: #f0efff;
+			background: var(--fuzzy-color-primary-soft);
 		}
 
 		.fuzzy-rules-summary-card.is-future {
-			background: #fff8df;
+			background: var(--fuzzy-color-warning-soft);
 		}
 
 		.fuzzy-rules-summary-label,
@@ -71,23 +71,24 @@ export function ensureRulesScreenStyle(): void {
 		}
 
 		.fuzzy-rules-summary-label {
-			color: #6b7292;
-			font-size: 0.76rem;
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
+			line-height: 1.5;
 		}
 
 		.fuzzy-rules-summary-value {
-			font-size: 1.05rem;
+			font-size: 1.1rem;
 			font-weight: 900;
 			line-height: 1.45;
 			word-break: break-word;
 		}
 
 		.fuzzy-rules-summary-copy {
-			color: #636b8b;
-			font-size: 0.78rem;
+			color: var(--fuzzy-color-text-muted);
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 700;
-			line-height: 1.6;
+			line-height: var(--fuzzy-line-height-body);
 		}
 
 		.fuzzy-rules-panel {
@@ -95,8 +96,8 @@ export function ensureRulesScreenStyle(): void {
 			gap: 16px;
 			padding: 18px;
 			border-radius: 14px;
-			background: #ffffff;
-			box-shadow: 0 10px 28px rgba(58, 69, 120, 0.08);
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-rules-panel-head {
@@ -124,9 +125,10 @@ export function ensureRulesScreenStyle(): void {
 		.fuzzy-rules-panel-copy {
 			max-width: 720px;
 			margin-top: 6px !important;
-			color: #636b8b;
-			font-size: 0.84rem;
-			line-height: 1.7;
+			color: var(--fuzzy-color-text-muted);
+			font-size: var(--fuzzy-font-size-small);
+			font-weight: 600;
+			line-height: var(--fuzzy-line-height-body);
 		}
 
 		.fuzzy-rules-count-badge,
@@ -134,9 +136,9 @@ export function ensureRulesScreenStyle(): void {
 			flex: 0 0 auto;
 			border-radius: 999px;
 			padding: 7px 11px;
-			background: #eef0fb;
-			color: #59607d;
-			font-size: 0.74rem;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 900;
 		}
 
@@ -157,30 +159,32 @@ export function ensureRulesScreenStyle(): void {
 			border: 0;
 			border-radius: 12px;
 			padding: 12px;
-			background: #f4f5fb;
-			color: #515873;
+			background: var(--fuzzy-color-background);
+			color: var(--fuzzy-color-text-secondary);
 			font: inherit;
 			text-align: left;
 			cursor: pointer;
-			box-shadow: inset 0 0 0 1px #e7e9f7;
+			box-shadow: inset 0 0 0 1px var(--fuzzy-color-border);
 		}
 
 		.fuzzy-rules-preset strong {
-			color: #24283b;
-			font-size: 0.86rem;
+			color: var(--fuzzy-color-text);
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 900;
 		}
 
 		.fuzzy-rules-preset code {
-			color: #676e91;
-			font-size: 0.72rem;
+			color: var(--fuzzy-color-text-muted);
+			font-size: var(--fuzzy-font-size-caption);
+			font-weight: 600;
+			line-height: 1.55;
 			white-space: normal;
 			word-break: break-word;
 		}
 
 		.fuzzy-rules-preset.is-active {
-			background: #f0efff;
-			box-shadow: inset 0 0 0 2px #6c63ff;
+			background: var(--fuzzy-color-primary-soft);
+			box-shadow: inset 0 0 0 2px var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-rules-field {
@@ -189,8 +193,8 @@ export function ensureRulesScreenStyle(): void {
 		}
 
 		.fuzzy-rules-field > span {
-			color: #555d7a;
-			font-size: 0.78rem;
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 900;
 		}
 
@@ -202,10 +206,10 @@ export function ensureRulesScreenStyle(): void {
 			border: 1px solid #dfe2f2;
 			border-radius: 11px;
 			padding: 10px 12px;
-			background: #ffffff;
-			color: #20243a;
+			background: var(--fuzzy-color-surface);
+			color: var(--fuzzy-color-text);
 			font: inherit;
-			font-size: 0.86rem;
+			font-size: var(--fuzzy-font-size-body);
 			font-weight: 700;
 		}
 
@@ -229,15 +233,16 @@ export function ensureRulesScreenStyle(): void {
 
 		.fuzzy-rules-help {
 			margin: 0;
-			color: #7a81a1;
-			font-size: 0.75rem;
+			color: var(--fuzzy-color-text-subtle);
+			font-size: var(--fuzzy-font-size-caption);
+			font-weight: 600;
 			line-height: 1.65;
 		}
 
 		.fuzzy-rules-validation {
 			margin: 0;
-			color: #b43d24;
-			font-size: 0.75rem;
+			color: var(--fuzzy-color-danger);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 			line-height: 1.55;
 		}
@@ -247,19 +252,19 @@ export function ensureRulesScreenStyle(): void {
 			gap: 6px;
 			border-radius: 12px;
 			padding: 12px;
-			background: #f7f8ff;
-			box-shadow: inset 0 0 0 1px #e7e9f7;
+			background: var(--fuzzy-color-page);
+			box-shadow: inset 0 0 0 1px var(--fuzzy-color-border);
 		}
 
 		.fuzzy-rules-preview-label {
-			color: #7a81a1;
-			font-size: 0.74rem;
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 		}
 
 		.fuzzy-rules-preview-value {
 			color: #303653;
-			font-size: 0.86rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 900;
 			line-height: 1.6;
 			word-break: break-word;
@@ -278,19 +283,19 @@ export function ensureRulesScreenStyle(): void {
 			border-radius: 11px;
 			padding: 10px 16px;
 			font: inherit;
-			font-size: 0.82rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 900;
 			cursor: pointer;
 		}
 
 		.fuzzy-rules-save-button {
-			background: #6c63ff;
-			color: #ffffff;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-rules-secondary-button {
-			background: #eef0fb;
-			color: #59607d;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
 		}
 
 		.fuzzy-rules-save-button:disabled,
@@ -302,16 +307,21 @@ export function ensureRulesScreenStyle(): void {
 		.fuzzy-rules-message {
 			border-radius: 12px;
 			padding: 11px 12px;
-			background: #dcf9e8;
-			color: #14935b;
-			font-size: 0.82rem;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success);
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 800;
 			line-height: 1.6;
 		}
 
 		.fuzzy-rules-message.is-error {
-			background: #fff0ec;
-			color: #b43d24;
+			background: var(--fuzzy-color-danger-soft);
+			color: var(--fuzzy-color-danger);
+		}
+
+		.fuzzy-rules-message.is-mock {
+			background: var(--fuzzy-color-primary-soft);
+			color: var(--fuzzy-color-primary-strong);
 		}
 
 		.fuzzy-rules-add-row {
@@ -321,8 +331,8 @@ export function ensureRulesScreenStyle(): void {
 			align-items: end;
 			border-radius: 12px;
 			padding: 14px;
-			background: #f7f8ff;
-			box-shadow: inset 0 0 0 1px #e7e9f7;
+			background: var(--fuzzy-color-page);
+			box-shadow: inset 0 0 0 1px var(--fuzzy-color-border);
 		}
 
 		.fuzzy-rules-override-list {
@@ -335,7 +345,7 @@ export function ensureRulesScreenStyle(): void {
 			gap: 14px;
 			border-radius: 14px;
 			padding: 16px;
-			background: #ffffff;
+			background: var(--fuzzy-color-surface);
 			box-shadow: inset 0 0 0 1px #e5e8f5;
 		}
 
@@ -353,8 +363,8 @@ export function ensureRulesScreenStyle(): void {
 
 		.fuzzy-rules-override-id {
 			margin-top: 4px !important;
-			color: #7a81a1;
-			font-size: 0.72rem;
+			color: var(--fuzzy-color-text-subtle);
+			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 700;
 		}
 
@@ -374,24 +384,24 @@ export function ensureRulesScreenStyle(): void {
 			gap: 10px;
 			border-radius: 11px;
 			padding: 11px 12px;
-			background: #f4f5fb;
+			background: var(--fuzzy-color-background);
 			color: #303653;
-			font-size: 0.82rem;
+			font-size: var(--fuzzy-font-size-small);
 			font-weight: 800;
 			line-height: 1.55;
 		}
 
 		.fuzzy-rules-checkbox input {
 			margin-top: 3px;
-			accent-color: #6c63ff;
+			accent-color: var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-rules-empty {
 			border-radius: 12px;
 			padding: 16px;
-			background: #f7f8ff;
-			color: #636b8b;
-			font-size: 0.84rem;
+			background: var(--fuzzy-color-page);
+			color: var(--fuzzy-color-text-muted);
+			font-size: var(--fuzzy-font-size-small);
 			line-height: 1.7;
 		}
 

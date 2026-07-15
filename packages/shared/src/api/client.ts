@@ -10,6 +10,7 @@ import type {
 	ExtractZipResult,
 	NotificationRule,
 	RuleSet,
+	RuleUpdateResult,
 	RuleViolation,
 	SaveFilesRequest,
 	SaveFilesResult,
@@ -17,6 +18,8 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest,
 } from "../types";
 
 /**
@@ -50,6 +53,10 @@ export interface FuzzyApiClient {
 	extractZip(request: ExtractZipRequest): Promise<ExtractZipResult>;
 
 	getRules(): Promise<RuleSet>;
+
+	updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult>;
+
+	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult>;
 
 	getRuleViolations(): Promise<RuleViolation[]>;
 

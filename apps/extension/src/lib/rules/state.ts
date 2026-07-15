@@ -1,4 +1,4 @@
-import { type LocalRuleManagementApiOptions, createLocalRuleManagementApi } from "./api";
+import { MockApiClient } from "@fuzzy/shared";
 import { createBackgroundRuleManagementApi } from "./backgroundApi";
 import type {
 	RuleManagementApi,
@@ -29,7 +29,7 @@ export class RuleManagementStore {
 	readonly #listeners = new Set<RuleManagementStateListener>();
 	#state: RuleManagementState = { ...initialState };
 
-	constructor(api: RuleManagementApi = createLocalRuleManagementApi()) {
+	constructor(api: RuleManagementApi = new MockApiClient()) {
 		this.#api = api;
 	}
 
@@ -101,15 +101,8 @@ export class RuleManagementStore {
 	}
 }
 
-export function createRuleManagementStore(
-	options: LocalRuleManagementApiOptions = {},
-): RuleManagementStore {
-	const useExplicitLocalApi =
-		options.storage !== undefined || options.seedRules !== undefined || options.now !== undefined;
-	const api = useExplicitLocalApi
-		? createLocalRuleManagementApi(options)
-		: (createBackgroundRuleManagementApi() ?? createLocalRuleManagementApi());
-	return new RuleManagementStore(api);
+export function createRuleManagementStore(): RuleManagementStore {
+	return new RuleManagementStore(createBackgroundRuleManagementApi() ?? new MockApiClient());
 }
 
 function cloneState(state: RuleManagementState): RuleManagementState {

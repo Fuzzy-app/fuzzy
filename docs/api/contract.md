@@ -38,7 +38,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `updateSubmissionStatus`   | 提出状況の手動更新               | `{ assignmentId, submitted }` → `{ ok }`            |
 | `getRules`                 | グローバル／コース別ルール取得         | `{}` → `RuleSet`                                    |
 | `updateGlobalRule`         | グローバルルール更新              | `{ patternTemplate }` → `{ ok }`                    |
-| `updateCourseRuleOverride` | コース別例外ルール更新             | `{ courseId, override }` → `{ ok }`                 |
+| `updateCourseRuleOverride` | コース別例外ルール更新             | `{ courseId, override: { splitBySection, patternTemplate, note } }` → `{ ok }` |
 | `getRuleViolations`        | ルール違反ファイル一覧             | `{}` → `RuleViolation[]`                            |
 | `getDuplicateGroups`       | 重複ファイル一覧                | `{}` → `DuplicateGroup[]`                           |
 | `getNotificationRules`     | 通知タイミング設定取得             | `{}` → `NotificationRule[]`                         |
@@ -51,6 +51,8 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 ### 1.3 起動・接続方針
 
 `docs/仕様書.md` 3.3節のとおり、Moodleドメインのタブが存在する間 `connectNative` で接続を維持する。拡張機能側は `ping` にタイムアウト（目安800ms）を設定し、応答がなければサンプルデータへのモック動作にフォールバックする（`packages/shared/src/api/`）。単発のコマンド（ルール更新など）は `sendNativeMessage` でも構わない。
+
+ルール更新時のコース名はクライアントから受け取らず、`courseId` を使ってSQLiteの `courses` から解決する。保存パターンは相対パスのみを許可し、既知のトークン（`{year}` / `{term}` / `{course}` / `{assignment}` / `{section}`）以外、絶対パス、UNCパス、`.` / `..`、Windowsの禁止文字・予約名を拒否する。拡張機能側の検証は入力支援であり、native-host側でも同じ制約を再検証する。
 
 ### 1.4 データ取得通知・変更点表示のフロー
 
