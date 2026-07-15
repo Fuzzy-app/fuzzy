@@ -85,8 +85,16 @@ export class MockApiClient implements FuzzyApiClient {
 		const knownCourse = (courses as { id: number; name: string }[]).find(
 			(c) => c.name === request.course.name,
 		);
-		const courseLabel = knownCourse?.name ?? request.course.name ?? "不明なコース";
-		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
+		const knownCourseNames = (courses as { id: number; name: string }[]).map(
+			(course) => course.name,
+		);
+		const courseLabel = courseFolderName(
+			knownCourse?.name ?? request.course.name ?? "不明なコース",
+			knownCourseNames,
+		);
+		const sectionLabel = folderSegment(
+			request.fileMeta?.sectionTitle ?? request.course.sectionTitle ?? "",
+		);
 		const coursePath = `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`;
 		const suggestions: SaveSuggestion[] = [{ path: coursePath, confidence: 0.92 }];
 
@@ -175,4 +183,36 @@ export class MockApiClient implements FuzzyApiClient {
 		}
 		return delay(assignmentChanges as AssignmentChange[]);
 	}
+}
+
+/**
+ * Moodle のコース名に付く年度・担当者などの補足を、保存先フォルダ名には含めない。
+ * 同名になる場合でも、候補に表示する名前は簡潔な表記を優先する。
+ */
+export function courseFolderName(
+	courseName: string,
+	_knownCourseNames: readonly string[] = [],
+): string {
+	const original = normalizeCourseName(courseName) || "不明なコース";
+	const simplified = removeParentheticalNotes(original);
+	return simplified || original;
+}
+
+/** 保存先候補に使うフォルダ名から、絵文字と括弧内の補足を取り除く。 */
+export function folderSegment(value: string): string {
+	return removeParentheticalNotes(normalizeCourseName(value));
+}
+
+function removeParentheticalNotes(value: string): string {
+	return value
+		.replace(/\s*[（(][^（）()]*[）)]\s*/g, " ")
+		.replace(/\s{2,}/g, " ")
+		.trim();
+}
+
+function normalizeCourseName(value: string): string {
+	return value
+		.replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\uFE0F|\u200D|\u20E3)/gu, "")
+		.replace(/\s+/g, " ")
+		.trim();
 }

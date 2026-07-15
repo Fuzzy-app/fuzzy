@@ -22,6 +22,16 @@ export const SAVE_PANEL_STYLE = `
 			box-shadow: -18px 0 36px rgb(22 34 51 / 10%);
 			color: #202537;
 			font-family: "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+			animation: fuzzy-save-panel-fade-in 160ms ease-out both;
+		}
+
+		@keyframes fuzzy-save-panel-fade-in {
+			from { opacity: 0; }
+			to { opacity: 1; }
+		}
+
+		@media (prefers-reduced-motion: reduce) {
+			#${SAVE_PANEL_ID} { animation: none; }
 		}
 
 		#${SAVE_PANEL_ID}.is-collapsed {
@@ -157,6 +167,12 @@ export const SAVE_PANEL_STYLE = `
 
 		#${SAVE_HANDLE_ID}:hover {
 			background: #4f4ed0;
+		}
+
+		/* グリフのフォントメトリクスによる見た目の下寄りを補正する。 */
+		.fuzzy-collapse-arrow {
+			display: block;
+			transform: translateY(-3px);
 		}
 
 		.fuzzy-panel-tab {

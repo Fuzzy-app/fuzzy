@@ -18,15 +18,20 @@ import {
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
+/** ページ遷移後も右側の保存パネルの開閉状態を復元する。 */
+const SAVE_PANEL_OPEN_STATE_KEY = "fuzzy:savePanelOpen";
 
 interface SimilarWarning {
 	file: MoodleFileLink;
 	match: SimilarFileMatch;
 }
 
-export function mountSavePanel(): void {
+export async function mountSavePanel(): Promise<void> {
 	document.getElementById(SAVE_PANEL_ID)?.remove();
 	document.getElementById(SAVE_HANDLE_ID)?.remove();
+	// 状態を復元してからDOMを挿入することで、閉じた表示から開いた表示への
+	// 描画し直しを避ける。
+	const initialPanelOpen = await loadPanelOpenState();
 
 	const panel = document.createElement("aside");
 	panel.id = SAVE_PANEL_ID;
@@ -38,7 +43,10 @@ export function mountSavePanel(): void {
 	const collapseHandle = document.createElement("button");
 	collapseHandle.id = SAVE_HANDLE_ID;
 	collapseHandle.type = "button";
-	collapseHandle.textContent = "›";
+	const collapseArrow = document.createElement("span");
+	collapseArrow.className = "fuzzy-collapse-arrow";
+	collapseArrow.textContent = "›";
+	collapseHandle.append(collapseArrow);
 	collapseHandle.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
 	collapseHandle.addEventListener("click", () => setPanelOpen(false));
 	document.body.append(collapseHandle);
@@ -59,7 +67,7 @@ export function mountSavePanel(): void {
 	let awaitingConfirm = false;
 	let loading = true;
 	let saving = false;
-	let isPanelOpen = false;
+	let isPanelOpen = initialPanelOpen;
 	let message: string | null = "Moodleページ内の資料を読み込んでいます。";
 
 	injectPanelStyle();
@@ -284,6 +292,7 @@ export function mountSavePanel(): void {
 			.map((file) => {
 				const type = fileTypeInfo(file);
 				const title = displayFileTitle(file, type.label);
+				const context = fileContextLabel(file, snapshot);
 				return `
 					<label class="fuzzy-file-row">
 						<input type="checkbox" data-file-id="${escapeHtml(fileId(file))}" ${
@@ -292,7 +301,7 @@ export function mountSavePanel(): void {
 						<span class="fuzzy-file-type" data-kind="${type.kind}">${escapeHtml(type.label)}</span>
 						<span class="fuzzy-file-details">
 							<strong>${escapeHtml(title)}</strong>
-							<small>${escapeHtml(file.sectionTitle ?? snapshot.sectionTitle ?? "セクション未取得")}</small>
+							<small>${escapeHtml(context)}</small>
 						</span>
 					</label>
 				`;
@@ -517,7 +526,9 @@ export function mountSavePanel(): void {
 	// --- 状態更新ヘルパー ---
 
 	function setPanelOpen(open: boolean) {
+		if (isPanelOpen === open) return;
 		isPanelOpen = open;
+		void savePanelOpenState(open);
 		render();
 	}
 
@@ -617,6 +628,23 @@ async function saveLastSavePath(path: string): Promise<void> {
 	}
 }
 
+async function loadPanelOpenState(): Promise<boolean> {
+	try {
+		const stored = await browser.storage.local.get(SAVE_PANEL_OPEN_STATE_KEY);
+		return stored[SAVE_PANEL_OPEN_STATE_KEY] === true;
+	} catch {
+		return false;
+	}
+}
+
+async function savePanelOpenState(isOpen: boolean): Promise<void> {
+	try {
+		await browser.storage.local.set({ [SAVE_PANEL_OPEN_STATE_KEY]: isOpen });
+	} catch (error) {
+		console.warn("[fuzzy] 保存パネルの開閉状態の記憶に失敗しました", error);
+	}
+}
+
 function toErrorMessage(error: unknown, fallback: string): string {
 	return error instanceof Error ? `${fallback}: ${error.message}` : `${fallback}。`;
 }
@@ -690,6 +718,21 @@ function displayFileTitle(file: MoodleFileLink, extensionLabel: string): string 
 	const extension = fileExtensionFromName(file.title);
 	if (!extension || extension.toUpperCase() !== extensionLabel) return file.title;
 	return file.title.replace(new RegExp(`\\.${extension}$`, "i"), "");
+}
+
+/** 同名ファイルを見分けられるよう、Moodle上の回・項目などの所属を表示する。 */
+function fileContextLabel(file: MoodleFileLink, snapshot: MoodlePageSnapshot): string {
+	const labels = [file.sectionTitle, snapshot.sectionTitle]
+		.map(displayableSectionLabel)
+		.filter((label, index, all) => label.length > 0 && all.indexOf(label) === index);
+	// 回・お知らせとして判別できない資料も、補足欄は常に表示する。
+	// その場合は活動名やファイル名ではなく、Moodle の既定セクション名として「一般」を使う。
+	return labels[0] ?? "一般";
+}
+
+/** ファイル名・容量ではなく、取得済みのMoodleセクション名だけを表示する。 */
+function displayableSectionLabel(value: string | null): string {
+	return value?.trim().replace(/\s+/g, " ") ?? "";
 }
 
 function displayPath(path: string): string {

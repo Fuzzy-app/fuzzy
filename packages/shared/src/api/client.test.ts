@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createApiClient } from "./index";
-import { MockApiClient } from "./mockClient";
+import { MockApiClient, courseFolderName, folderSegment } from "./mockClient";
 
 describe("createApiClient フォールバック機構", () => {
 	test("native-hostが存在しない環境ではmockモードにフォールバックする", async () => {
@@ -62,6 +62,26 @@ describe("MockApiClient（サンプルデータ）", () => {
 		});
 		expect(syllabusResult).toHaveLength(1);
 		expect(syllabusResult[0]?.path).not.toContain("授業計画");
+
+		const sanitizedResult = await client.suggestSavePath({
+			course: { name: "情報科学📚（前期）", sectionTitle: "第4回🔬", breadcrumbs: [] },
+			fileMeta: null,
+		});
+		expect(sanitizedResult[0]?.path).toContain("情報科学");
+		expect(sanitizedResult[0]?.path).not.toMatch(/\p{Extended_Pictographic}/u);
+		expect(sanitizedResult[1]?.path).toContain("第4回");
+	});
+
+	test("suggestSavePath: コース名の括弧内補足を保存先から除外する", () => {
+		expect(courseFolderName("情報科学📚（2026年度・前期）")).toBe("情報科学");
+		expect(courseFolderName("統計学 (担当: 山田)")).toBe("統計学");
+		expect(folderSegment("第4回🔬（配布資料）")).toBe("第4回");
+	});
+
+	test("suggestSavePath: 同名になる場合も括弧内補足を候補名に表示しない", () => {
+		const courseNames = ["英語（A）", "英語（B）"];
+		expect(courseFolderName("英語（A）", courseNames)).toBe("英語");
+		expect(courseFolderName("英語（B）", courseNames)).toBe("英語");
 	});
 
 	test("checkSimilarFiles: 保存前に似ている保存済みファイルを返す", async () => {

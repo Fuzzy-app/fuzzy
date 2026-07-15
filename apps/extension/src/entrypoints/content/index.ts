@@ -17,7 +17,7 @@ export default defineContentScript({
 		if (!/^moodle\d*\.wakayama-u\.ac\.jp$/.test(location.hostname)) return;
 		registerSnapshotMessageListener();
 		mountFuzzyShell();
-		mountSavePanel();
+		void mountSavePanel();
 	},
 });
 

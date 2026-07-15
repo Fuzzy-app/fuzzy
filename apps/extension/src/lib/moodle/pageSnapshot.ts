@@ -228,24 +228,92 @@ function extractLinkTitle(link: HTMLAnchorElement): string {
 
 function findSectionTitle(element: Element): string | null {
 	const sectionContainer = element.closest(
-		"[data-section-name], li.section, .section, .course-section",
+		[
+			"[data-section-name]",
+			"[data-sectionid]",
+			"[data-section-number]",
+			"[data-region='section']",
+			"[id^='section-']",
+			"li.section",
+			".course-section",
+			".section",
+		].join(", "),
 	);
 
 	if (sectionContainer) {
 		const explicitName = normalizeText(sectionContainer.getAttribute("data-section-name"));
-		const heading = sectionContainer.querySelector("h2, h3, h4, .sectionname");
-		const sectionTitle = firstMeaningful([explicitName, textOf(heading)]);
+		const labelledBy = sectionContainer.getAttribute("aria-labelledby");
+		const labelledElement = labelledBy ? element.ownerDocument.getElementById(labelledBy) : null;
+		// activity 内の見出しはファイル名（例: "画像処理とは（7.6MB)"）なので、
+		// セクションの回・項目名として扱わない。
+		const heading = findSectionHeading(sectionContainer);
+		const sectionTitle = firstMeaningful([
+			textOf(heading ?? null),
+			textOf(labelledElement),
+			explicitName,
+		]);
 		if (sectionTitle) return sectionTitle;
 	}
 
-	const activityContainer = element.closest("li.activity, .activity, [data-activityname]");
-	const activityName = normalizeText(activityContainer?.getAttribute("data-activityname"));
-	const activityHeading = activityContainer?.querySelector(
-		".activityname, .instancename, [data-activityname]",
-	);
-	const breadcrumbFallback = extractBreadcrumbs(element.ownerDocument).slice(-1)[0];
+	const precedingSectionTitle = findPrecedingSectionTitle(element);
+	if (precedingSectionTitle) return precedingSectionTitle;
 
-	return firstMeaningful([activityName, textOf(activityHeading ?? null), breadcrumbFallback]);
+	// 活動名やパンくずはファイル名・コース名になりやすく、資料の所属を表す
+	// セクション題名には使わない。
+	return null;
+}
+
+/**
+ * テーマによっては資料とセクション見出しが親子にならないため、
+ * 直前にある活動外のセクション見出しを所属先として使う。
+ */
+function findPrecedingSectionTitle(element: Element): string | null {
+	const headings = Array.from(
+		element.ownerDocument.querySelectorAll(
+			[
+				"[data-section-name]",
+				".sectionname",
+				".section-title",
+				".course-section-header h2",
+				".course-section-header h3",
+				".course-section-header h4",
+				"[data-region='section'] > header h2",
+				"[data-region='section'] > header h3",
+				"[id^='section-'] > header h2",
+				"[id^='section-'] > header h3",
+			].join(", "),
+		),
+	).filter(
+		(candidate) =>
+			!candidate.closest("li.activity, .activity, [data-activityname]") &&
+			Boolean(candidate.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING),
+	);
+
+	const heading = headings.at(-1) ?? null;
+	return firstMeaningful([
+		normalizeText(heading?.getAttribute("data-section-name")),
+		textOf(heading),
+	]);
+}
+
+/** セクションを囲む要素の本文ではなく、見出し要素そのものを優先する。 */
+function findSectionHeading(sectionContainer: Element): Element | null {
+	const selectors = [
+		"[data-section-name]",
+		".sectionname",
+		".section-title",
+		".course-section-header h2, .course-section-header h3, .course-section-header h4",
+		"header h2, header h3, header h4",
+		"h2, h3, h4",
+	];
+
+	for (const selector of selectors) {
+		const heading = Array.from(sectionContainer.querySelectorAll(selector)).find(
+			(candidate) => !candidate.closest("li.activity, .activity, [data-activityname]"),
+		);
+		if (heading) return heading;
+	}
+	return null;
 }
 
 function extractMoodleFileId(url: string): string | null {
