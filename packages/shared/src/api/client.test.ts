@@ -48,7 +48,21 @@ describe("MockApiClient（サンプルデータ）", () => {
 			},
 		});
 		expect(result[0]?.path).toContain("データベース");
-		expect(result[0]?.path).toContain("第4回");
+		expect(result[0]?.path).not.toContain("第4回");
+		expect(result[1]?.path).toContain("第4回");
+
+		const syllabusResult = await client.suggestSavePath({
+			course: { name: "人工知能", sectionTitle: "授業計画", breadcrumbs: [] },
+			fileMeta: {
+				title: "授業計画.pdf",
+				url: "https://moodle.example/mod/resource/view.php?id=10",
+				moodleFileId: "10",
+				sectionTitle: "授業計画",
+				mimeHint: "pdf",
+			},
+		});
+		expect(syllabusResult).toHaveLength(1);
+		expect(syllabusResult[0]?.path).not.toContain("授業計画");
 	});
 
 	test("checkSimilarFiles: 保存前に似ている保存済みファイルを返す", async () => {

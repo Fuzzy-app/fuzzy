@@ -9,7 +9,7 @@ export const SAVE_PANEL_STYLE = `
 			top: 0;
 			right: 0;
 			z-index: 2147483647;
-			width: min(300px, calc(100vw - 24px));
+			width: min(340px, calc(100vw - 24px));
 			height: 100vh;
 			box-sizing: border-box;
 			/* 縦スクロールは内側の .fuzzy-panel-scroll が担当する。
@@ -134,7 +134,7 @@ export const SAVE_PANEL_STYLE = `
 			position: fixed;
 			z-index: 2147483647;
 			top: 50%;
-			right: min(300px, calc(100vw - 24px));
+			right: min(340px, calc(100vw - 24px));
 			transform: translateY(-50%);
 			display: grid;
 			place-items: center;
@@ -181,14 +181,15 @@ export const SAVE_PANEL_STYLE = `
 		}
 
 		.fuzzy-panel-tools button {
-			display: inline-grid;
-			place-items: center;
-			width: 30px;
-			height: 30px;
+			width: 24px;
+			height: 24px;
 			padding: 0 !important;
-			border-radius: 9px !important;
+			border-radius: 4px !important;
+			background: transparent !important;
+			color: #657086 !important;
 			writing-mode: horizontal-tb;
-			font-size: 16px;
+			font-size: 18px;
+			font-weight: 500 !important;
 		}
 
 		#${SAVE_PANEL_ID} button:disabled {
@@ -304,7 +305,6 @@ export const SAVE_PANEL_STYLE = `
 		}
 
 		.fuzzy-file-type {
-			grid-column: 2;
 			width: fit-content;
 			border-radius: 4px;
 			background: #ef4444;
@@ -315,12 +315,20 @@ export const SAVE_PANEL_STYLE = `
 		}
 
 		.fuzzy-file-type[data-kind="ppt"],
-		.fuzzy-file-type[data-kind="pptx"] {
-			background: #f59e0b;
+		.fuzzy-file-type[data-kind="pptx"],
+		.fuzzy-file-type[data-kind="presentation"] {
+			background: #dc2626;
+		}
+
+		.fuzzy-file-type[data-kind="pdf"] {
+			border: 2.5px solid #dc2626;
+			background: #ffffff;
+			color: #dc2626;
 		}
 
 		.fuzzy-file-type[data-kind="doc"],
-		.fuzzy-file-type[data-kind="docx"] {
+		.fuzzy-file-type[data-kind="docx"],
+		.fuzzy-file-type[data-kind="document"] {
 			background: #3b82f6;
 		}
 
@@ -328,12 +336,31 @@ export const SAVE_PANEL_STYLE = `
 			background: #64748b;
 		}
 
-		.fuzzy-file-row input {
-			grid-row: 1 / span 3;
+		.fuzzy-file-type[data-kind="spreadsheet"] { background: #16a34a; }
+		.fuzzy-file-type[data-kind="image"] { background: #9333ea; }
+		.fuzzy-file-type[data-kind="other"] { background: #64748b; }
+
+		.fuzzy-file-row {
+			grid-template-columns: auto auto minmax(0, 1fr);
+			align-items: center;
+			gap: 6px;
+			padding: 5px 7px;
 		}
 
-		.fuzzy-file-row small {
-			grid-column: 2;
+		.fuzzy-file-details {
+			display: grid;
+			gap: 1px;
+			min-width: 0;
+		}
+
+		.fuzzy-file-details strong {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.fuzzy-file-details small {
+			font-size: 10px;
 		}
 
 		.fuzzy-path-option span {
@@ -351,6 +378,19 @@ export const SAVE_PANEL_STYLE = `
 			display: grid;
 			gap: 3px;
 			min-width: 0;
+		}
+
+		.fuzzy-path-feature strong,
+		.fuzzy-path-option strong,
+		.fuzzy-actions p {
+			font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+		}
+
+		.fuzzy-path-feature strong,
+		.fuzzy-path-option strong {
+			overflow-wrap: anywhere;
+			word-break: break-word;
+			line-height: 1.4;
 		}
 
 		.fuzzy-path-feature em {
@@ -378,6 +418,18 @@ export const SAVE_PANEL_STYLE = `
 			text-overflow: ellipsis;
 			white-space: nowrap;
 			font-size: 11px;
+		}
+
+		.fuzzy-zip-section {
+			background: #f8f8ff;
+		}
+
+		.fuzzy-section-description {
+			margin: -2px 0 8px;
+			color: #687083;
+			font-size: 11px;
+			font-weight: 700;
+			line-height: 1.45;
 		}
 
 
@@ -410,25 +462,52 @@ export const SAVE_PANEL_STYLE = `
 		}
 
 		.fuzzy-action-meta {
-			display: flex;
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) auto;
 			align-items: center;
-			justify-content: space-between;
-			gap: 8px;
+			gap: 9px;
 			color: #657086;
 			font-size: 10px;
 			font-weight: 900;
 		}
 
-		.fuzzy-action-meta button {
-			background: transparent !important;
-			padding: 0 !important;
+		.fuzzy-toggle-all-button {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			gap: 6px;
+			min-height: 34px;
+			border: 1px solid var(--fuzzy-color-primary) !important;
+			background: var(--fuzzy-color-primary-soft) !important;
+			padding: 7px 10px !important;
 			color: var(--fuzzy-color-primary-strong) !important;
-			font-size: 11px;
+			font-size: 12px;
+			box-shadow: 0 2px 6px rgb(99 91 255 / 14%);
+		}
+
+		.fuzzy-toggle-all-button:hover {
+			background: var(--fuzzy-color-page) !important;
+		}
+
+		.fuzzy-toggle-all-button span {
+			display: inline-grid;
+			place-items: center;
+			width: 16px;
+			height: 16px;
+			border-radius: 50%;
+			background: var(--fuzzy-color-primary);
+			color: var(--fuzzy-color-surface);
+			font-size: 12px;
+			line-height: 1;
 		}
 
 		.fuzzy-actions > button {
-			min-height: 40px;
-			box-shadow: 0 8px 18px rgb(93 92 226 / 28%);
+			min-height: 32px;
+			background: #f1f2f6;
+			padding: 5px 8px;
+			box-shadow: none;
+			color: #565d6f;
+			font-size: 11px;
 		}
 
 		/* 類似ファイル確認（issue51） */

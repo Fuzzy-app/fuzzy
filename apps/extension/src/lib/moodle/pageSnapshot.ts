@@ -33,7 +33,7 @@ export interface MoodlePageSnapshot {
 export const MOODLE_PAGE_SNAPSHOT_MESSAGE = "fuzzy:getMoodlePageSnapshot";
 
 const FILE_EXTENSION_PATTERN =
-	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|png|jpe?g|gif|mp3|wav|m4a|ogg|mp4|webm|avi|mov|exe)(?:$|[?#])/i;
+	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|kmz|kml|gpx|png|jpe?g|gif|mp3|wav|m4a|ogg|mp4|webm|avi|mov|exe)(?:$|[?#])/i;
 const MOODLE_DIRECT_FILE_PATTERN = /\/pluginfile\.php\//i;
 const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
 const MOODLE_FOLDER_PATTERN = /\/mod\/folder\/view\.php/i;
@@ -304,21 +304,58 @@ function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
 	const activity = link.closest(
 		".activity-item, li.activity, .activity, [data-region='activity-card']",
 	);
-	if (!activity) return null;
+	const activityHint = resolveMoodleActivityMimeHint(
+		activity?.querySelector(".activitybadge, .badge")?.textContent,
+		activity?.querySelector<HTMLImageElement>(
+			"[data-region='activity-icon'], img.activityicon",
+		)?.src,
+	);
+	if (activityHint) return activityHint;
 
-	const badge = activity.querySelector(".activitybadge, .badge")?.textContent;
-	const iconSrc = activity.querySelector<HTMLImageElement>(
-		"[data-region='activity-icon'], img.activityicon",
-	)?.src;
-	return resolveMoodleActivityMimeHint(badge, iconSrc);
+	for (const scope of fileTypeScopes(link)) {
+		// pluginfile.php や resource/view.php は URL から拡張子を取り出せない。
+		// Moodle のテーマ差分を吸収するため、構造化属性とアイコンURLを確認する。
+		const elements = [
+			scope,
+			...scope.querySelectorAll<HTMLElement>(
+				"[data-region='activity-icon'], [class*='activityicon'], [class*='file'], img, svg, i",
+			),
+		];
+		for (const element of elements) {
+			const labels = [
+				normalizeText(element.getAttribute("alt")),
+				normalizeText(element.getAttribute("aria-label")),
+				normalizeText(element.getAttribute("title")),
+				normalizeText(element.getAttribute("data-file-type")),
+				normalizeText(element.getAttribute("data-mimetype")),
+			];
+			for (const label of labels) {
+				const mimeHint = normalizeMimeLabel(label);
+				if (mimeHint) return mimeHint;
+			}
+			const source = element.getAttribute("src") ?? "";
+			const iconName = source.match(
+				/\/(?:f|file)\/([a-z0-9]+)(?:-\d+)?(?:\.(?:svg|png|gif|webp))?(?:[?#]|$)/i,
+			)?.[1];
+			const mimeHint = normalizeMimeLabel(iconName ?? null);
+			if (mimeHint) return mimeHint;
+		}
+	}
+
+	return null;
 }
 
-/**
- * MoodleアクティビティのバッジとアイコンURLからファイル種別を推定する。
- *
- * バッジが「ファイル」のように種別を表さない場合もあるため、認識できない値では
- * アイコンURL（`/f/mp3-24.png` 等）を続けて確認する。
- */
+function fileTypeScopes(link: HTMLAnchorElement): Element[] {
+	const candidates = [
+		link,
+		link.parentElement,
+		link.closest(".activity-item, li.activity, .activity, [data-region='activity-card']"),
+		link.closest("li, tr, .card, .resource, [role='listitem']"),
+	];
+	return candidates.filter((candidate): candidate is Element => candidate !== null);
+}
+
+/** MoodleアクティビティのバッジとアイコンURLからファイル種別を推定する。 */
 export function resolveMoodleActivityMimeHint(
 	badgeText: string | null | undefined,
 	iconSrc: string | null | undefined,
@@ -326,7 +363,9 @@ export function resolveMoodleActivityMimeHint(
 	const badgeHint = normalizeMimeLabel(badgeText ?? null);
 	if (badgeHint) return badgeHint;
 
-	const iconMatch = iconSrc?.match(/\/f\/([a-z0-9]+)(?:-\d+)?(?:\.[a-z]+)?(?:[/?#]|$)/i);
+	const iconMatch = iconSrc?.match(
+		/\/(?:f|file)\/([a-z0-9]+)(?:-\d+)?(?:\.(?:svg|png|gif|webp))?(?:[/?#]|$)/i,
+	);
 	return normalizeMimeLabel(iconMatch?.[1] ?? null);
 }
 
@@ -354,9 +393,17 @@ function normalizeMimeLabel(value: string | null): string | null {
 		executable: "exe",
 		htm: "htm",
 		html: "html",
+		kmz: "kmz",
+		kml: "kml",
+		gpx: "gpx",
 	};
 
-	return aliases[normalized] ?? null;
+	if (aliases[normalized]) return aliases[normalized];
+	if (/(word|ワード|文書)/i.test(normalized)) return "docx";
+	if (/(powerpoint|パワーポイント|プレゼン)/i.test(normalized)) return "pptx";
+	if (/(excel|エクセル|表計算)/i.test(normalized)) return "xlsx";
+	if (/(pdf|ピーディーエフ)/i.test(normalized)) return "pdf";
+	return null;
 }
 
 function extractAssignmentTitle(line: string): string {

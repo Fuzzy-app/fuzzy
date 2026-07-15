@@ -14,6 +14,23 @@ import {
  * 授業ページ→フォルダ→サブフォルダ程度を想定し、無制限な探索はしない。
  */
 const MAX_FOLDER_DEPTH = 2;
+const MAX_MIME_HINT_REQUESTS = 20;
+const MIME_TYPE_HINTS: Record<string, string> = {
+	"application/pdf": "pdf",
+	"application/zip": "zip",
+	"application/vnd.google-earth.kmz": "kmz",
+	"application/vnd.google-earth.kml+xml": "kml",
+	"application/gpx+xml": "gpx",
+	"application/msword": "doc",
+	"application/vnd.ms-excel": "xls",
+	"application/vnd.ms-powerpoint": "ppt",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+	"image/jpeg": "jpg",
+	"image/png": "png",
+	"image/gif": "gif",
+};
 
 export function createEmptyMoodlePageSnapshot(): MoodlePageSnapshot {
 	return {
@@ -44,12 +61,43 @@ export async function collectMoodlePageSnapshotWithNestedFolders(
 ): Promise<MoodlePageSnapshot> {
 	const snapshot = safeCollectMoodlePageSnapshot(root);
 	const nestedFiles = await collectNestedFolderFiles(root);
+	const files = await resolveMissingMimeHints(dedupeFiles([...snapshot.files, ...nestedFiles]));
 
 	return {
 		...snapshot,
-		files: dedupeFiles([...snapshot.files, ...nestedFiles]),
+		files,
 		collectedAt: new Date().toISOString(),
 	};
+}
+
+/** URLやテーマアイコンから判定できない資料は、Moodleが返すContent-Typeで補完する。 */
+async function resolveMissingMimeHints(files: MoodleFileLink[]): Promise<MoodleFileLink[]> {
+	let requestCount = 0;
+	return Promise.all(
+		files.map(async (file) => {
+			if (file.mimeHint || requestCount >= MAX_MIME_HINT_REQUESTS || !isSameOriginUrl(file.url)) {
+				return file;
+			}
+			requestCount += 1;
+			const mimeHint = await fetchMimeHint(file.url);
+			return mimeHint ? { ...file, mimeHint } : file;
+		}),
+	);
+}
+
+async function fetchMimeHint(url: string): Promise<string | null> {
+	try {
+		const response = await fetch(url, { method: "HEAD", credentials: "include" });
+		if (!response.ok) return null;
+
+		const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase();
+		if (contentType && MIME_TYPE_HINTS[contentType]) return MIME_TYPE_HINTS[contentType];
+
+		const disposition = response.headers.get("content-disposition") ?? "";
+		return disposition.match(/\.([a-z0-9]{1,10})(?:["';]|$)/i)?.[1]?.toLowerCase() ?? null;
+	} catch {
+		return null;
+	}
 }
 
 async function collectNestedFolderFiles(

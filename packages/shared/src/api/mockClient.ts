@@ -105,13 +105,17 @@ export class MockApiClient implements FuzzyApiClient {
 		);
 		const courseLabel = knownCourse?.name ?? request.course.name ?? "不明なコース";
 		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
-		return delay([
-			{
-				path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\${sectionLabel ?? "資料"}`,
-				confidence: 0.92,
-			},
-			{ path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`, confidence: 0.6 },
-		]);
+		const coursePath = `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`;
+		const suggestions: SaveSuggestion[] = [{ path: coursePath, confidence: 0.92 }];
+
+		// 「授業計画」のような活動名を保存先フォルダにすると、資料を分類するどころか
+		// 一件ごとの不要な階層になってしまう。回次・週次のように整理単位として明確な場合だけ、
+		// 補助候補として提示する。
+		if (sectionLabel && /^(第\s*\d+\s*回|week\s*\d+|\d+週目)/i.test(sectionLabel)) {
+			suggestions.push({ path: `${coursePath}\\${sectionLabel}`, confidence: 0.6 });
+		}
+
+		return delay(suggestions);
 	}
 
 	async checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
