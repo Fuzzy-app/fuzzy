@@ -227,7 +227,7 @@ export function ensureRulesScreenStyle(): void {
 		.fuzzy-rules-secondary-button:focus,
 		.fuzzy-rules-save-button:focus,
 		.fuzzy-rules-checkbox input:focus {
-			outline: 3px solid rgba(108, 99, 255, 0.28);
+			outline: 3px solid var(--fuzzy-focus-ring);
 			outline-offset: 2px;
 		}
 

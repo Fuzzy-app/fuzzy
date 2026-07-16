@@ -19,6 +19,7 @@ import {
 } from "@fuzzy/shared";
 import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
 import { createRuleManagementStore } from "../../lib/rules/state";
+import { createCalendarPanelController } from "./calendarPanel";
 import { type RuleManagementScreen, createRuleManagementScreen } from "./rulesScreen";
 
 const ROOT_ID = "fuzzy-shell-root";
@@ -327,6 +328,11 @@ export function mountFuzzyShell(): void {
 		loading: false,
 		error: null,
 	};
+	const calendarPanel = createCalendarPanelController({
+		onChange: () => {
+			if (activeScreen === "deadlines") renderScreen();
+		},
+	});
 
 	const moveMainContentToStash = () => {
 		while (mainHost.firstChild) stash.append(mainHost.firstChild);
@@ -993,7 +999,7 @@ export function mountFuzzyShell(): void {
 			listHost.append(...visible.map(buildDeadlineCard));
 		}
 
-		screen.append(metricGrid, syncPanel, toolbar, listHost);
+		screen.append(metricGrid, syncPanel, calendarPanel.render(assignments), toolbar, listHost);
 		return screen;
 	};
 
@@ -1147,6 +1153,7 @@ export function mountFuzzyShell(): void {
 					if (activeScreen === "deadlines") renderScreen();
 				});
 			}
+			calendarPanel.ensureNotificationRulesLoaded();
 			mainEl.replaceChildren(buildDeadlineScreen());
 		} else if (activeScreen === "rules") {
 			mainEl.replaceChildren(getRuleScreen().root);
@@ -2407,7 +2414,7 @@ function ensureStyle(): void {
 		.fuzzy-filter-chip:focus,
 		.fuzzy-checkline input:focus,
 		.fuzzy-search-input-wrap:focus-within {
-			outline: 3px solid rgba(108, 99, 255, 0.28);
+			outline: 3px solid var(--fuzzy-focus-ring);
 			outline-offset: 2px;
 		}
 

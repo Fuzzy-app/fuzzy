@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { NotificationRule, NotificationRuleInput } from "../types";
 import { createApiClient } from "./index";
 import { MockApiClient } from "./mockClient";
 
@@ -112,10 +113,45 @@ describe("MockApiClient（サンプルデータ）", () => {
 	});
 
 	test("updateNotificationRules → getNotificationRules: 更新内容が反映される", async () => {
-		const updated = [{ id: 1, offsetMinutes: 4320, label: "3日前", enabled: false }];
-		await client.updateNotificationRules(updated);
+		const input: NotificationRuleInput[] = [{ id: 1, offsetMinutes: 4320, enabled: false }];
+		const updated: NotificationRule[] = [
+			{ id: 1, offsetMinutes: 4320, label: "3日前", enabled: false },
+		];
+		const updateResult = await client.updateNotificationRules(input);
 		const result = await client.getNotificationRules();
+		expect(updateResult).toEqual({ ok: true, rules: updated });
 		expect(result).toEqual(updated);
+	});
+
+	test("updateNotificationRules: 任意ルールのIDを保存側で採番する", async () => {
+		const updateResult = await client.updateNotificationRules([
+			{ offsetMinutes: 30, enabled: true },
+		]);
+		expect(updateResult.rules).toEqual([
+			{ id: 5, offsetMinutes: 30, label: "30分前", enabled: true },
+		]);
+	});
+
+	test("updateNotificationRules: 範囲外と重複した通知タイミングを拒否する", async () => {
+		await expect(
+			client.updateNotificationRules([{ offsetMinutes: 525601, enabled: true }]),
+		).rejects.toMatchObject({ code: "RULE_CONFLICT" });
+		await expect(
+			client.updateNotificationRules([
+				{ offsetMinutes: 60, enabled: true },
+				{ offsetMinutes: 60, enabled: false },
+			]),
+		).rejects.toMatchObject({ code: "RULE_CONFLICT" });
+	});
+
+	test("通知設定はモッククライアントを作り直すとサンプルへ戻る", async () => {
+		const freshClient = new MockApiClient();
+		const result = await freshClient.getNotificationRules();
+		expect(result.find((rule) => rule.id === 1)?.enabled).toBe(true);
+		expect(result.find((rule) => rule.id === 3)).toMatchObject({
+			offsetMinutes: 540,
+			label: "9時間前",
+		});
 	});
 
 	test("getLatestSyncEvent: 直近の同期結果（データ取得通知用）が返る", async () => {

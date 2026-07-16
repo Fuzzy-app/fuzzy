@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-01
+最終更新: 2026-07-15
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はRust構造体を正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期の暫定型は `packages/shared/src/types.ts` に手書きしている。
 
@@ -42,11 +42,17 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `getRuleViolations`        | ルール違反ファイル一覧             | `{}` → `RuleViolation[]`                            |
 | `getDuplicateGroups`       | 重複ファイル一覧                | `{}` → `DuplicateGroup[]`                           |
 | `getNotificationRules`     | 通知タイミング設定取得             | `{}` → `NotificationRule[]`                         |
-| `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules[] }` → `{ ok }`                            |
+| `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules: NotificationRuleInput[] }` → `{ ok, rules: NotificationRule[] }` |
 | `getLatestSyncEvent`       | 直近の同期結果取得（データ取得通知用）     | `{}` → `DataSyncEvent \| null`                      |
 | `getAssignmentChanges`     | 同期で検出された課題の変更点一覧（変更点表示用） | `{ sinceSyncEventId? }` → `AssignmentChange[]`      |
 | `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
+
+`NotificationRule.offsetMinutes` は締切日時から遡る相対時間（分）を表し、0以上525,600以下の整数（締切時刻から365日前まで）に限定する。`NotificationRuleInput` は `{ id?, offsetMinutes, enabled }` とし、新規ルールでは`id`を省略する。native-hostはSQLiteのトランザクション内で、ID付きの既存行を更新、IDなしの行を新規採番、入力から除かれた既存行を削除し、保存後の`NotificationRule[]`を返す。
+
+`label`はクライアント入力として受け取らず、保存側が`offsetMinutes`から生成する。0は「締切時刻」、24時間の倍数は「n日前」、60分の倍数は「n時間前」、それ以外は時間と分または分単位で表示し、「当日9:00」のような固定時刻として解釈しない。同じ`offsetMinutes`の重複は拒否する。
+
+Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issueで定義する。Google認証、送信対象の確認、明示的な追加操作、認証解除を必須とし、既存のローカルAPIへ暗黙の外部送信を追加しない。Windowsデスクトップ通知の常駐方式とAPIも別Issueで定義する。
 
 ### 1.3 起動・接続方針
 

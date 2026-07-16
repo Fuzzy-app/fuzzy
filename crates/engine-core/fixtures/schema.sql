@@ -85,7 +85,7 @@ CREATE INDEX idx_assignments_course ON assignments(course_id);
 
 CREATE TABLE notification_rules (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
-	offset_minutes INTEGER NOT NULL,
+	offset_minutes INTEGER NOT NULL UNIQUE CHECK(offset_minutes BETWEEN 0 AND 525600),
 	label          TEXT NOT NULL,
 	enabled        INTEGER NOT NULL DEFAULT 1
 );

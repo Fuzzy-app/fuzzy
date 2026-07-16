@@ -3,6 +3,7 @@ import {
 	type DataSyncEvent,
 	type ExtractZipRequest,
 	type FuzzyApiClient,
+	type NotificationRuleInput,
 	type SaveFilesRequest,
 	type SuggestSavePathRequest,
 	createApiClient,
@@ -12,6 +13,7 @@ import {
 	type FuzzyApiResponseMessage,
 	isFuzzyApiRequestMessage,
 } from "../lib/api/backgroundApi";
+import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
@@ -60,6 +62,7 @@ export default defineBackground(() => {
 		if (!clientPromise) clientPromise = createApiClient();
 		return clientPromise;
 	};
+	const deadlineNotificationMonitor = createDeadlineNotificationMonitor(getClient);
 
 	const checkLatestSyncEvent = async () => {
 		try {
@@ -76,12 +79,20 @@ export default defineBackground(() => {
 		void checkLatestSyncEvent();
 	};
 
-	browser.runtime.onInstalled.addListener(startSyncNotificationMonitoring);
-	browser.runtime.onStartup.addListener(startSyncNotificationMonitoring);
+	const startNotificationMonitoring = () => {
+		startSyncNotificationMonitoring();
+		deadlineNotificationMonitor.start();
+	};
+
+	browser.runtime.onInstalled.addListener(startNotificationMonitoring);
+	browser.runtime.onStartup.addListener(startNotificationMonitoring);
 	browser.alarms.onAlarm.addListener((alarm) => {
 		if (alarm.name === SYNC_CHECK_ALARM) void checkLatestSyncEvent();
+		if (alarm.name === deadlineNotificationMonitor.alarmName) {
+			void deadlineNotificationMonitor.check();
+		}
 	});
-	startSyncNotificationMonitoring();
+	startNotificationMonitoring();
 
 	browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 		if (isRuleManagementRequestMessage(message)) {
@@ -101,7 +112,7 @@ async function respondToApiRequest(
 ): Promise<FuzzyApiResponseMessage> {
 	try {
 		const client = await clientPromise;
-		const data = await callSaveApi(client, message);
+		const data = await callBackgroundApi(client, message);
 		return { ok: true, data, mode: client.mode };
 	} catch (error) {
 		return {
@@ -113,7 +124,10 @@ async function respondToApiRequest(
 
 // リクエスト本文はメッセージ境界を越えるため実行時には型情報が失われている。
 // メソッド名で分岐し、各APIの想定型として渡す（内容の検証はnative-host側の契約に委ねる）。
-function callSaveApi(client: FuzzyApiClient, message: FuzzyApiRequestMessage): Promise<unknown> {
+async function callBackgroundApi(
+	client: FuzzyApiClient,
+	message: FuzzyApiRequestMessage,
+): Promise<unknown> {
 	switch (message.method) {
 		case "suggestSavePath":
 			return client.suggestSavePath(message.request as SuggestSavePathRequest);
@@ -123,5 +137,9 @@ function callSaveApi(client: FuzzyApiClient, message: FuzzyApiRequestMessage): P
 			return client.saveFiles(message.request as SaveFilesRequest);
 		case "extractZip":
 			return client.extractZip(message.request as ExtractZipRequest);
+		case "getNotificationRules":
+			return client.getNotificationRules();
+		case "updateNotificationRules":
+			return client.updateNotificationRules(message.request as NotificationRuleInput[]);
 	}
 }

@@ -157,6 +157,18 @@ export interface NotificationRule {
 	enabled: boolean;
 }
 
+/** 通知ルール保存時の入力。新規ルールのIDはSQLite側で採番する。 */
+export interface NotificationRuleInput {
+	id?: number;
+	offsetMinutes: number;
+	enabled: boolean;
+}
+
+export interface NotificationRuleUpdateResult {
+	ok: boolean;
+	rules: NotificationRule[];
+}
+
 export interface DeadlineFilter {
 	courseId?: number;
 	includePast?: boolean;

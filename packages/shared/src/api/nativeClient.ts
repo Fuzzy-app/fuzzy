@@ -9,6 +9,8 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolation,
@@ -141,7 +143,7 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("getNotificationRules", {});
 	}
 
-	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
+	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult> {
 		return this.send("updateNotificationRules", { rules });
 	}
 
