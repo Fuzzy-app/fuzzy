@@ -5,6 +5,7 @@
 import "@fuzzy/shared/theme.css";
 import { MOODLE_PAGE_SNAPSHOT_MESSAGE } from "../../lib/moodle/pageSnapshot";
 import { collectMoodlePageSnapshotWithNestedFolders } from "../../lib/moodle/snapshotCollector";
+import { handleMoodleLoginPage, setupMoodleLogoutTracking } from "./loginAutomation";
 import { mountSavePanel } from "./savePanel";
 import { mountFuzzyShell } from "./shell";
 
@@ -16,11 +17,31 @@ export default defineContentScript({
 	matches: ["*://*.wakayama-u.ac.jp/*"],
 	main() {
 		if (!/^moodle\d*\.wakayama-u\.ac\.jp$/.test(location.hostname)) return;
-		registerSnapshotMessageListener();
-		mountFuzzyShell();
-		void mountSavePanel();
+		void initializeMoodleContent();
 	},
 });
+
+async function initializeMoodleContent(): Promise<void> {
+	await setupMoodleLogoutTracking({
+		document,
+		pageUrl: location.href,
+		panelStateStorage: browser.storage.local,
+		sessionStorage: window.sessionStorage,
+		navigate: (url) => location.assign(url),
+	});
+	const loginResult = await handleMoodleLoginPage({
+		document,
+		pageUrl: location.href,
+		panelStateStorage: browser.storage.local,
+		sessionStorage: window.sessionStorage,
+	});
+	// ログイン画面では保存パネルやFuzzyシェルを重ねず、手動ログインの導線も残す。
+	if (loginResult !== "not-login-page") return;
+
+	registerSnapshotMessageListener();
+	mountFuzzyShell();
+	void mountSavePanel();
+}
 
 // background等からのスナップショット要求（issue48のデータ取得口）に応答する。
 function registerSnapshotMessageListener(): void {

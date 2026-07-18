@@ -21,6 +21,20 @@ export async function loadSavePanelOpenState(
 	}
 }
 
+/** 再ログイン前に、次のMoodle画面を必ず閉じた状態から始められるようにする。 */
+export async function resetSavePanelOpenState(
+	storage: SavePanelStateStorage,
+	onError: StateErrorHandler = defaultSaveErrorHandler,
+): Promise<boolean> {
+	try {
+		await storage.set({ [SAVE_PANEL_OPEN_STATE_KEY]: false });
+		return true;
+	} catch (error) {
+		onError(error);
+		return false;
+	}
+}
+
 /** 連続操作でも最後の状態が必ず最後に書き込まれる、直列化済みの保存関数を作る。 */
 export function createSavePanelOpenStateWriter(
 	storage: SavePanelStateStorage,

@@ -4,6 +4,7 @@ import {
 	type SavePanelStateStorage,
 	createSavePanelOpenStateWriter,
 	loadSavePanelOpenState,
+	resetSavePanelOpenState,
 } from "../../apps/extension/src/entrypoints/content/savePanelState";
 
 describe("保存パネルの開閉状態", () => {
@@ -23,6 +24,32 @@ describe("保存パネルの開閉状態", () => {
 			set: async () => {},
 		};
 		expect(await loadSavePanelOpenState(storage, (error) => errors.push(error))).toBe(false);
+		expect(errors).toHaveLength(1);
+	});
+
+	test("再ログイン前のリセット結果を呼び出し側へ返す", async () => {
+		const writes: boolean[] = [];
+		const storage: SavePanelStateStorage = {
+			get: async () => ({}),
+			set: async (items) => {
+				writes.push(items[SAVE_PANEL_OPEN_STATE_KEY] === true);
+			},
+		};
+		expect(await resetSavePanelOpenState(storage)).toBe(true);
+		expect(writes).toEqual([false]);
+
+		const errors: unknown[] = [];
+		expect(
+			await resetSavePanelOpenState(
+				{
+					get: async () => ({}),
+					set: async () => {
+						throw new Error("storage unavailable");
+					},
+				},
+				(error) => errors.push(error),
+			),
+		).toBe(false);
 		expect(errors).toHaveLength(1);
 	});
 
