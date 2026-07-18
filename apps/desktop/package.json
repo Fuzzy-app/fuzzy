@@ -9,11 +9,14 @@
 		"dev:tauri": "bun run prepare:extension && vite dev",
 		"build": "vite build",
 		"build:tauri": "bun run prepare:extension && vite build",
+		"build:tauri:store": "bun run validate:extension-store && vite build",
 		"prepare:extension": "bun run scripts/prepare-extension.ts",
+		"validate:extension-store": "bun run scripts/validate-extension-store.ts",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"tauri": "tauri"
+		"tauri": "tauri",
+		"tauri:build:store": "tauri build --config src-tauri/tauri.store.conf.json"
 	},
 	"license": "MIT",
 	"dependencies": {

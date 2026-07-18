@@ -5,9 +5,12 @@
 		createDestinationOpenedStateInput,
 		createInitialExtensionInstallState,
 		detectSupportedBrowser,
+		getExtensionInstallChannelForState,
 		getExtensionInstallDestination,
 		getExtensionInstallStateClient,
+		getPreferredExtensionInstallChannel,
 		getSupportedBrowserOption,
+		isExtensionInstallStateForDestination,
 		openExtensionInstallDestinationClient,
 		saveExtensionInstallStateClient,
 		supportedBrowserOptions,
@@ -23,7 +26,7 @@
 
 	let detectedBrowser: BrowserChoice = "unsupported";
 	let selectedBrowser: BrowserChoice = "unsupported";
-	let selectedChannel: ExtensionInstallChannel = "development";
+	let selectedChannel: ExtensionInstallChannel = "bundled";
 	let installState: ExtensionInstallState =
 		createInitialExtensionInstallState("unsupported");
 	let confirmationChecked = false;
@@ -39,14 +42,7 @@
 		try {
 			installState = await getExtensionInstallStateClient(detectedBrowser);
 			selectedBrowser = installState.browserId;
-			selectedChannel = installState.channel;
-
-			if (
-				!getExtensionInstallDestination(selectedBrowser, selectedChannel)
-					.available
-			) {
-				selectedChannel = "development";
-			}
+			selectedChannel = getExtensionInstallChannelForState(installState);
 
 			confirmationChecked = installState.status === "confirmed";
 		} catch {
@@ -94,6 +90,7 @@
 		errorMessage = null;
 		successMessage = null;
 		confirmationChecked = false;
+		selectedChannel = getPreferredExtensionInstallChannel(selectedBrowser);
 
 		try {
 			await persistStatus("not-started");
@@ -123,9 +120,15 @@
 				),
 			);
 			confirmationChecked = false;
-			successMessage = result.mocked
-				? "ローカルモックで公式の導入手順を開いた状態にしました。外部ブラウザは起動していません。"
-				: `${result.destination.label}を開きました。導入後、この画面へ戻って確認してください。`;
+			if (result.mocked) {
+				successMessage =
+					"ブラウザプレビューでは外部アプリを開かず、導入操作を開始した状態にしました。";
+			} else if (result.destination.kind === "bundled") {
+				successMessage =
+					"同梱された拡張機能フォルダーをエクスプローラーで表示しました。読み込み後、この画面へ戻って確認してください。";
+			} else {
+				successMessage = `${result.destination.label}を開きました。導入後、この画面へ戻って確認してください。`;
+			}
 		} catch (error) {
 			errorMessage = getErrorMessage(error);
 		} finally {
@@ -162,11 +165,18 @@
 		selectedBrowser,
 		selectedChannel,
 	);
-	$: isCompleted = installState.status === "confirmed";
+	$: isCurrentDestinationState = isExtensionInstallStateForDestination(
+		installState,
+		selectedBrowser,
+		selectedChannel,
+	);
+	$: isCompleted =
+		isCurrentDestinationState && installState.status === "confirmed";
 	$: canConfirm =
-		installState.status === "destination-opened" ||
-		installState.status === "confirmed" ||
-		Boolean(installState.lastOpenedAt);
+		isCurrentDestinationState &&
+		(installState.status === "destination-opened" ||
+			installState.status === "confirmed" ||
+			Boolean(installState.lastOpenedAt));
 	$: isBusy = isLoading || isOpening || isSaving;
 </script>
 
@@ -201,9 +211,9 @@
 		<section class="safety-card" aria-labelledby="safety-heading">
 			<div class="safety-icon" aria-hidden="true">i</div>
 			<div>
-				<h2 id="safety-heading">インストールはユーザー操作で行います</h2>
+				<h2 id="safety-heading">導入の確定はブラウザ上で行います</h2>
 				<p>
-					この画面が行うのは、公式ストアまたはブラウザ公式の開発版導入ガイドを開くところまでです。ブラウザポリシーやレジストリを変更せず、Fuzzyの学習データも送信しません。
+					Fuzzyは拡張機能の同梱フォルダーまたは公式ストアを表示するところまでを案内します。ブラウザポリシーやレジストリを変更せず、学習データも外部送信しません。
 				</p>
 			</div>
 		</section>
@@ -275,93 +285,102 @@
 			</p>
 		{/if}
 
-		<fieldset class="method-fieldset">
-			<legend>導入方法</legend>
-			<div class="method-grid">
-				<label
-					class:selected={selectedChannel === "development"}
-					class="method-card"
-				>
-					<input
-						type="radio"
-						name="install-channel"
-						value="development"
-						bind:group={selectedChannel}
-						disabled={isBusy}
-					/>
-					<span>
-						<strong>開発版を読み込む</strong>
-						<small>ローカルでビルドした成果物を使います。</small>
-					</span>
-					<span class="available-badge">利用可能</span>
-				</label>
-
-				<label class="method-card disabled">
-					<input
-						type="radio"
-						name="install-channel"
-						value="store"
-						bind:group={selectedChannel}
-						disabled
-					/>
-					<span>
-						<strong>公式ストアから導入</strong>
-						<small>配布URL決定後に同じAPI境界へ接続します。</small>
-					</span>
-					<span class="pending-badge">準備中</span>
-				</label>
+		<section class="distribution-card" aria-labelledby="distribution-heading">
+			<div>
+				<p class="section-label">現在の導入方法</p>
+				<h2 id="distribution-heading">{destination.label}</h2>
+				<p>
+					{#if selectedChannel === "store"}
+						公式ストアで公開されたFuzzyを導入します。
+					{:else}
+						拡張機能はFuzzyアプリに同梱済みです。利用者によるビルドやコマンド操作は必要ありません。
+					{/if}
+				</p>
 			</div>
-		</fieldset>
+			<span
+				class:store={selectedChannel === "store"}
+				class="distribution-badge"
+			>
+				{selectedChannel === "store" ? "公式配布" : "アプリ同梱"}
+			</span>
+		</section>
 
-		<section class="guide-card" aria-labelledby="development-guide-heading">
+		<section class="guide-card" aria-labelledby="install-guide-heading">
 			<div class="guide-heading">
 				<div>
-					<p class="section-label">開発版の導入手順</p>
-					<h2 id="development-guide-heading">
-						{selectedBrowserOption?.name ?? "対応ブラウザ"}で読み込む
+					<p class="section-label">
+						{selectedChannel === "store"
+							? "公式ストアの導入手順"
+							: "同梱版の導入手順"}
+					</p>
+					<h2 id="install-guide-heading">
+						{selectedBrowserOption?.name ?? "対応ブラウザ"}へ導入する
 					</h2>
 				</div>
-				<span class="step-count">3ステップ</span>
+				<span class="step-count">
+					{selectedChannel === "store" ? "2ステップ" : "3ステップ"}
+				</span>
 			</div>
 
-			<ol class="guide-list">
-				<li>
-					<span class="guide-index">1</span>
-					<div>
-						<strong>拡張機能をビルド</strong>
-						<p>
-							リポジトリ直下で <code>cd apps/extension</code> の後に
-							<code>bun run build</code> を実行します。
-						</p>
-					</div>
-				</li>
-				<li>
-					<span class="guide-index">2</span>
-					<div>
-						<strong>成果物フォルダを確認</strong>
-						<p>
-							リポジトリ直下から見た
-							<code>{destination.displayTarget ?? "導入先未選択"}</code>
-							（<code>apps/extension</code> 内では
-							<code>.output/chrome-mv3</code>）をブラウザへ読み込みます。
-						</p>
-					</div>
-				</li>
-				<li>
-					<span class="guide-index">3</span>
-					<div>
-						<strong>ブラウザで読み込む</strong>
-						<p>
-							アドレスバーへ
-							<code
-								>{selectedBrowserOption?.managementUrl ??
-									"拡張機能管理画面"}</code
-							>
-							を入力し、デベロッパーモードを有効化して「パッケージ化されていない拡張機能を読み込む」を選びます。
-						</p>
-					</div>
-				</li>
-			</ol>
+			{#if selectedChannel === "store"}
+				<ol class="guide-list">
+					<li>
+						<span class="guide-index">1</span>
+						<div>
+							<strong>公式ストアを開く</strong>
+							<p>
+								下のボタンから、選択したブラウザのFuzzy配布ページを開きます。
+							</p>
+						</div>
+					</li>
+					<li>
+						<span class="guide-index">2</span>
+						<div>
+							<strong>ブラウザへ追加</strong>
+							<p>
+								ストア上の追加ボタンを押し、表示される権限を確認して導入します。
+							</p>
+						</div>
+					</li>
+				</ol>
+			{:else}
+				<ol class="guide-list">
+					<li>
+						<span class="guide-index">1</span>
+						<div>
+							<strong>同梱フォルダーを表示</strong>
+							<p>
+								下のボタンを押すと、Fuzzyアプリに同梱された
+								<code>chrome-mv3</code> フォルダーをエクスプローラーで確認できます。
+							</p>
+						</div>
+					</li>
+					<li>
+						<span class="guide-index">2</span>
+						<div>
+							<strong>拡張機能の管理画面を開く</strong>
+							<p>
+								{selectedBrowserOption?.name ?? "ブラウザ"}のアドレスバーへ
+								<code
+									>{selectedBrowserOption?.managementUrl ??
+										"拡張機能管理画面"}</code
+								>
+								を入力し、デベロッパーモードを有効にします。
+							</p>
+						</div>
+					</li>
+					<li>
+						<span class="guide-index">3</span>
+						<div>
+							<strong>表示したフォルダーを読み込む</strong>
+							<p>
+								「パッケージ化されていない拡張機能を読み込む」を選び、エクスプローラーで表示した
+								<code>chrome-mv3</code> フォルダーを指定します。
+							</p>
+						</div>
+					</li>
+				</ol>
+			{/if}
 		</section>
 
 		{#if errorMessage}
@@ -389,10 +408,16 @@
 				aria-busy={isOpening}
 			>
 				{isOpening
-					? "公式の導入手順を開いています..."
+					? selectedChannel === "store"
+						? "公式ストアを開いています..."
+						: "同梱フォルダーを表示しています..."
 					: errorMessage
-						? "公式の導入手順を再度開く"
-						: "公式の導入手順を開く"}
+						? selectedChannel === "store"
+							? "公式ストアを再度開く"
+							: "同梱フォルダーを再度表示"
+						: selectedChannel === "store"
+							? "公式ストアでFuzzyを開く"
+							: "同梱フォルダーを表示"}
 			</button>
 		</div>
 
@@ -451,8 +476,7 @@
 
 	.chip,
 	.local-badge,
-	.available-badge,
-	.pending-badge,
+	.distribution-badge,
 	.step-count {
 		width: fit-content;
 		border-radius: 999px;
@@ -505,6 +529,7 @@
 	.success-banner,
 	.completion-banner,
 	.safety-card,
+	.distribution-card,
 	.guide-card,
 	.confirmation-card {
 		margin-top: 20px;
@@ -589,15 +614,13 @@
 		color: #4d477d;
 	}
 
-	.browser-fieldset,
-	.method-fieldset {
+	.browser-fieldset {
 		margin: 24px 0 0;
 		padding: 0;
 		border: none;
 	}
 
-	.browser-fieldset legend,
-	.method-fieldset legend {
+	.browser-fieldset legend {
 		width: 100%;
 		padding: 0;
 		font-size: 0.9rem;
@@ -625,8 +648,7 @@
 		color: #7d83a2;
 	}
 
-	.browser-grid,
-	.method-grid {
+	.browser-grid {
 		margin-top: 12px;
 		display: grid;
 		gap: 12px;
@@ -636,12 +658,7 @@
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 	}
 
-	.method-grid {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-
-	.browser-card,
-	.method-card {
+	.browser-card {
 		position: relative;
 		display: flex;
 		align-items: flex-start;
@@ -657,22 +674,19 @@
 			box-shadow 0.18s ease;
 	}
 
-	.browser-card.selected,
-	.method-card.selected {
+	.browser-card.selected {
 		border-color: #7c68f6;
 		box-shadow: 0 0 0 3px rgba(124, 104, 246, 0.12);
 	}
 
 	.browser-card:focus-within,
-	.method-card:focus-within,
 	button:focus-visible,
 	.confirmation-check:focus-within {
 		outline: 3px solid rgba(109, 92, 246, 0.3);
 		outline-offset: 2px;
 	}
 
-	.browser-card input,
-	.method-card input {
+	.browser-card input {
 		margin-top: 3px;
 		accent-color: var(--fuzzy-color-primary);
 	}
@@ -694,14 +708,12 @@
 		background: #a7acc0;
 	}
 
-	.browser-card strong,
-	.method-card strong {
+	.browser-card strong {
 		display: block;
 		font-size: 0.82rem;
 	}
 
-	.browser-card small,
-	.method-card small {
+	.browser-card small {
 		display: block;
 		margin-top: 4px;
 		font-size: 0.7rem;
@@ -709,33 +721,39 @@
 		color: #7b809d;
 	}
 
-	.method-card {
-		padding-right: 86px;
+	.distribution-card {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 16px;
+		padding: 18px 20px;
+		background: linear-gradient(180deg, #f7f5ff 0%, #f0effb 100%);
+		border: 1px solid rgba(124, 104, 246, 0.22);
+		color: #525978;
 	}
 
-	.method-card.disabled {
-		cursor: default;
-		opacity: 0.68;
-		background: #f5f6fa;
+	.distribution-card h2 {
+		margin-bottom: 0;
+		color: #4d477d;
 	}
 
-	.available-badge,
-	.pending-badge {
-		position: absolute;
-		top: 13px;
-		right: 13px;
-		padding: 3px 8px;
-		font-size: 0.65rem;
+	.distribution-card p:not(.section-label) {
+		margin: 7px 0 0;
+		font-size: 0.76rem;
+		line-height: 1.65;
 	}
 
-	.available-badge {
+	.distribution-badge {
+		padding: 6px 10px;
+		background: #edeaff;
+		color: #6256ca;
+		font-size: 0.68rem;
+		white-space: nowrap;
+	}
+
+	.distribution-badge.store {
 		background: #edf8f1;
 		color: #2e6b43;
-	}
-
-	.pending-badge {
-		background: #eceef5;
-		color: #737995;
 	}
 
 	.guide-card {
@@ -879,8 +897,7 @@
 	}
 
 	@media (max-width: 880px) {
-		.browser-grid,
-		.method-grid {
+		.browser-grid {
 			grid-template-columns: 1fr;
 		}
 	}
@@ -892,6 +909,7 @@
 
 		.install-header,
 		.install-actions,
+		.distribution-card,
 		.browser-fieldset legend {
 			flex-direction: column;
 			align-items: stretch;
