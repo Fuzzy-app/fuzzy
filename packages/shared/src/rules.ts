@@ -128,6 +128,15 @@ export function previewRulePattern(
 	});
 }
 
+/** 保存先候補の生成でもプレビューと同じトークン置換規則を使う。 */
+export function resolveRulePattern(patternTemplate: string, values: RulePreviewValues): string {
+	return previewRulePattern(patternTemplate, values)
+		.split(/[\\/]+/)
+		.map((segment) => segment.trim())
+		.filter(Boolean)
+		.join("\\");
+}
+
 export function removeSectionSegment(patternTemplate: string): string {
 	const segments = patternTemplate
 		.split(/[\\/]/)

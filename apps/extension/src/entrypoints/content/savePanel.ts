@@ -2,9 +2,16 @@
 // mainのcontent/モジュール分割方針に合わせ、このモジュールはDOM構築のみを担当する。
 // スナップショット収集は ../../lib/moodle/snapshotCollector、
 // native-host接続は background 経由（../../lib/api/backgroundApi）に委譲する。
-import type { SaveSuggestion, SimilarFileMatch } from "@fuzzy/shared";
+import {
+	type SimilarFileMatch,
+	normalizeRelativeSavePath,
+	relativeSavePath,
+	resolveSavePathUnderRoot,
+	splitWindowsPath,
+} from "@fuzzy/shared";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
-import type { MoodleFileLink, MoodlePageSnapshot } from "../../lib/moodle/pageSnapshot";
+import { displayFileTitle, fileTypeInfo, isZipFile } from "../../lib/moodle/fileType";
+import type { MoodleFileLink } from "../../lib/moodle/pageSnapshot";
 import {
 	collectMoodlePageSnapshotWithNestedFolders,
 	safeCollectMoodlePageSnapshot,
@@ -15,6 +22,17 @@ import {
 	SAVE_PANEL_STYLE,
 	SAVE_PANEL_STYLE_ID,
 } from "./savePanelStyle";
+import {
+	type FileSuggestions,
+	type SaveDestinationGroup,
+	type SelectedFilePaths,
+	buildSaveDestinationGroups,
+	commonGroupSuggestions,
+	createSelectedFilePaths,
+	fileId,
+	loadFileSuggestions,
+	saveRootFromSuggestions,
+} from "./savePlan";
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
@@ -45,26 +63,26 @@ export function mountSavePanel(): void {
 
 	const api = new BackgroundApiClient();
 	let snapshot = safeCollectMoodlePageSnapshot();
-	let suggestions: SaveSuggestion[] = [];
+	let suggestions: FileSuggestions = new Map();
 	let selectedFileIds = new Set(snapshot.files.map(fileId));
-	let selectedPath = "";
-	let manualPath = "";
+	let selectedPaths: SelectedFilePaths = new Map();
+	let manualRelativePath = "";
 	let lastSavePath = "";
 	let zipMode: "extract" | "keep" = "extract";
 	let flattenZip = true;
-	let extractDestinationPath = "";
+	let extractDestinationRelativePath = "";
 	// 類似ファイル通知（issue51）: 保存前チェックの状態。
 	let similarWarnings: SimilarWarning[] = [];
 	let checkingSimilar = false;
 	let awaitingConfirm = false;
-	let loading = true;
+	let initialized = false;
+	let loading = false;
 	let saving = false;
-	let isPanelOpen = true;
-	let message: string | null = "Moodleページ内の資料を読み込んでいます。";
+	let isPanelOpen = false;
+	let message: string | null = null;
 
 	injectPanelStyle();
 	render();
-	void initialize();
 
 	async function initialize() {
 		try {
@@ -75,8 +93,8 @@ export function mountSavePanel(): void {
 			snapshot = fullSnapshot;
 			lastSavePath = storedPath;
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadSuggestions(api, snapshot);
-			selectedPath = suggestions[0]?.path ?? "";
+			suggestions = await loadFileSuggestions(api, snapshot);
+			selectedPaths = createSelectedFilePaths(suggestions);
 			message = null;
 		} catch (error) {
 			message = toErrorMessage(error, "保存先候補の取得に失敗しました");
@@ -94,8 +112,9 @@ export function mountSavePanel(): void {
 		try {
 			snapshot = await collectMoodlePageSnapshotWithNestedFolders();
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadSuggestions(api, snapshot);
-			selectedPath = suggestions[0]?.path ?? "";
+			suggestions = await loadFileSuggestions(api, snapshot);
+			selectedPaths = createSelectedFilePaths(suggestions);
+			manualRelativePath = "";
 			message = null;
 		} catch (error) {
 			message = toErrorMessage(error, "Moodleページ内の資料取得に失敗しました");
@@ -112,9 +131,9 @@ export function mountSavePanel(): void {
 	async function saveSelectedFiles(confirmed = false) {
 		if (saving) return;
 
-		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
-		const targetPath = currentTargetPath();
-		if (selectedFiles.length === 0 || targetPath.length === 0) return;
+		const groups = currentSaveGroups();
+		const selectedFiles = groups.flatMap((group) => group.files);
+		if (selectedFiles.length === 0 || groups.length === 0) return;
 
 		if (!confirmed && !(await ensureSimilarChecked(selectedFiles))) {
 			return; // 類似あり→確認待ちで一旦中断
@@ -124,22 +143,42 @@ export function mountSavePanel(): void {
 		awaitingConfirm = false;
 		message = "保存処理を実行しています。";
 		render();
-		try {
-			const result = await api.saveFiles({ files: selectedFiles, targetPath });
-			const extractedCount = await extractSelectedZips(selectedFiles, targetPath);
-			await saveLastSavePath(targetPath);
-			lastSavePath = targetPath;
-			similarWarnings = [];
+		let savedCount = 0;
+		let extractedCount = 0;
+		let failedDestinationCount = 0;
+		let failedZipCount = 0;
+		for (const group of groups) {
+			try {
+				const result = await api.saveFiles({ files: group.files, targetPath: group.path });
+				savedCount += result.savedFileIds.length;
+				const extraction = await extractSelectedZips(group);
+				extractedCount += extraction.extractedCount;
+				failedZipCount += extraction.failedCount;
+			} catch (error) {
+				failedDestinationCount += 1;
+				console.error("[fuzzy] 保存先グループの保存に失敗しました", {
+					relativePath: group.relativePath,
+					error,
+				});
+			}
+		}
+		if (groups.length === 1 && failedDestinationCount === 0) {
+			await saveLastSavePath(groups[0]?.path ?? "");
+			lastSavePath = groups[0]?.path ?? "";
+		}
+		similarWarnings = [];
+		if (failedDestinationCount > 0) {
+			message = `${savedCount}件は保存しましたが、${failedDestinationCount}か所の保存に失敗しました。再試行してください。`;
+		} else if (failedZipCount > 0) {
+			message = `${savedCount}件を保存しましたが、ZIP ${failedZipCount}件の展開に失敗しました。`;
+		} else {
 			message =
 				extractedCount > 0
-					? `${result.savedFileIds.length}件を保存し、ZIPから${extractedCount}件を展開しました。`
-					: `${result.savedFileIds.length}件の資料を保存しました。`;
-		} catch (error) {
-			message = toErrorMessage(error, "保存に失敗しました");
-		} finally {
-			saving = false;
-			render();
+					? `${savedCount}件を${groups.length}か所に保存し、ZIPから${extractedCount}件を展開しました。`
+					: `${savedCount}件の資料を${groups.length}か所に保存しました。`;
 		}
+		saving = false;
+		render();
 	}
 
 	/**
@@ -180,18 +219,30 @@ export function mountSavePanel(): void {
 		return byFile.flat();
 	}
 
-	async function extractSelectedZips(files: MoodleFileLink[], targetPath: string): Promise<number> {
-		if (zipMode !== "extract") return 0;
-		const zipFiles = files.filter(isZipFile);
-		if (zipFiles.length === 0) return 0;
+	async function extractSelectedZips(
+		group: SaveDestinationGroup,
+	): Promise<{ extractedCount: number; failedCount: number }> {
+		if (zipMode !== "extract") return { extractedCount: 0, failedCount: 0 };
+		const zipFiles = group.files.filter(isZipFile);
+		if (zipFiles.length === 0) return { extractedCount: 0, failedCount: 0 };
 
-		const destinationPath = extractDestinationPath.trim() || targetPath;
-		const extracted = await Promise.all(
+		const destinationPath = currentExtractDestinationPath() ?? group.path;
+		const extracted = await Promise.allSettled(
 			zipFiles.map((file) =>
-				api.extractZip({ fileMeta: file, targetPath, destinationPath, flatten: flattenZip }),
+				api.extractZip({
+					fileMeta: file,
+					targetPath: group.path,
+					destinationPath,
+					flatten: flattenZip,
+				}),
 			),
 		);
-		return extracted.flatMap((item) => item.extractedPaths).length;
+		return {
+			extractedCount: extracted
+				.filter((item) => item.status === "fulfilled")
+				.flatMap((item) => item.value.extractedPaths).length,
+			failedCount: extracted.filter((item) => item.status === "rejected").length,
+		};
 	}
 
 	function resetConfirmState() {
@@ -200,6 +251,10 @@ export function mountSavePanel(): void {
 	}
 
 	function render() {
+		// 選択状態の更新でもパネルを再描画するため、現在位置を引き継ぐ。
+		// これがないと、下部の「すべて選択」を押した際にスクロール領域が先頭へ戻る。
+		const previousScrollTop =
+			panel.querySelector<HTMLElement>(".fuzzy-panel-scroll")?.scrollTop ?? 0;
 		panel.classList.toggle("is-collapsed", !isPanelOpen);
 		// 開閉ハンドルは開いている間だけ表示（閉じている間は「Fuzzy」タブで再オープン）。
 		collapseHandle.style.display = isPanelOpen ? "grid" : "none";
@@ -216,17 +271,16 @@ export function mountSavePanel(): void {
 		scroll.className = "fuzzy-panel-scroll";
 		scroll.append(renderHeader());
 		if (message) scroll.append(renderNote());
-		scroll.append(renderFileList(snapshot.files));
-		scroll.append(renderPathSection());
-
 		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
 		const zipFiles = selectedFiles.filter(isZipFile);
-		if (zipFiles.length > 0)
-			scroll.append(renderZipSection(zipFiles.length, currentDestinationPath()));
+		scroll.append(renderFileList(snapshot.files));
+		if (zipFiles.length > 0) scroll.append(renderZipSection(zipFiles.length));
+		scroll.append(renderPathSection());
 		if (awaitingConfirm && similarWarnings.length > 0) scroll.append(renderSimilarConfirm());
-		scroll.append(renderActions(selectedFiles, zipFiles));
+		scroll.append(renderActions(selectedFiles, zipFiles, currentSaveGroups()));
 
 		panel.append(scroll);
+		scroll.scrollTop = previousScrollTop;
 	}
 
 	function renderOpenTab() {
@@ -277,23 +331,26 @@ export function mountSavePanel(): void {
 		const section = document.createElement("section");
 		section.className = "fuzzy-section";
 		const list = files
-			.map(
-				(file) => `
+			.map((file) => {
+				const type = fileTypeInfo(file);
+				const title = displayFileTitle(file, type.label);
+				return `
 					<label class="fuzzy-file-row">
 						<input type="checkbox" data-file-id="${escapeHtml(fileId(file))}" ${
 							selectedFileIds.has(fileId(file)) ? "checked" : ""
 						} />
-						<span class="fuzzy-file-type" data-kind="${escapeHtml(fileType(file).toLowerCase())}">${escapeHtml(fileType(file).toUpperCase())}</span>
-						<strong>${escapeHtml(file.title)}</strong>
-						<small>${escapeHtml(file.sectionTitle ?? snapshot.sectionTitle ?? "セクション未取得")}</small>
+						<span class="fuzzy-file-type" data-kind="${type.kind}">${escapeHtml(type.label)}</span>
+						<span class="fuzzy-file-details">
+							<strong>${escapeHtml(title)}</strong>
+							<small>${escapeHtml(file.sectionTitle ?? snapshot.sectionTitle ?? "セクション未取得")}</small>
+						</span>
 					</label>
-				`,
-			)
+				`;
+			})
 			.join("");
 		section.innerHTML = `
 			<div class="fuzzy-section-heading">
 				<h3>保存できるファイル（このページ）</h3>
-				<button type="button" data-action="toggle-all">全選択</button>
 			</div>
 			<div class="fuzzy-file-list">${
 				files.length > 0
@@ -312,100 +369,105 @@ export function mountSavePanel(): void {
 				onSelectionChanged();
 			});
 		}
-		section
-			.querySelector<HTMLButtonElement>("[data-action='toggle-all']")
-			?.addEventListener("click", () => toggleAllFiles(files));
 		return section;
 	}
 
 	function renderPathSection() {
 		const section = document.createElement("section");
 		section.className = "fuzzy-section";
-		const primarySuggestion = suggestions[0];
-		const suggestionOptions = suggestions
-			.slice(1)
-			.map(
-				(suggestion) => `
-					<label class="fuzzy-path-option">
-						<input type="radio" name="fuzzy-save-path" value="${escapeHtml(suggestion.path)}" ${
-							isPathChecked(suggestion.path) ? "checked" : ""
-						} />
-						<span>
-							<strong>${escapeHtml(suggestion.path)}</strong>
-							<small>${Math.round(suggestion.confidence * 100)}%</small>
-						</span>
-					</label>
-				`,
-			)
+		const groups = currentSaveGroups();
+		const root = saveRootFromSuggestions(suggestions);
+		const lastRelativePath = root && lastSavePath ? relativeSavePath(root, lastSavePath) : null;
+		const invalidManualPath =
+			manualRelativePath.trim().length > 0 && currentManualDestination() === null;
+		const groupCards = groups
+			.map((group, index) => {
+				const commonSuggestions = commonGroupSuggestions(group, suggestions);
+				const fileNames = group.files.map((file) => `<li>${escapeHtml(file.title)}</li>`).join("");
+				const candidateSelect =
+					manualRelativePath.trim() || commonSuggestions.length < 2
+						? ""
+						: `<label class="fuzzy-destination-select">
+							<span>別の候補</span>
+							<select data-group-key="${escapeHtml(group.key)}">
+								${commonSuggestions
+									.map(
+										(candidate, candidateIndex) =>
+											`<option value="${escapeHtml(candidate.path)}" ${
+												candidate.path === group.path ? "selected" : ""
+											}>候補 ${candidateIndex + 1}（一致度 ${Math.round(candidate.confidence * 100)}%）</option>`,
+									)
+									.join("")}
+							</select>
+						</label>`;
+				return `<article class="fuzzy-destination-group">
+					<div class="fuzzy-destination-heading">
+						<strong>保存先 ${index + 1}</strong>
+						<span>${group.files.length}件</span>
+					</div>
+					${renderPathBreadcrumb(group.relativePath)}
+					<ul>${fileNames}</ul>
+					${candidateSelect}
+				</article>`;
+			})
 			.join("");
-		const suggestionLabel = primarySuggestion
-			? toShortPathLabel(primarySuggestion.path)
-			: "おすすめの場所";
 		section.innerHTML = `
-			<div class="fuzzy-section-heading"><h3>保存先（提案）</h3></div>
-			${
-				primarySuggestion
-					? `<label class="fuzzy-path-feature">
-						<input type="radio" name="fuzzy-save-path" value="${escapeHtml(primarySuggestion.path)}" ${
-							isPathChecked(primarySuggestion.path) ? "checked" : ""
-						} />
-						<span>
-							<strong>${escapeHtml(primarySuggestion.path)}</strong>
-							<small>ルールに一致</small>
-						</span>
-						<em>おすすめ</em>
-					</label>`
-					: "<p class='fuzzy-empty'>保存先候補はまだありません。</p>"
-			}
+			<div class="fuzzy-section-heading"><h3>保存先（資料別）</h3><span>${groups.length}か所</span></div>
+			<p class="fuzzy-section-description">推奨先が同じ資料をまとめ、保存先ごとに分けて保存します。</p>
+			<div class="fuzzy-destination-list">${
+				groupCards || "<p class='fuzzy-empty'>保存先候補はまだありません。</p>"
+			}</div>
 			<div class="fuzzy-path-chips">
-				<button type="button" data-action="use-suggested" ${primarySuggestion ? "" : "disabled"}>${escapeHtml(suggestionLabel)}</button>
-				<button type="button" data-action="use-last-path" ${lastSavePath ? "" : "disabled"}>前回と同じ場所</button>
+				<button type="button" data-action="use-suggested" ${suggestions.size ? "" : "disabled"}>提案に戻す</button>
+				<button type="button" data-action="use-last-path" ${lastRelativePath === null ? "disabled" : ""}>前回と同じ場所</button>
 			</div>
-			<div class="fuzzy-path-list">${suggestions.length > 1 ? suggestionOptions : ""}</div>
 			<label class="fuzzy-input">
-				<span>手動で指定</span>
-				<input type="text" data-input="manual-path" value="${escapeHtml(manualPath)}" placeholder="C:\\Users\\sample\\Documents\\大学\\2026前期" />
+				<span>手動でまとめる（保存ルート以下、区切りは / ）</span>
+				<input type="text" data-input="manual-path" value="${escapeHtml(manualRelativePath)}" placeholder="2026前期/データベース/第4回" aria-invalid="${invalidManualPath}" />
+				${invalidManualPath ? '<small class="fuzzy-input-error">保存ルート以下の有効なフォルダを指定してください。</small>' : ""}
 			</label>
 		`;
-		for (const input of section.querySelectorAll<HTMLInputElement>(
-			"input[name='fuzzy-save-path']",
-		)) {
-			input.addEventListener("change", () => {
-				selectedPath = input.value;
-				manualPath = "";
+		for (const select of section.querySelectorAll<HTMLSelectElement>("select[data-group-key]")) {
+			select.addEventListener("change", () => {
+				const group = currentSaveGroups().find((item) => item.key === select.dataset.groupKey);
+				if (!group) return;
+				for (const file of group.files) selectedPaths.set(fileId(file), select.value);
+				manualRelativePath = "";
 				render();
 			});
 		}
 		section
 			.querySelector<HTMLButtonElement>("[data-action='use-suggested']")
 			?.addEventListener("click", () => {
-				if (primarySuggestion) selectedPath = primarySuggestion.path;
-				manualPath = "";
+				selectedPaths = createSelectedFilePaths(suggestions);
+				manualRelativePath = "";
 				render();
 			});
 		section
 			.querySelector<HTMLButtonElement>("[data-action='use-last-path']")
 			?.addEventListener("click", () => {
-				if (!lastSavePath) return;
-				manualPath = lastSavePath;
+				if (lastRelativePath === null) return;
+				manualRelativePath = displayEditablePath(lastRelativePath);
 				render();
 			});
-		// 入力欄はキー入力ごとに全再描画するとフォーカスを失うため、
-		// 保存ボタンの活性状態とサマリだけを差分更新する（Copilot指摘#3への対応）。
-		section
-			.querySelector<HTMLInputElement>("[data-input='manual-path']")
-			?.addEventListener("input", (event) => {
-				manualPath = inputValue(event);
-				updateActionState();
-			});
+		const manualInput = section.querySelector<HTMLInputElement>("[data-input='manual-path']");
+		manualInput?.addEventListener("input", (event) => {
+			manualRelativePath = inputValue(event);
+			updateActionState();
+		});
+		manualInput?.addEventListener("change", () => {
+			manualRelativePath = displayEditablePath(manualRelativePath);
+			render();
+		});
 		return section;
 	}
 
-	function renderZipSection(zipCount: number, destinationPath: string) {
+	function renderZipSection(zipCount: number) {
 		const section = document.createElement("section");
-		section.className = "fuzzy-section";
+		section.className = "fuzzy-section fuzzy-zip-section";
 		section.innerHTML = `
-			<div class="fuzzy-section-heading"><h3>ZIPファイル</h3><span>${zipCount}件</span></div>
+			<div class="fuzzy-section-heading"><h3>ZIP の扱い</h3><span>${zipCount}件</span></div>
+			<p class="fuzzy-section-description">ZIP を展開するか、そのまま保存するかを先に選べます。</p>
 			<label class="fuzzy-path-option">
 				<input type="radio" name="fuzzy-zip-mode" value="extract" ${zipMode === "extract" ? "checked" : ""} />
 				<span><strong>保存後に展開する</strong><small>授業資料としてすぐ使える形にします。</small></span>
@@ -419,10 +481,10 @@ export function mountSavePanel(): void {
 				<span>無駄な二重フォルダがあれば簡略化する</span>
 			</label>
 			<label class="fuzzy-input">
-				<span>展開先フォルダ</span>
-				<input type="text" data-input="extract-path" value="${escapeHtml(extractDestinationPath)}" ${
+				<span>展開先（保存ルート以下、空欄なら各資料の保存先）</span>
+				<input type="text" data-input="extract-path" value="${escapeHtml(extractDestinationRelativePath)}" ${
 					zipMode === "keep" ? "disabled" : ""
-				} placeholder="${escapeHtml(destinationPath || "保存先と同じフォルダ")}" />
+				} placeholder="各資料の保存先と同じフォルダ" />
 			</label>
 		`;
 		for (const input of section.querySelectorAll<HTMLInputElement>(
@@ -439,12 +501,15 @@ export function mountSavePanel(): void {
 				flattenZip = inputChecked(event);
 			});
 		// 展開先もキー入力ごとの全再描画を避け、サマリのみ差分更新する（Copilot指摘#4への対応）。
-		section
-			.querySelector<HTMLInputElement>("[data-input='extract-path']")
-			?.addEventListener("input", (event) => {
-				extractDestinationPath = inputValue(event);
-				updateActionState();
-			});
+		const extractInput = section.querySelector<HTMLInputElement>("[data-input='extract-path']");
+		extractInput?.addEventListener("input", (event) => {
+			extractDestinationRelativePath = inputValue(event);
+			updateActionState();
+		});
+		extractInput?.addEventListener("change", () => {
+			extractDestinationRelativePath = displayEditablePath(extractDestinationRelativePath);
+			render();
+		});
 		return section;
 	}
 
@@ -483,16 +548,28 @@ export function mountSavePanel(): void {
 		return section;
 	}
 
-	function renderActions(selectedFiles: MoodleFileLink[], zipFiles: MoodleFileLink[]) {
+	function renderActions(
+		selectedFiles: MoodleFileLink[],
+		zipFiles: MoodleFileLink[],
+		groups: SaveDestinationGroup[],
+	) {
 		const actions = document.createElement("div");
 		actions.className = "fuzzy-actions";
-		const targetPath = currentTargetPath();
+		const allSelected = snapshot.files.length > 0 && selectedFileIds.size === snapshot.files.length;
 		const canSave =
-			selectedFiles.length > 0 && targetPath.length > 0 && !saving && !checkingSimilar;
+			selectedFiles.length > 0 &&
+			groups.flatMap((group) => group.files).length === selectedFiles.length &&
+			isExtractDestinationValid() &&
+			!loading &&
+			!saving &&
+			!checkingSimilar;
 		actions.innerHTML = `
-			<p data-role="save-summary">${escapeHtml(buildSummaryText(selectedFiles, zipFiles, targetPath, currentDestinationPath()))}</p>
+			<p data-role="save-summary">${escapeHtml(buildSummaryText(selectedFiles, zipFiles, groups))}</p>
 			<div class="fuzzy-action-meta">
-				<button type="button" data-action="toggle-all-footer">すべて選択 / 解除</button>
+				<button type="button" class="fuzzy-toggle-all-button" data-action="toggle-all-footer">
+					<span aria-hidden="true">${allSelected ? "✓" : "+"}</span>
+					${allSelected ? "すべて解除" : "すべて選択"}
+				</button>
 				<span>選択中: ${selectedFiles.length}件</span>
 			</div>
 			<button type="button" data-action="save" ${canSave ? "" : "disabled"}>
@@ -512,6 +589,14 @@ export function mountSavePanel(): void {
 
 	function setPanelOpen(open: boolean) {
 		isPanelOpen = open;
+		if (open && !initialized) {
+			initialized = true;
+			loading = true;
+			message = "Moodleページ内の資料を読み込んでいます。";
+			render();
+			void initialize();
+			return;
+		}
 		render();
 	}
 
@@ -530,47 +615,84 @@ export function mountSavePanel(): void {
 	function updateActionState() {
 		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
 		const zipFiles = selectedFiles.filter(isZipFile);
-		const targetPath = currentTargetPath();
+		const groups = currentSaveGroups();
 		const canSave =
-			selectedFiles.length > 0 && targetPath.length > 0 && !saving && !checkingSimilar;
+			selectedFiles.length > 0 &&
+			groups.flatMap((group) => group.files).length === selectedFiles.length &&
+			isExtractDestinationValid() &&
+			!loading &&
+			!saving &&
+			!checkingSimilar;
 		panel
 			.querySelector<HTMLButtonElement>("[data-action='save']")
 			?.toggleAttribute("disabled", !canSave);
 		const summary = panel.querySelector<HTMLElement>("[data-role='save-summary']");
 		if (summary) {
-			summary.textContent = buildSummaryText(
-				selectedFiles,
-				zipFiles,
-				targetPath,
-				currentDestinationPath(),
-			);
+			summary.textContent = buildSummaryText(selectedFiles, zipFiles, groups);
 		}
 	}
 
 	function buildSummaryText(
 		selectedFiles: MoodleFileLink[],
 		zipFiles: MoodleFileLink[],
-		targetPath: string,
-		destinationPath: string,
+		groups: SaveDestinationGroup[],
 	): string {
 		if (selectedFiles.length === 0) return "保存する資料を選択してください。";
-		if (targetPath.length === 0) return "保存先を選択してください。";
-		if (zipFiles.length > 0 && zipMode === "extract") {
-			return `${selectedFiles.length}件を保存し、ZIP ${zipFiles.length}件を ${destinationPath} に展開します。`;
+		if (groups.flatMap((group) => group.files).length !== selectedFiles.length) {
+			return manualRelativePath.trim()
+				? "保存ルート以下の有効なフォルダを指定してください。"
+				: "すべての資料の保存先を選択してください。";
 		}
-		return `${selectedFiles.length}件を ${targetPath} に保存します。`;
+		if (!isExtractDestinationValid()) {
+			return "ZIPの展開先は保存ルート以下で指定してください。";
+		}
+		if (zipFiles.length > 0 && zipMode === "extract") {
+			const destination = extractDestinationRelativePath.trim()
+				? displayRelativePath(extractDestinationRelativePath)
+				: "各資料の保存先";
+			return `${selectedFiles.length}件を${groups.length}か所に保存し、ZIP ${zipFiles.length}件を「${destination}」へ展開します。`;
+		}
+		if (groups.length === 1) {
+			return `${selectedFiles.length}件を「${displayRelativePath(groups[0]?.relativePath ?? "")}」へ保存します。`;
+		}
+		return `${selectedFiles.length}件を保存先別の${groups.length}か所へ分けて保存します。`;
 	}
 
-	function currentTargetPath(): string {
-		return manualPath.trim() || selectedPath;
+	function currentSaveGroups(): SaveDestinationGroup[] {
+		if (manualRelativePath.trim()) {
+			const destination = currentManualDestination();
+			if (!destination) return [];
+			return buildSaveDestinationGroups(
+				snapshot.files,
+				selectedFileIds,
+				suggestions,
+				selectedPaths,
+				destination,
+			);
+		}
+		return buildSaveDestinationGroups(snapshot.files, selectedFileIds, suggestions, selectedPaths);
 	}
 
-	function currentDestinationPath(): string {
-		return extractDestinationPath.trim() || currentTargetPath();
+	function currentManualDestination(): { path: string; relativePath: string } | null {
+		const root = saveRootFromSuggestions(suggestions);
+		const relativePath = normalizeRelativeSavePath(manualRelativePath);
+		if (!root || relativePath === null || !relativePath) return null;
+		const path = resolveSavePathUnderRoot(root, relativePath);
+		return path ? { path, relativePath } : null;
 	}
 
-	function isPathChecked(path: string): boolean {
-		return selectedPath === path && manualPath.trim() === "";
+	function currentExtractDestinationPath(): string | null {
+		if (!extractDestinationRelativePath.trim()) return null;
+		const root = saveRootFromSuggestions(suggestions);
+		return root ? resolveSavePathUnderRoot(root, extractDestinationRelativePath) : null;
+	}
+
+	function isExtractDestinationValid(): boolean {
+		return (
+			zipMode === "keep" ||
+			!extractDestinationRelativePath.trim() ||
+			currentExtractDestinationPath() !== null
+		);
 	}
 
 	function injectPanelStyle() {
@@ -580,17 +702,6 @@ export function mountSavePanel(): void {
 		style.textContent = SAVE_PANEL_STYLE;
 		document.head.append(style);
 	}
-}
-
-async function loadSuggestions(api: BackgroundApiClient, snapshot: MoodlePageSnapshot) {
-	return api.suggestSavePath({
-		course: {
-			name: snapshot.courseName,
-			sectionTitle: snapshot.sectionTitle,
-			breadcrumbs: snapshot.breadcrumbs,
-		},
-		fileMeta: snapshot.files[0] ?? null,
-	});
 }
 
 async function loadLastSavePath(): Promise<string> {
@@ -615,21 +726,26 @@ function toErrorMessage(error: unknown, fallback: string): string {
 	return error instanceof Error ? `${fallback}: ${error.message}` : `${fallback}。`;
 }
 
-function fileId(file: MoodleFileLink): string {
-	return file.url;
+function renderPathBreadcrumb(relativePath: string): string {
+	const segments = splitWindowsPath(relativePath);
+	const crumbs = ["保存ルート", ...segments]
+		.map(
+			(segment, index) =>
+				`${index > 0 ? '<span class="fuzzy-path-separator" aria-hidden="true">›</span>' : ""}<span class="fuzzy-path-segment">${escapeHtml(segment)}</span>`,
+		)
+		.join("");
+	return `<div class="fuzzy-path-breadcrumb" role="navigation" aria-label="保存先: ${escapeHtml(
+		["保存ルート", ...segments].join("、"),
+	)}">${crumbs}</div>`;
 }
 
-function fileType(file: MoodleFileLink): string {
-	return file.mimeHint ?? file.title.split(".").pop()?.toLowerCase() ?? "file";
+function displayRelativePath(path: string): string {
+	const segments = splitWindowsPath(path);
+	return segments.length > 0 ? segments.join(" › ") : "保存ルート";
 }
 
-function isZipFile(file: MoodleFileLink): boolean {
-	return fileType(file) === "zip" || /\.zip(?:$|[?#])/i.test(file.url);
-}
-
-function toShortPathLabel(path: string): string {
-	const parts = path.split(/[\\/]+/).filter(Boolean);
-	return parts.length > 0 ? `…/${parts.slice(-2).join("/")}/` : "…/保存先/";
+function displayEditablePath(path: string): string {
+	return normalizeRelativeSavePath(path) === null ? path : splitWindowsPath(path).join("/");
 }
 
 function escapeHtml(value: string): string {

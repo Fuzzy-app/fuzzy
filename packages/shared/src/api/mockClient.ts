@@ -1,5 +1,11 @@
 import { isValidNotificationOffsetMinutes, notificationRuleLabel } from "../notificationRules";
-import { validateCourseRuleOverride, validateRulePattern } from "../rules";
+import {
+	createRulePreviewValues,
+	removeSectionSegment,
+	resolveRulePattern,
+	validateCourseRuleOverride,
+	validateRulePattern,
+} from "../rules";
 import assignmentChanges from "../sample-data/assignment-changes.json" with { type: "json" };
 import courses from "../sample-data/courses.json" with { type: "json" };
 import dashboard from "../sample-data/dashboard.json" with { type: "json" };
@@ -10,10 +16,12 @@ import ruleViolations from "../sample-data/rule-violations.json" with { type: "j
 import sampleRules from "../sample-data/rules.json" with { type: "json" };
 import searchResults from "../sample-data/search-results.json" with { type: "json" };
 import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
+import { normalizeWindowsPath } from "../savePaths";
 import type {
 	Assignment,
 	AssignmentChange,
 	CheckSimilarFilesRequest,
+	Course,
 	CourseRuleOverride,
 	CourseRuleOverrideInput,
 	DashboardSummary,
@@ -40,6 +48,7 @@ import type {
 import { ApiError, type FuzzyApiClient } from "./client";
 
 const LATENCY_MS = 30;
+const MOCK_SAVE_ROOT = "C:\\Users\\sample\\Documents\\大学";
 const delay = <T>(value: T) =>
 	new Promise<T>((resolve) => setTimeout(() => resolve(value), LATENCY_MS));
 
@@ -100,18 +109,43 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
-		const knownCourse = (courses as { id: number; name: string }[]).find(
-			(c) => c.name === request.course.name,
-		);
+		const knownCourse = (courses as Course[]).find((course) => course.name === request.course.name);
 		const courseLabel = knownCourse?.name ?? request.course.name ?? "不明なコース";
 		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
-		return delay([
-			{
-				path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}\\${sectionLabel ?? "資料"}`,
-				confidence: 0.92,
-			},
-			{ path: `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`, confidence: 0.6 },
-		]);
+		const section = extractSectionNumber(sectionLabel);
+		const fallbackValues = createRulePreviewValues();
+		const term =
+			knownCourse?.term ??
+			request.course.breadcrumbs.find((item) => /^\d{4}(?:前期|後期|通年)$/.test(item)) ??
+			fallbackValues.term;
+		const override = knownCourse
+			? this.rules.courseOverrides.find((candidate) => candidate.courseId === knownCourse.id)
+			: undefined;
+		let patternTemplate = override?.patternTemplate ?? this.rules.globalPatternTemplate;
+		if (override?.splitBySection === false || (!section && patternTemplate.includes("{section}"))) {
+			patternTemplate = removeSectionSegment(patternTemplate);
+		}
+
+		const values = {
+			...fallbackValues,
+			year: term.match(/^\d{4}/)?.[0] ?? fallbackValues.year,
+			term,
+			course: courseLabel,
+			assignment: request.fileMeta?.title.replace(/\.[a-z0-9]{1,10}$/i, "") ?? "資料",
+			section: section ?? fallbackValues.section,
+		};
+		const primaryRelativePath = resolveRulePattern(patternTemplate, values);
+		const suggestions: SaveSuggestion[] = [createSaveSuggestion(primaryRelativePath, 0.92)];
+
+		// 回ごとの候補が最有力の場合も、ユーザーが科目直下へまとめられるよう補助候補を返す。
+		if (section && patternTemplate.includes("{section}")) {
+			const courseRelativePath = resolveRulePattern(removeSectionSegment(patternTemplate), values);
+			if (courseRelativePath !== primaryRelativePath) {
+				suggestions.push(createSaveSuggestion(courseRelativePath, 0.6));
+			}
+		}
+
+		return delay(suggestions);
 	}
 
 	async checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
@@ -312,4 +346,19 @@ function cloneRuleSet(rules: RuleSet): RuleSet {
 		globalPatternTemplate: rules.globalPatternTemplate,
 		courseOverrides: rules.courseOverrides.map((override) => ({ ...override })),
 	};
+}
+
+function createSaveSuggestion(relativePath: string, confidence: number): SaveSuggestion {
+	const normalizedRelativePath = normalizeWindowsPath(relativePath);
+	return {
+		path: `${MOCK_SAVE_ROOT}\\${normalizedRelativePath}`,
+		relativePath: normalizedRelativePath,
+		confidence,
+	};
+}
+
+function extractSectionNumber(sectionTitle: string | null): string | null {
+	const normalized = sectionTitle?.normalize("NFKC").trim() ?? "";
+	const match = normalized.match(/(?:第\s*)?(\d{1,3})\s*(?:回|週目?|week)|week\s*(\d{1,3})/i);
+	return match?.[1] ?? match?.[2] ?? null;
 }

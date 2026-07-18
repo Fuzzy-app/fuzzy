@@ -6,6 +6,7 @@ CREATE TABLE app_settings (
 	value TEXT NOT NULL
 );
 -- 例: base_folder_path（初期セットアップで選んだ保存先実パス）, app_version, last_full_scan_at
+-- suggestSavePathはbase_folder_pathを含む実パスと、UI表示用のルート相対パスを返す。
 
 CREATE TABLE courses (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
