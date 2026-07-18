@@ -1,4 +1,8 @@
-import { MockApiClient } from "@fuzzy/shared";
+import {
+	type DuplicateGroupListItem,
+	MockApiClient,
+	type RuleViolationListItem,
+} from "@fuzzy/shared";
 import { createBackgroundRuleManagementApi } from "./backgroundApi";
 import type {
 	RuleManagementApi,
@@ -18,6 +22,7 @@ const initialState: RuleManagementState = {
 	error: null,
 	lastSavedTarget: null,
 	lastSavedAt: null,
+	mutationRevision: 0,
 };
 
 /**
@@ -69,12 +74,21 @@ export class RuleManagementStore {
 		);
 	}
 
+	getRuleViolations(): Promise<RuleViolationListItem[]> {
+		return this.#api.getRuleViolations();
+	}
+
+	getDuplicateGroups(): Promise<DuplicateGroupListItem[]> {
+		return this.#api.getDuplicateGroups();
+	}
+
 	async #save(target: RuleSaveTarget, save: () => Promise<unknown>): Promise<RuleSet> {
 		if (this.#state.saving) throw new Error("別のルールを保存中です。");
 		this.#setState({ saving: target, error: null });
 
 		try {
 			await save();
+			this.#setState({ mutationRevision: this.#state.mutationRevision + 1 });
 			const rules = await this.#api.getRules();
 			this.#setState({
 				status: "ready",

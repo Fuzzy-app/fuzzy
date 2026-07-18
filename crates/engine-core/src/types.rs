@@ -52,7 +52,10 @@ pub struct CourseRuleOverride {
 	pub note: Option<String>,
 }
 
-/// ルール違反の検出結果。移動・削除は行わず、警告表示のためのデータに徹する。
+/// ルールエンジン内部の違反検出結果。
+///
+/// 絶対パスを含むためNative Messagingへ直接シリアライズせず、native-host側で
+/// 保存ルートからの相対パスだけを持つAPI DTOへ変換する。移動・削除は行わない。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuleViolation {
 	/// 対象ファイルのSQLite上のID（未登録ファイルは `None`）。

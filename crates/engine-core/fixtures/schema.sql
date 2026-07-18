@@ -64,7 +64,7 @@ CREATE TABLE duplicate_groups (
 CREATE TABLE duplicate_members (
 	group_id   INTEGER NOT NULL REFERENCES duplicate_groups(id) ON DELETE CASCADE,
 	file_id    INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-	similarity REAL NOT NULL DEFAULT 1.0,
+	similarity REAL NOT NULL DEFAULT 1.0 CHECK (similarity BETWEEN 0.0 AND 1.0),
 	PRIMARY KEY (group_id, file_id)
 );
 
@@ -120,3 +120,5 @@ CREATE TABLE assignment_changes (
 );
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
+
+PRAGMA user_version = 1;

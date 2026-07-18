@@ -160,6 +160,28 @@ describe("MockApiClient（サンプルデータ）", () => {
 	test("getRuleViolations: ルール違反ファイルが2件返る", async () => {
 		const violations = await client.getRuleViolations();
 		expect(violations.length).toBe(2);
+		expect(violations[0]).toMatchObject({
+			courseId: 2,
+			relativePath: "正規化_メモ.docx",
+		});
+		expect(violations.every((item) => !("savedPath" in item))).toBe(true);
+		expect(violations.every((item) => !/^(?:[a-z]:[\\/]|[\\/]{2})/i.test(item.relativePath))).toBe(
+			true,
+		);
+	});
+
+	test("getDuplicateGroups: 相対パスと0.0〜1.0の類似度を返す", async () => {
+		const groups = await client.getDuplicateGroups();
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.members.map((member) => member.relativePath)).toEqual([
+			"2026前期\\データベース\\第4回\\第4回_正規化.pdf",
+			"ダウンロード\\第4回_正規化(1).pdf",
+		]);
+		expect(
+			groups.every((group) =>
+				group.members.every((member) => member.similarity >= 0 && member.similarity <= 1),
+			),
+		).toBe(true);
 	});
 
 	test("getRules: アプリ演習のコース別例外ルールが含まれる", async () => {

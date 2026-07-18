@@ -31,7 +31,7 @@ const STASH_ID = "fuzzy-shell-stash";
 const BRAND_ICON_PATH = "/icon/fuzzy.svg";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "rules" | "organize";
+type ScreenId = "dashboard" | "search" | "deadlines" | "rules";
 // 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
 // import 時の衝突・混同を避けるため View 用として別名にしている。
 type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -39,28 +39,19 @@ type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
 interface MenuItem {
 	id: ScreenId;
 	label: string;
-	enabled: boolean;
 	description: string;
 }
 
 const menuItems: readonly MenuItem[] = [
-	{ id: "dashboard", label: "ダッシュボード", enabled: true, description: "issue57" },
-	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
-	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
-	{ id: "rules", label: "整理ルール", enabled: true, description: "issue52" },
-	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
-];
-
-const placeholderCopy: Record<
-	Exclude<ScreenId, "search" | "dashboard" | "rules">,
-	{ title: string; copy: string }
-> = {
-	deadlines: {
-		title: "締切ハブ",
-		copy: "課題一覧と提出状況を、この画面でまとめて確認できます。",
+	{
+		id: "dashboard",
+		label: "ダッシュボード",
+		description: "資料と締切の概要",
 	},
-	organize: { title: "重複の整理", copy: "保存済み資料の整理UIをここへ追加する予定です。" },
-};
+	{ id: "search", label: "横断検索", description: "保存資料を横断検索" },
+	{ id: "deadlines", label: "締切ハブ", description: "課題と締切を確認" },
+	{ id: "rules", label: "整理ルール", description: "保存ルールと警告を確認" },
+];
 
 interface SearchState {
 	/** 入力欄の現在値（inputイベントで随時同期） */
@@ -1102,18 +1093,6 @@ export function mountFuzzyShell(): void {
 		return screen;
 	};
 
-	const buildPlaceholderScreen = (
-		screenId: Exclude<ScreenId, "search" | "dashboard" | "rules">,
-	): HTMLElement => {
-		const { title, copy } = placeholderCopy[screenId];
-		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("準備中", title));
-		const section = el("section", "fuzzy-placeholder");
-		section.append(el("p", "", copy));
-		screen.append(section);
-		return screen;
-	};
-
 	const renderScreen = () => {
 		for (const link of sideLinks) {
 			const isActive = link.dataset.screen === activeScreen;
@@ -1156,8 +1135,6 @@ export function mountFuzzyShell(): void {
 			mainEl.replaceChildren(buildDeadlineScreen());
 		} else if (activeScreen === "rules") {
 			mainEl.replaceChildren(getRuleScreen().root);
-		} else {
-			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
 	};
 
@@ -1184,13 +1161,11 @@ export function mountFuzzyShell(): void {
 		const nav = el("nav", "fuzzy-side-nav");
 		nav.setAttribute("aria-label", "Fuzzy menu");
 		for (const item of menuItems) {
-			const link = el("button", item.enabled ? "fuzzy-side-link" : "fuzzy-side-link is-disabled");
+			const link = el("button", "fuzzy-side-link");
 			link.type = "button";
 			link.dataset.screen = item.id;
-			link.disabled = !item.enabled;
 			link.title = item.description;
 			link.append(el("span", "fuzzy-side-dot"), el("span", "fuzzy-side-label", item.label));
-			if (!item.enabled) link.append(el("span", "fuzzy-side-status", "準備中"));
 			link.addEventListener("click", () => {
 				activeScreen = item.id;
 				renderScreen();
@@ -1199,9 +1174,7 @@ export function mountFuzzyShell(): void {
 			nav.append(link);
 		}
 
-		const footer = el("div", "fuzzy-sidebar-footer");
-		footer.append(el("p", "", "開発中"), el("span", "", "issue55 + issue56 + issue57"));
-		sidebar.append(brand, nav, footer);
+		sidebar.append(brand, nav);
 
 		const content = el("div", "fuzzy-content");
 		const topbar = el("header", "fuzzy-topbar");
@@ -1541,24 +1514,9 @@ function ensureStyle(): void {
 			color: var(--fuzzy-color-surface);
 		}
 
-		.fuzzy-side-link.is-disabled {
-			cursor: not-allowed;
-			opacity: 0.72;
-		}
-
 		.fuzzy-side-label {
 			min-width: 0;
 			flex: 1 1 auto;
-		}
-
-		.fuzzy-side-status {
-			flex: 0 0 auto;
-			margin-left: auto;
-			border-radius: 999px;
-			padding: 2px 5px;
-			background: rgba(255, 255, 255, 0.1);
-			font-size: 0.56rem;
-			line-height: 1.4;
 		}
 
 		.fuzzy-side-dot {
@@ -1570,27 +1528,6 @@ function ensureStyle(): void {
 
 		.fuzzy-side-link.is-active .fuzzy-side-dot {
 			background: var(--fuzzy-color-primary);
-		}
-
-		.fuzzy-sidebar-footer {
-			border-radius: 10px;
-			padding: 12px 10px;
-			background: rgba(255, 255, 255, 0.08);
-			font-size: var(--fuzzy-font-size-caption);
-			font-weight: 600;
-			line-height: 1.6;
-		}
-
-		.fuzzy-sidebar-footer p,
-		.fuzzy-sidebar-footer span {
-			margin: 0;
-			display: block;
-		}
-
-		.fuzzy-sidebar-footer p {
-			margin-bottom: 4px;
-			color: #a9f2b9;
-			font-weight: 800;
 		}
 
 		.fuzzy-content {
@@ -2479,19 +2416,9 @@ function ensureStyle(): void {
 				line-height: 1.25;
 				text-align: center;
 			}
-
 			.fuzzy-side-label {
 				flex: none;
 			}
-
-			.fuzzy-side-status {
-				margin-left: 0;
-			}
-
-			.fuzzy-sidebar-footer {
-				display: none;
-			}
-
 			.fuzzy-brand {
 				justify-content: center;
 			}
