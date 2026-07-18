@@ -6,7 +6,10 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
+		"dev:tauri": "bun run prepare:extension && vite dev",
 		"build": "vite build",
+		"build:tauri": "bun run prepare:extension && vite build",
+		"prepare:extension": "bun run scripts/prepare-extension.ts",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
