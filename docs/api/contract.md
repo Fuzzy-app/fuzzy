@@ -48,7 +48,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 
-`SaveSuggestion` は `{ path, relativePath, confidence, similarMatches? }` とする。`path` はnative-hostが保存に使う、`app_settings.base_folder_path`を含む絶対パス、`relativePath`はUI表示・手動編集に使う保存ルート以下の相対パスである。クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
+`SaveSuggestion` は `{ path, relativePath, confidence, similarMatches? }` とする。`path` はnative-hostが保存に使う、`app_settings.base_folder_path`を含む絶対パス、`relativePath`はUI表示・手動編集に使う保存ルート以下の相対パスである。`suggestSavePath`はSQLiteに保存されたグローバルルールとコース別例外を適用する。コース名・セクション名の半角／全角の補足括弧と絵文字は推薦フォルダ名から除外するが、簡略化後に同名となるコースはMoodleの安定コースIDで区別する。クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
 
 `NotificationRule.offsetMinutes` は締切日時から遡る相対時間（分）を表し、0以上525,600以下の整数（締切時刻から365日前まで）に限定する。`NotificationRuleInput` は `{ id?, offsetMinutes, enabled }` とし、新規ルールでは`id`を省略する。native-hostはSQLiteのトランザクション内で、ID付きの既存行を更新、IDなしの行を新規採番、入力から除かれた既存行を削除し、保存後の`NotificationRule[]`を返す。
 

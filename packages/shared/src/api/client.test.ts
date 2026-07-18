@@ -67,6 +67,25 @@ describe("MockApiClient（サンプルデータ）", () => {
 		expect(syllabusResult[0]?.relativePath).not.toContain("授業計画");
 	});
 
+	test("suggestSavePath: コース名の補足・角括弧・絵文字を保存先から除外する", async () => {
+		const result = await client.suggestSavePath({
+			course: {
+				name: "情報科学📚［2026年度・前期］",
+				sectionTitle: "第4回🔬[配布資料]",
+				breadcrumbs: ["2026前期"],
+			},
+			fileMeta: {
+				title: "講義資料.pdf",
+				url: "https://moodle.example/pluginfile.php/40/file.pdf",
+				moodleFileId: "40",
+				sectionTitle: "第4回🔬[配布資料]",
+				mimeHint: "pdf",
+			},
+		});
+		expect(result[0]?.relativePath).toBe("2026前期\\情報科学\\第4回");
+		expect(result[0]?.relativePath).not.toMatch(/[()[\]（）［］\p{Extended_Pictographic}]/u);
+	});
+
 	test("suggestSavePath: 更新済みルールとコース別例外をその場で反映する", async () => {
 		const freshClient = new MockApiClient();
 		await freshClient.updateCourseRuleOverride({

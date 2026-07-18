@@ -16,6 +16,7 @@ import {
 	collectMoodlePageSnapshotWithNestedFolders,
 	safeCollectMoodlePageSnapshot,
 } from "../../lib/moodle/snapshotCollector";
+import { createSavePanelOpenStateWriter, loadSavePanelOpenState } from "./savePanelState";
 import {
 	SAVE_HANDLE_ID,
 	SAVE_PANEL_ID,
@@ -42,13 +43,14 @@ interface SimilarWarning {
 	match: SimilarFileMatch;
 }
 
-export function mountSavePanel(): void {
+export async function mountSavePanel(): Promise<void> {
 	document.getElementById(SAVE_PANEL_ID)?.remove();
 	document.getElementById(SAVE_HANDLE_ID)?.remove();
 
 	const panel = document.createElement("aside");
 	panel.id = SAVE_PANEL_ID;
 	panel.setAttribute("aria-label", "Fuzzy 資料一括保存");
+	panel.hidden = true;
 	document.body.append(panel);
 
 	// 開閉ハンドル（›）はパネル本体のoverflowにクリップされないよう、
@@ -59,6 +61,7 @@ export function mountSavePanel(): void {
 	collapseHandle.textContent = "›";
 	collapseHandle.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
 	collapseHandle.addEventListener("click", () => setPanelOpen(false));
+	collapseHandle.style.display = "none";
 	document.body.append(collapseHandle);
 
 	const api = new BackgroundApiClient();
@@ -80,9 +83,15 @@ export function mountSavePanel(): void {
 	let saving = false;
 	let isPanelOpen = false;
 	let message: string | null = null;
+	const savePanelOpenState = createSavePanelOpenStateWriter(browser.storage.local);
 
 	injectPanelStyle();
-	render();
+	isPanelOpen = await loadSavePanelOpenState(browser.storage.local);
+	// 開閉状態の読み込み中に再マウントされた場合、古いインスタンスは初期化しない。
+	if (document.getElementById(SAVE_PANEL_ID) !== panel) return;
+	panel.hidden = false;
+	if (isPanelOpen) startInitialization();
+	else render();
 
 	async function initialize() {
 		try {
@@ -342,7 +351,7 @@ export function mountSavePanel(): void {
 						<span class="fuzzy-file-type" data-kind="${type.kind}">${escapeHtml(type.label)}</span>
 						<span class="fuzzy-file-details">
 							<strong>${escapeHtml(title)}</strong>
-							<small>${escapeHtml(file.sectionTitle ?? snapshot.sectionTitle ?? "セクション未取得")}</small>
+							<small>${escapeHtml(file.sectionTitle ?? "セクション未取得")}</small>
 						</span>
 					</label>
 				`;
@@ -588,16 +597,23 @@ export function mountSavePanel(): void {
 	// --- 状態更新ヘルパー ---
 
 	function setPanelOpen(open: boolean) {
+		if (isPanelOpen === open) return;
 		isPanelOpen = open;
+		void savePanelOpenState(open);
 		if (open && !initialized) {
-			initialized = true;
-			loading = true;
-			message = "Moodleページ内の資料を読み込んでいます。";
-			render();
-			void initialize();
+			startInitialization();
 			return;
 		}
 		render();
+	}
+
+	function startInitialization() {
+		if (initialized) return;
+		initialized = true;
+		loading = true;
+		message = "Moodleページ内の資料を読み込んでいます。";
+		render();
+		void initialize();
 	}
 
 	function onSelectionChanged() {

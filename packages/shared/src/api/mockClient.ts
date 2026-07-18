@@ -1,3 +1,4 @@
+import { type CourseFolderIdentity, courseFolderName } from "../folderNames";
 import { isValidNotificationOffsetMinutes, notificationRuleLabel } from "../notificationRules";
 import {
 	createRulePreviewValues,
@@ -109,8 +110,18 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
-		const knownCourse = (courses as Course[]).find((course) => course.name === request.course.name);
-		const courseLabel = knownCourse?.name ?? request.course.name ?? "不明なコース";
+		const knownCourses = courses as Course[];
+		const requestedCourseName = request.course.name ?? "不明なコース";
+		const knownCourse = knownCourses.find((course) => course.name === requestedCourseName);
+		const courseIdentities: CourseFolderIdentity[] = knownCourses.map((course) => ({
+			name: course.name,
+			stableId: course.moodleCourseId,
+		}));
+		const courseLabel = courseFolderName(
+			knownCourse?.name ?? requestedCourseName,
+			courseIdentities,
+			knownCourse?.moodleCourseId,
+		);
 		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
 		const section = extractSectionNumber(sectionLabel);
 		const fallbackValues = createRulePreviewValues();
