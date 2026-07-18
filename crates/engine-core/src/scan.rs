@@ -2,18 +2,15 @@
 //!
 //! 実装は issue #38。
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use crate::error::{EngineError, EngineResult};
-use crate::section::{parse_section_file_prefix, parse_section_name};
+use crate::pattern::{
+	built_in_estimator, FrequencyPatternEstimator, PatternEstimator, PatternEstimatorKind,
+};
 use crate::types::{FileEntry, SavePatternGuess};
-
-const COURSE_SECTION_PATTERN: &str = "{course}/{section}/{filename}";
-const COURSE_PATTERN: &str = "{course}/{filename}";
-const SECTION_IN_FILE_NAME_PATTERN: &str = "{course}/{section}_{filename}";
 
 /// フォルダの再帰走査と保存パターン推定を担うトレイト。
 ///
@@ -34,67 +31,76 @@ pub struct DefaultScanEngine;
 
 impl ScanEngine for DefaultScanEngine {
 	fn scan(&self, root: &Path) -> EngineResult<Vec<FileEntry>> {
-		if !root.exists() {
-			return Err(EngineError::InvalidPath {
-				path: root.display().to_string(),
-				reason: "パスが存在しません".to_string(),
-			});
-		}
-		if !root.is_dir() {
-			return Err(EngineError::InvalidPath {
-				path: root.display().to_string(),
-				reason: "フォルダではありません".to_string(),
-			});
-		}
-
-		let root = root.canonicalize()?;
-		let mut entries = Vec::new();
-		scan_directory(&root, &mut entries)?;
-		entries.sort_by(|left, right| left.path.cmp(&right.path));
-		Ok(entries)
+		scan_root(root)
 	}
 
 	fn estimate_patterns(&self, entries: &[FileEntry]) -> EngineResult<Vec<SavePatternGuess>> {
-		if entries.len() < 2 {
-			return Ok(Vec::new());
-		}
-
-		let mut counts = BTreeMap::new();
-		for entry in entries {
-			let parent_name = entry.path.parent().and_then(Path::file_name);
-			if parent_name
-				.and_then(|name| parse_section_name(&name.to_string_lossy()))
-				.is_some()
-			{
-				increment(&mut counts, COURSE_SECTION_PATTERN);
-			} else {
-				increment(&mut counts, COURSE_PATTERN);
-				if parse_section_file_prefix(&entry.file_name).is_some() {
-					increment(&mut counts, SECTION_IN_FILE_NAME_PATTERN);
-				}
-			}
-		}
-
-		// 3件以上ある構成では、偶然の1件を「規則」として提示しない。
-		let minimum_support = if entries.len() >= 3 { 2 } else { 1 };
-		let mut guesses = counts
-			.into_iter()
-			.filter(|(_, count)| *count >= minimum_support)
-			.map(|(pattern_template, matched_count)| SavePatternGuess {
-				pattern_template: pattern_template.to_string(),
-				confidence: matched_count as f64 / entries.len() as f64,
-				matched_count,
-			})
-			.collect::<Vec<_>>();
-		guesses.sort_by(|left, right| {
-			right
-				.confidence
-				.total_cmp(&left.confidence)
-				.then_with(|| right.matched_count.cmp(&left.matched_count))
-				.then_with(|| left.pattern_template.cmp(&right.pattern_template))
-		});
-		Ok(guesses)
+		FrequencyPatternEstimator.estimate(entries)
 	}
+}
+
+/// 保存パターン推定方式を切り替えられるScanEngine。
+#[derive(Debug)]
+pub struct ConfigurableScanEngine {
+	estimator: Box<dyn PatternEstimator>,
+}
+
+impl ConfigurableScanEngine {
+	/// 組み込み方式を選んで構成する。
+	pub fn new(kind: PatternEstimatorKind) -> Self {
+		Self {
+			estimator: built_in_estimator(kind),
+		}
+	}
+
+	/// 任意の独自方式を注入する。将来の学習済み推定器もこの経路を使用する。
+	pub fn with_estimator(estimator: impl PatternEstimator + 'static) -> Self {
+		Self {
+			estimator: Box::new(estimator),
+		}
+	}
+
+	/// 現在の推定方式ID。
+	pub fn estimator_id(&self) -> &'static str {
+		self.estimator.id()
+	}
+}
+
+impl Default for ConfigurableScanEngine {
+	fn default() -> Self {
+		Self::new(PatternEstimatorKind::default())
+	}
+}
+
+impl ScanEngine for ConfigurableScanEngine {
+	fn scan(&self, root: &Path) -> EngineResult<Vec<FileEntry>> {
+		scan_root(root)
+	}
+
+	fn estimate_patterns(&self, entries: &[FileEntry]) -> EngineResult<Vec<SavePatternGuess>> {
+		self.estimator.estimate(entries)
+	}
+}
+
+fn scan_root(root: &Path) -> EngineResult<Vec<FileEntry>> {
+	if !root.exists() {
+		return Err(EngineError::InvalidPath {
+			path: root.display().to_string(),
+			reason: "パスが存在しません".to_string(),
+		});
+	}
+	if !root.is_dir() {
+		return Err(EngineError::InvalidPath {
+			path: root.display().to_string(),
+			reason: "フォルダではありません".to_string(),
+		});
+	}
+
+	let root = root.canonicalize()?;
+	let mut entries = Vec::new();
+	scan_directory(&root, &mut entries)?;
+	entries.sort_by(|left, right| left.path.cmp(&right.path));
+	Ok(entries)
 }
 
 fn scan_directory(directory: &Path, entries: &mut Vec<FileEntry>) -> EngineResult<()> {
@@ -133,10 +139,6 @@ fn modified_at(metadata: &fs::Metadata) -> Option<i64> {
 			.ok()
 			.and_then(|seconds| seconds.checked_neg()),
 	}
-}
-
-fn increment<'a>(counts: &mut BTreeMap<&'a str, usize>, pattern: &'a str) {
-	*counts.entry(pattern).or_default() += 1;
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@
 pub mod duplicate;
 pub mod error;
 pub mod index;
+pub mod pattern;
 pub mod rule;
 pub mod scan;
 pub mod section;
