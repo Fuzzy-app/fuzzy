@@ -99,7 +99,7 @@ describe("ルール違反・重複候補の集計", () => {
 	});
 });
 
-describe("警告・未整理ファイルパネル", () => {
+describe("整理が必要な資料パネル", () => {
 	test("空状態を案内し、更新ボタンで両一覧を再取得する", async () => {
 		let violationCalls = 0;
 		let duplicateCalls = 0;
@@ -117,8 +117,10 @@ describe("警告・未整理ファイルパネル", () => {
 		});
 		await root.panel.activate();
 
-		expect(root.element.textContent).toContain("ルール違反は見つかりませんでした");
-		expect(root.element.textContent).toContain("重複・類似ファイルは見つかりませんでした");
+		expect(root.element.textContent).toContain(
+			"保存場所が設定と異なる資料は見つかりませんでした",
+		);
+		expect(root.element.textContent).toContain("同じ・よく似た資料は見つかりませんでした");
 		root.element.querySelector<HTMLButtonElement>(".fuzzy-integrity-button.is-primary")?.click();
 		await root.panel.refresh();
 		expect(violationCalls).toBe(2);
@@ -147,7 +149,7 @@ describe("警告・未整理ファイルパネル", () => {
 		expect(root.element.textContent).not.toContain("C:\\Users");
 	});
 
-	test("重複候補だけ失敗しても違反一覧を残し、失敗側だけ再試行できる", async () => {
+	test("重複候補だけ失敗しても設定と異なる資料を残し、失敗側だけ再読込できる", async () => {
 		const warning = spyOn(console, "warn").mockImplementation(() => undefined);
 		let duplicateCalls = 0;
 		const root = setupPanel({
@@ -163,14 +165,14 @@ describe("警告・未整理ファイルパネル", () => {
 		await root.panel.activate();
 
 		expect(root.element.textContent).toContain("正規化_メモ.docx");
-		expect(root.element.textContent).toContain("重複候補を取得できませんでした");
+		expect(root.element.textContent).toContain("同じ可能性がある資料を取得できませんでした");
 		expect(root.element.textContent).not.toContain("C:\\Users\\secret");
 
 		root.element.querySelector<HTMLButtonElement>(".fuzzy-integrity-alert button")?.click();
 		await root.panel.refresh("duplicates");
 
 		expect(duplicateCalls).toBe(2);
-		expect(root.element.textContent).toContain("重複グループ 1");
+		expect(root.element.textContent).toContain("候補の組み合わせ 1");
 		warning.mockRestore();
 	});
 
@@ -184,9 +186,11 @@ describe("警告・未整理ファイルパネル", () => {
 		});
 		await root.panel.activate();
 
-		expect(root.element.textContent).toContain("ルール違反ファイルを取得できませんでした");
+		expect(root.element.textContent).toContain(
+			"保存場所が設定と異なる資料を取得できませんでした",
+		);
 		expect(root.element.textContent).not.toContain("raw backend failure");
-		expect(root.element.textContent).toContain("重複グループ 1");
+		expect(root.element.textContent).toContain("候補の組み合わせ 1");
 		warning.mockRestore();
 	});
 
@@ -229,9 +233,11 @@ describe("警告・未整理ファイルパネル", () => {
 		});
 		await root.panel.activate();
 
-		expect(root.element.textContent).toContain("ルール違反ファイルを取得できませんでした");
+		expect(root.element.textContent).toContain(
+			"保存場所が設定と異なる資料を取得できませんでした",
+		);
 		expect(root.element.textContent).not.toContain("C:\\Users\\secret");
-		expect(root.element.textContent).toContain("重複グループ 1");
+		expect(root.element.textContent).toContain("候補の組み合わせ 1");
 		warning.mockRestore();
 	});
 

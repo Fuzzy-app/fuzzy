@@ -48,9 +48,9 @@ const menuItems: readonly MenuItem[] = [
 		label: "ダッシュボード",
 		description: "資料と締切の概要",
 	},
-	{ id: "search", label: "横断検索", description: "保存資料を横断検索" },
-	{ id: "deadlines", label: "締切ハブ", description: "課題と締切を確認" },
-	{ id: "rules", label: "整理ルール", description: "保存ルールと警告を確認" },
+	{ id: "search", label: "資料を検索", description: "保存した資料を検索" },
+	{ id: "deadlines", label: "課題・締切", description: "課題と締切を確認" },
+	{ id: "rules", label: "保存・整理設定", description: "保存方法と整理が必要な資料を確認" },
 ];
 
 interface SearchState {
@@ -145,7 +145,7 @@ function formatDate(dueAt: string | null): string {
 	const time = parseDueAt(dueAt);
 	// 日付が壊れていて具体的な期限を出せない場合は、現在の和歌山大学のセメスターを
 	// 目安として示す（例: 前期中に開くと「前期中・日付要確認」）。
-	if (time === null) return `${semesterLabel(semesterOf(getNow()))}中・日付要確認`;
+	if (time === null) return `${semesterLabel(semesterOf(getNow()))}中・締切日を確認`;
 	return dueAtFormatter.format(new Date(time));
 }
 
@@ -180,7 +180,7 @@ function deadlineFilterLabel(filter: DeadlineViewFilter): string {
 		case "overdue":
 			return "期限切れ";
 		case "review":
-			return "要確認";
+			return "締切日を確認";
 		default:
 			return "すべて";
 	}
@@ -224,7 +224,7 @@ function assignmentChangeValueLabel(
 ): string {
 	if (value === null || value === "") return "未設定";
 	if (field === "dueAt") return formatDate(value);
-	if (field === "dueAtStatus") return value === "needs_review" ? "要確認" : "通常";
+	if (field === "dueAtStatus") return value === "needs_review" ? "締切日を確認" : "通常";
 	if (field === "submitted") return value === "true" ? "提出済み" : "未提出";
 	if (field === "submissionMode") {
 		switch (value) {
@@ -402,7 +402,7 @@ export function mountFuzzyShell(): void {
 				el(
 					"p",
 					"fuzzy-note-copy",
-					"スニペットは検索語の前後だけを短く抜き出した本文です。まずは「正規化」で確認できます。",
+					"該当部分には、検索した言葉の前後を短く抜き出して表示します。まずは「正規化」で確認できます。",
 				),
 			);
 			return;
@@ -416,10 +416,10 @@ export function mountFuzzyShell(): void {
 		};
 		addNoteRow("授業", selected.courseName ?? "未設定");
 		addNoteRow("ページ", selected.page === null ? "ページ情報なし" : `${selected.page}ページ`);
-		addNoteRow("一致度", `${Math.round(selected.score * 100)}%`);
+		addNoteRow("関連度", `${Math.round(selected.score * 100)}%`);
 
 		note.replaceChildren(
-			el("p", "fuzzy-section-label", "選択中の候補"),
+			el("p", "fuzzy-section-label", "選択中の資料"),
 			el("h2", "", selected.fileName),
 			el(
 				"p",
@@ -453,7 +453,7 @@ export function mountFuzzyShell(): void {
 		const side = el("div", "fuzzy-result-side");
 		side.append(
 			el("p", "", result.page === null ? "—" : `p.${result.page}`),
-			el("span", "", "候補を見る"),
+			el("span", "", "詳細を見る"),
 		);
 
 		row.append(kind, main, el("p", "fuzzy-result-snippet", result.snippet), side);
@@ -541,17 +541,9 @@ export function mountFuzzyShell(): void {
 
 	const buildSearchScreen = (): SearchScreen => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("横断検索", "どのファイルに載っているか"));
+		screen.append(buildScreenHeader("資料検索", "どのファイルに載っているか"));
 
 		const panel = el("section", "fuzzy-search-panel");
-
-		const tabs = el("div", "fuzzy-search-tabs");
-		const keywordTab = el("button", "fuzzy-chip is-active", "キーワード");
-		keywordTab.type = "button";
-		const courseTab = el("button", "fuzzy-chip", "講義で検索");
-		courseTab.type = "button";
-		courseTab.disabled = true;
-		tabs.append(keywordTab, courseTab);
 
 		const form = el("form", "fuzzy-search-form");
 		const inputWrap = el("div", "fuzzy-search-input-wrap");
@@ -567,18 +559,9 @@ export function mountFuzzyShell(): void {
 
 		const meta = el("div", "fuzzy-search-meta");
 		const countLabel = el("p", "", "キーワードを入力してください");
-		const toggle = el("label", "fuzzy-toggle");
-		const toggleInput = el("input");
-		toggleInput.type = "checkbox";
-		toggleInput.disabled = true;
-		toggle.append(
-			el("span", "", "AIで要約（任意・実験的）"),
-			toggleInput,
-			el("span", "fuzzy-toggle-ui"),
-		);
-		meta.append(countLabel, toggle);
+		meta.append(countLabel);
 
-		panel.append(tabs, form, meta);
+		panel.append(form, meta);
 
 		const layout = el("section", "fuzzy-search-layout");
 		const resultsHost = el("div", "fuzzy-search-results");
@@ -734,7 +717,9 @@ export function mountFuzzyShell(): void {
 
 		const badges = el("div", "fuzzy-deadline-badges");
 		badges.append(el("span", "fuzzy-badge", submissionLabel(assignment)));
-		if (isNeedsReview(assignment)) badges.append(el("span", "fuzzy-badge is-review", "要確認"));
+		if (isNeedsReview(assignment)) {
+			badges.append(el("span", "fuzzy-badge is-review", "締切日を確認"));
+		}
 		if (isOverdue(assignment)) badges.append(el("span", "fuzzy-badge is-overdue", "期限切れ"));
 		badges.append(
 			el(
@@ -791,9 +776,12 @@ export function mountFuzzyShell(): void {
 		const panel = el("section", "fuzzy-sync-panel");
 		const head = el("div", "fuzzy-sync-head");
 		const titleWrap = el("div");
-		titleWrap.append(el("p", "fuzzy-section-label", "データ取得通知"), el("h2", "", "取得結果"));
+		titleWrap.append(
+			el("p", "fuzzy-section-label", "Moodleの更新情報"),
+			el("h2", "", "新しく取得した内容"),
+		);
 
-		const reloadButton = el("button", "fuzzy-sync-action", "表示を更新");
+		const reloadButton = el("button", "fuzzy-sync-action", "最新情報を読み込む");
 		reloadButton.type = "button";
 		reloadButton.disabled = loadingSyncSummary;
 		reloadButton.addEventListener("click", () => {
@@ -806,14 +794,14 @@ export function mountFuzzyShell(): void {
 		panel.append(head);
 
 		if (loadingSyncSummary && !syncSummaryLoaded) {
-			panel.append(el("p", "fuzzy-toolbar-copy", "Moodleからのデータ取得結果を確認しています…"));
+			panel.append(el("p", "fuzzy-toolbar-copy", "Moodleの更新情報を確認しています…"));
 			return panel;
 		}
 
 		if (syncSummaryError) {
 			const errorRow = el("div", "fuzzy-sync-error");
 			errorRow.append(
-				el("p", "", `データ取得結果の確認に失敗しました: ${syncSummaryError}`),
+				el("p", "", `Moodleの更新情報を確認できませんでした: ${syncSummaryError}`),
 				el("p", "", "締切一覧は表示できます。変更点だけ後でもう一度確認してください。"),
 			);
 			panel.append(errorRow);
@@ -894,7 +882,7 @@ export function mountFuzzyShell(): void {
 
 	const buildDeadlineScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("締切ハブ", "課題と提出状況をまとめて確認"));
+		screen.append(buildScreenHeader("課題・締切", "課題と提出状況をまとめて確認"));
 
 		if (deadlineError) {
 			const errorPanel = el("section", "fuzzy-error-panel");
@@ -934,7 +922,11 @@ export function mountFuzzyShell(): void {
 		const metricGrid = el("section", "fuzzy-metric-grid");
 		const metrics: Array<{ label: string; value: number; className?: string }> = [
 			{ label: "未提出", value: assignments.filter((item) => !item.submitted).length },
-			{ label: "要確認", value: assignments.filter(isNeedsReview).length, className: "is-warn" },
+			{
+				label: "締切日を確認",
+				value: assignments.filter(isNeedsReview).length,
+				className: "is-warn",
+			},
 			{ label: "期限切れ", value: assignments.filter(isOverdue).length, className: "is-soft" },
 		];
 		for (const metric of metrics) {
@@ -972,7 +964,7 @@ export function mountFuzzyShell(): void {
 			el(
 				"p",
 				"fuzzy-toolbar-copy",
-				"提出済みにすると一覧へ即反映されます。要確認は期限の再確認が必要な課題です。",
+				"提出済みにすると一覧へすぐ反映されます。「締切日を確認」は正しい期限を取得できなかった課題です。",
 			),
 		);
 
@@ -1021,7 +1013,7 @@ export function mountFuzzyShell(): void {
 		if (!dashboard) return screen;
 
 		const actions = el("div", "fuzzy-dashboard-actions");
-		const reloadButton = el("button", "fuzzy-primary-button", "表示を更新");
+		const reloadButton = el("button", "fuzzy-primary-button", "最新情報を読み込む");
 		reloadButton.type = "button";
 		reloadButton.disabled = loadingDashboard;
 		reloadButton.addEventListener("click", () => {
@@ -1035,7 +1027,7 @@ export function mountFuzzyShell(): void {
 				el(
 					"p",
 					"fuzzy-dashboard-cache-note",
-					`オフラインキャッシュを表示中（${formatCacheDate(dashboardCachedAt ?? "")}に保存）`,
+					`前回保存した情報を表示中（最終更新: ${formatCacheDate(dashboardCachedAt ?? "")}）`,
 				),
 			);
 		} else {

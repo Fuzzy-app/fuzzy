@@ -20,12 +20,12 @@ export function buildGlobalRulePanel(options: GlobalRulePanelOptions): HTMLEleme
 	const head = element("div", "fuzzy-rules-panel-head");
 	const title = element("div");
 	title.append(
-		element("p", "fuzzy-section-label", "すべてのコースに適用"),
-		element("h2", "", "グローバルルール"),
+		element("p", "fuzzy-section-label", "すべての授業に適用"),
+		element("h2", "", "基本の保存設定"),
 		element(
 			"p",
 			"fuzzy-rules-panel-copy",
-			"初期セットアップと同じテンプレート表現で編集します。例外がないコースはこのルールを使います。",
+			"授業ごとの設定がない場合は、この保存方法を使います。",
 		),
 	);
 	const reloadButton = element("button", "fuzzy-rules-secondary-button", "保存値を再読み込み");
@@ -40,7 +40,7 @@ export function buildGlobalRulePanel(options: GlobalRulePanelOptions): HTMLEleme
 	patternInput.type = "text";
 	patternInput.value = currentDraft;
 	patternInput.autocomplete = "off";
-	patternInput.setAttribute("aria-label", "グローバルルールのテンプレート");
+	patternInput.setAttribute("aria-label", "基本の保存先の形式");
 	const preview = element(
 		"p",
 		"fuzzy-rules-preview-value",
@@ -54,7 +54,7 @@ export function buildGlobalRulePanel(options: GlobalRulePanelOptions): HTMLEleme
 			? "反映中…"
 			: options.isMock
 				? "サンプルに反映"
-				: "グローバルルールを保存",
+				: "基本設定を保存",
 	);
 	saveButton.type = "button";
 
@@ -100,7 +100,7 @@ export function buildGlobalRulePanel(options: GlobalRulePanelOptions): HTMLEleme
 
 	const field = element("label", "fuzzy-rules-field");
 	field.append(
-		element("span", "", "テンプレート"),
+		element("span", "", "保存先の形式"),
 		patternInput,
 		element(
 			"p",

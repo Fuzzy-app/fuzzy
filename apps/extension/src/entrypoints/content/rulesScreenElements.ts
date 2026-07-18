@@ -2,12 +2,12 @@ export function buildRulesHeader(): HTMLElement {
 	const header = element("header", "fuzzy-screen-header");
 	const wrap = element("div");
 	wrap.append(
-		element("p", "fuzzy-screen-kicker", "整理ルール"),
-		element("h1", "", "保存ルールを管理"),
+		element("p", "fuzzy-screen-kicker", "保存・整理設定"),
+		element("h1", "", "資料の保存方法を設定"),
 		element(
 			"p",
 			"fuzzy-rules-panel-copy",
-			"変更は保存先の提案と警告判定に使います。保存済みファイルの自動移動・自動削除は行いません。",
+			"ここで決めた保存方法は、保存先の提案と整理が必要な資料の確認に使います。保存済みの資料を自動で移動・削除することはありません。",
 		),
 	);
 	header.append(wrap);

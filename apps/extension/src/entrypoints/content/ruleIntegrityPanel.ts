@@ -9,8 +9,9 @@ import { ensureRuleIntegrityPanelStyle } from "./ruleIntegrityPanelStyle";
 import { element } from "./rulesScreenElements";
 
 const VIOLATION_ERROR_MESSAGE =
-	"ルール違反ファイルを取得できませんでした。時間をおいて再試行してください。";
-const DUPLICATE_ERROR_MESSAGE = "重複候補を取得できませんでした。時間をおいて再試行してください。";
+	"保存場所が設定と異なる資料を取得できませんでした。時間をおいて、もう一度読み込んでください。";
+const DUPLICATE_ERROR_MESSAGE =
+	"同じ可能性がある資料を取得できませんでした。時間をおいて、もう一度読み込んでください。";
 
 export interface RuleIntegrityPanel {
 	root: HTMLElement;
@@ -35,11 +36,11 @@ export function createRuleIntegrityPanel(controller: RuleIntegrityController): R
 		const header = element("header", "fuzzy-integrity-header");
 		const heading = element("div");
 		heading.append(
-			element("h2", "", "警告・未整理ファイル"),
+			element("h2", "", "整理が必要な資料"),
 			element(
 				"p",
 				"fuzzy-integrity-copy",
-				"保存ルールから外れた資料と重複候補を確認できます。自動移動・自動削除は行いません。",
+				"保存場所が設定と異なる資料や、同じ可能性がある資料を確認できます。自動で移動・削除することはありません。",
 			),
 		);
 		const refreshButton = element(
@@ -83,14 +84,14 @@ export function createRuleIntegrityPanel(controller: RuleIntegrityController): R
 function buildSummary(state: Readonly<RuleIntegrityState>): HTMLElement {
 	const summary = summarizeRuleIntegrity(state.violations.data, state.duplicates.data);
 	const wrap = element("section", "fuzzy-integrity-summary");
-	wrap.setAttribute("aria-label", "整合性チェックの集計");
+	wrap.setAttribute("aria-label", "整理が必要な資料の集計");
 	wrap.append(
 		buildMetric(
-			"ルール違反",
+			"設定と異なる資料",
 			metricValue(state.violations.status, summary.violationCount, state.violations.data.length),
 		),
 		buildMetric(
-			"影響する授業",
+			"対象の授業",
 			metricValue(
 				state.violations.status,
 				summary.affectedCourseCount,
@@ -98,7 +99,7 @@ function buildSummary(state: Readonly<RuleIntegrityState>): HTMLElement {
 			),
 		),
 		buildMetric(
-			"重複グループ",
+			"重複・類似の組み合わせ",
 			metricValue(
 				state.duplicates.status,
 				summary.duplicateGroupCount,
@@ -106,7 +107,7 @@ function buildSummary(state: Readonly<RuleIntegrityState>): HTMLElement {
 			),
 		),
 		buildMetric(
-			"重複候補ファイル",
+			"候補になった資料",
 			metricValue(
 				state.duplicates.status,
 				summary.duplicateFileCount,
@@ -136,7 +137,10 @@ function buildViolationSection(
 	state: Readonly<RuleIntegrityState>,
 	onRetry: () => void,
 ): HTMLElement {
-	const section = buildSection("ルール違反ファイル", "fuzzy-integrity-violations-title");
+	const section = buildSection(
+		"保存場所が設定と異なる資料",
+		"fuzzy-integrity-violations-title",
+	);
 	section.setAttribute("aria-busy", String(state.violations.status === "loading"));
 	const body = element("div", "fuzzy-integrity-section-body");
 	appendResourceState(
@@ -145,7 +149,7 @@ function buildViolationSection(
 		state.violations.data.length,
 		VIOLATION_ERROR_MESSAGE,
 		onRetry,
-		"ルール違反は見つかりませんでした。",
+		"保存場所が設定と異なる資料は見つかりませんでした。",
 	);
 	if (state.violations.data.length > 0) {
 		const list = element("ul", "fuzzy-integrity-list");
@@ -165,7 +169,7 @@ function buildViolationItem(violation: RuleViolationListItem): HTMLLIElement {
 		element("h4", "", violation.fileName),
 		element("p", "fuzzy-integrity-course", violation.courseName ?? "授業未設定"),
 	);
-	head.append(title, element("span", "fuzzy-integrity-badge is-warning", "要確認"));
+	head.append(title, element("span", "fuzzy-integrity-badge is-warning", "整理が必要"));
 	card.append(
 		head,
 		buildPath(violation.relativePath),
@@ -179,7 +183,7 @@ function buildDuplicateSection(
 	state: Readonly<RuleIntegrityState>,
 	onRetry: () => void,
 ): HTMLElement {
-	const section = buildSection("重複・類似ファイル", "fuzzy-integrity-duplicates-title");
+	const section = buildSection("同じ・よく似た資料", "fuzzy-integrity-duplicates-title");
 	section.setAttribute("aria-busy", String(state.duplicates.status === "loading"));
 	const body = element("div", "fuzzy-integrity-section-body");
 	appendResourceState(
@@ -188,7 +192,7 @@ function buildDuplicateSection(
 		state.duplicates.data.length,
 		DUPLICATE_ERROR_MESSAGE,
 		onRetry,
-		"重複・類似ファイルは見つかりませんでした。",
+		"同じ・よく似た資料は見つかりませんでした。",
 	);
 	if (state.duplicates.data.length > 0) {
 		const list = element("ul", "fuzzy-integrity-list");
@@ -203,7 +207,7 @@ function buildDuplicateGroup(group: DuplicateGroupListItem): HTMLLIElement {
 	const item = element("li", "fuzzy-integrity-list-item");
 	const card = element("article", "fuzzy-integrity-card");
 	const head = element("div", "fuzzy-integrity-card-head");
-	const heading = element("h4", "", `重複グループ ${group.groupId}`);
+	const heading = element("h4", "", `候補の組み合わせ ${group.groupId}`);
 	head.append(
 		heading,
 		element("span", "fuzzy-integrity-badge", duplicateMethodLabel(group.method)),
@@ -214,7 +218,7 @@ function buildDuplicateGroup(group: DuplicateGroupListItem): HTMLLIElement {
 		const nameRow = element("div", "fuzzy-integrity-member-head");
 		nameRow.append(
 			element("strong", "", member.fileName),
-			element("span", "", `一致度 ${formatSimilarity(member.similarity)}`),
+			element("span", "", `似ている度合い ${formatSimilarity(member.similarity)}`),
 		);
 		memberItem.append(nameRow, buildPath(member.relativePath));
 		members.append(memberItem);
@@ -235,7 +239,7 @@ function buildSection(title: string, titleId: string): HTMLElement {
 
 function buildPath(relativePath: string): HTMLElement {
 	const row = element("p", "fuzzy-integrity-path");
-	row.append(element("span", "", "保存ルート › "), element("code", "", relativePath));
+	row.append(element("span", "", "Fuzzyフォルダ › "), element("code", "", relativePath));
 	return row;
 }
 
@@ -259,7 +263,7 @@ function appendResourceState(
 	if (status === "error") {
 		const alert = element("div", "fuzzy-integrity-alert");
 		alert.setAttribute("role", "alert");
-		const retry = element("button", "fuzzy-integrity-button", "この一覧を再試行");
+		const retry = element("button", "fuzzy-integrity-button", "もう一度読み込む");
 		retry.type = "button";
 		retry.addEventListener("click", onRetry);
 		alert.append(element("p", "", errorMessage), retry);
