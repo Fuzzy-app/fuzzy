@@ -18,12 +18,12 @@ describe("MockApiClient のルール管理", () => {
 	test("共有サンプルで初期化し、アプリ演習の例外を返す", async () => {
 		const rules = await new MockApiClient().getRules();
 
-		expect(rules.globalPatternTemplate).toBe("{year}/{term}/{course}/第{section}回");
+		expect(rules.globalPatternTemplate).toBe("{term}/{course}/第{section}回");
 		expect(rules.courseOverrides).toContainEqual({
 			courseId: 4,
 			courseName: "アプリ演習",
 			splitBySection: false,
-			patternTemplate: "{year}/{term}/{course}",
+			patternTemplate: "{term}/{course}",
 			note: "実習課題はまとめて1フォルダで管理したいため回ごとに分けない",
 		});
 	});
@@ -34,7 +34,7 @@ describe("MockApiClient のルール管理", () => {
 
 		expect((await firstApi.getRules()).globalPatternTemplate).toBe("{year}/{course}/{assignment}");
 		expect((await new MockApiClient().getRules()).globalPatternTemplate).toBe(
-			"{year}/{term}/{course}/第{section}回",
+			"{term}/{course}/第{section}回",
 		);
 	});
 

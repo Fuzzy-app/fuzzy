@@ -1,4 +1,10 @@
 import type { MoodleFileMeta } from "@fuzzy/shared";
+import {
+	fileExtensionFromName,
+	fileTypeFromMoodleIconUrl,
+	hasSupportedFileExtension,
+	normalizeFileTypeHint,
+} from "./fileType";
 
 /**
  * ページから抽出したファイルリンク。保存API（saveFiles等）へそのまま渡すため、
@@ -32,8 +38,6 @@ export interface MoodlePageSnapshot {
 
 export const MOODLE_PAGE_SNAPSHOT_MESSAGE = "fuzzy:getMoodlePageSnapshot";
 
-const FILE_EXTENSION_PATTERN =
-	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|kmz|kml|gpx|png|jpe?g|gif|mp3|wav|m4a|ogg|mp4|webm|avi|mov|exe)(?:$|[?#])/i;
 const MOODLE_DIRECT_FILE_PATTERN = /\/pluginfile\.php\//i;
 const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
 const MOODLE_FOLDER_PATTERN = /\/mod\/folder\/view\.php/i;
@@ -198,15 +202,15 @@ function isFileLikeLink(link: HTMLAnchorElement): boolean {
 	if (MOODLE_RESOURCE_PATTERN.test(href)) {
 		return (
 			!WEB_PAGE_MIME_HINTS.has(mimeHint ?? "") &&
-			(mimeHint !== null || FILE_EXTENSION_PATTERN.test(href) || FILE_EXTENSION_PATTERN.test(label))
+			(mimeHint !== null || hasSupportedFileExtension(href) || hasSupportedFileExtension(label))
 		);
 	}
 
 	return (
 		!WEB_PAGE_MIME_HINTS.has(mimeHint ?? "") &&
 		(MOODLE_DIRECT_FILE_PATTERN.test(href) ||
-			FILE_EXTENSION_PATTERN.test(href) ||
-			FILE_EXTENSION_PATTERN.test(label))
+			hasSupportedFileExtension(href) ||
+			hasSupportedFileExtension(label))
 	);
 }
 
@@ -243,16 +247,12 @@ function extractLinkTitle(link: HTMLAnchorElement): string {
 
 function extractFileTitle(link: HTMLAnchorElement, url: string, mimeHint: string | null): string {
 	const title = extractLinkTitle(link);
-	if (!mimeHint || hasFileExtension(title)) return title;
+	if (!mimeHint || hasSupportedFileExtension(title)) return title;
 
 	const fileName = extractFileNameFromUrl(url);
-	if (fileName && hasFileExtension(fileName)) return fileName;
+	if (fileName && hasSupportedFileExtension(fileName)) return fileName;
 
 	return `${title}.${mimeHint}`;
-}
-
-function hasFileExtension(value: string): boolean {
-	return /\.[a-z0-9]{2,5}(?:$|[?#])/i.test(value);
 }
 
 function extractFileNameFromUrl(url: string): string | null {
@@ -293,11 +293,7 @@ function extractMimeHint(link: HTMLAnchorElement, url: string): string | null {
 	if (fromMoodleActivity) return fromMoodleActivity;
 
 	const pathname = safeDecodeURIComponent(safeUrl(url)?.pathname ?? url);
-	const fileName = pathname.split("/").pop() ?? pathname;
-	const match = fileName.match(/\.([a-z0-9]{2,5})$/i);
-	const extension = match?.[1]?.toLowerCase() ?? null;
-
-	return extension === "php" ? null : extension;
+	return fileExtensionFromName(pathname);
 }
 
 function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
@@ -306,9 +302,8 @@ function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
 	);
 	const activityHint = resolveMoodleActivityMimeHint(
 		activity?.querySelector(".activitybadge, .badge")?.textContent,
-		activity?.querySelector<HTMLImageElement>(
-			"[data-region='activity-icon'], img.activityicon",
-		)?.src,
+		activity?.querySelector<HTMLImageElement>("[data-region='activity-icon'], img.activityicon")
+			?.src,
 	);
 	if (activityHint) return activityHint;
 
@@ -330,14 +325,11 @@ function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
 				normalizeText(element.getAttribute("data-mimetype")),
 			];
 			for (const label of labels) {
-				const mimeHint = normalizeMimeLabel(label);
+				const mimeHint = normalizeFileTypeHint(label);
 				if (mimeHint) return mimeHint;
 			}
 			const source = element.getAttribute("src") ?? "";
-			const iconName = source.match(
-				/\/(?:f|file)\/([a-z0-9]+)(?:-\d+)?(?:\.(?:svg|png|gif|webp))?(?:[?#]|$)/i,
-			)?.[1];
-			const mimeHint = normalizeMimeLabel(iconName ?? null);
+			const mimeHint = fileTypeFromMoodleIconUrl(source);
 			if (mimeHint) return mimeHint;
 		}
 	}
@@ -360,50 +352,9 @@ export function resolveMoodleActivityMimeHint(
 	badgeText: string | null | undefined,
 	iconSrc: string | null | undefined,
 ): string | null {
-	const badgeHint = normalizeMimeLabel(badgeText ?? null);
+	const badgeHint = normalizeFileTypeHint(badgeText);
 	if (badgeHint) return badgeHint;
-
-	const iconMatch = iconSrc?.match(
-		/\/(?:f|file)\/([a-z0-9]+)(?:-\d+)?(?:\.(?:svg|png|gif|webp))?(?:[/?#]|$)/i,
-	);
-	return normalizeMimeLabel(iconMatch?.[1] ?? null);
-}
-
-function normalizeMimeLabel(value: string | null): string | null {
-	const normalized = normalizeText(value).toLowerCase();
-	if (!normalized) return null;
-
-	const aliases: Record<string, string> = {
-		pdf: "pdf",
-		word: "docx",
-		doc: "doc",
-		docx: "docx",
-		powerpoint: "pptx",
-		ppt: "ppt",
-		pptx: "pptx",
-		excel: "xlsx",
-		xls: "xls",
-		xlsx: "xlsx",
-		zip: "zip",
-		mp3: "mp3",
-		audio: "mp3",
-		mp4: "mp4",
-		video: "mp4",
-		exe: "exe",
-		executable: "exe",
-		htm: "htm",
-		html: "html",
-		kmz: "kmz",
-		kml: "kml",
-		gpx: "gpx",
-	};
-
-	if (aliases[normalized]) return aliases[normalized];
-	if (/(word|ワード|文書)/i.test(normalized)) return "docx";
-	if (/(powerpoint|パワーポイント|プレゼン)/i.test(normalized)) return "pptx";
-	if (/(excel|エクセル|表計算)/i.test(normalized)) return "xlsx";
-	if (/(pdf|ピーディーエフ)/i.test(normalized)) return "pdf";
-	return null;
+	return fileTypeFromMoodleIconUrl(iconSrc);
 }
 
 function extractAssignmentTitle(line: string): string {

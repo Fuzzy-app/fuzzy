@@ -47,9 +47,11 @@ describe("MockApiClient（サンプルデータ）", () => {
 				mimeHint: "pdf",
 			},
 		});
-		expect(result[0]?.path).toContain("データベース");
-		expect(result[0]?.path).not.toContain("第4回");
-		expect(result[1]?.path).toContain("第4回");
+		expect(result[0]?.relativePath).toBe("2026前期\\データベース\\第4回");
+		expect(result[0]?.path).toBe(
+			"C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+		);
+		expect(result[1]?.relativePath).toBe("2026前期\\データベース");
 
 		const syllabusResult = await client.suggestSavePath({
 			course: { name: "人工知能", sectionTitle: "授業計画", breadcrumbs: [] },
@@ -62,7 +64,31 @@ describe("MockApiClient（サンプルデータ）", () => {
 			},
 		});
 		expect(syllabusResult).toHaveLength(1);
-		expect(syllabusResult[0]?.path).not.toContain("授業計画");
+		expect(syllabusResult[0]?.relativePath).not.toContain("授業計画");
+	});
+
+	test("suggestSavePath: 更新済みルールとコース別例外をその場で反映する", async () => {
+		const freshClient = new MockApiClient();
+		await freshClient.updateCourseRuleOverride({
+			courseId: 2,
+			override: {
+				splitBySection: false,
+				patternTemplate: "{term}/{course}",
+				note: null,
+			},
+		});
+		const result = await freshClient.suggestSavePath({
+			course: { name: "データベース", sectionTitle: "Week 4", breadcrumbs: [] },
+			fileMeta: {
+				title: "normalization.pdf",
+				url: "https://moodle.example/mod/resource/view.php?id=10",
+				moodleFileId: "10",
+				sectionTitle: "Week 4",
+				mimeHint: "pdf",
+			},
+		});
+		expect(result).toHaveLength(1);
+		expect(result[0]?.relativePath).toBe("2026前期\\データベース");
 	});
 
 	test("checkSimilarFiles: 保存前に似ている保存済みファイルを返す", async () => {

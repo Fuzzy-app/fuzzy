@@ -1,3 +1,4 @@
+import { fileExtensionFromContentDisposition, normalizeFileTypeHint } from "./fileType";
 // Moodleページのスナップショット収集（issue48）。
 // ./pageSnapshot.ts が「渡されたDOMの解析」を担うのに対し、このモジュールは
 // フォルダページの追加フェッチを含む収集フロー全体と、失敗時のフォールバックを担う。
@@ -15,22 +16,22 @@ import {
  */
 const MAX_FOLDER_DEPTH = 2;
 const MAX_MIME_HINT_REQUESTS = 20;
-const MIME_TYPE_HINTS: Record<string, string> = {
-	"application/pdf": "pdf",
-	"application/zip": "zip",
-	"application/vnd.google-earth.kmz": "kmz",
-	"application/vnd.google-earth.kml+xml": "kml",
-	"application/gpx+xml": "gpx",
-	"application/msword": "doc",
-	"application/vnd.ms-excel": "xls",
-	"application/vnd.ms-powerpoint": "ppt",
-	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-	"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-	"image/jpeg": "jpg",
-	"image/png": "png",
-	"image/gif": "gif",
-};
+const MAX_MIME_HINT_CONCURRENCY = 4;
+const MOODLE_REQUEST_TIMEOUT_MS = 4_000;
+const mimeHintCache = new Map<string, Promise<string | null>>();
+
+export interface MoodleSnapshotCollectionOptions {
+	resolveMimeHints?: boolean;
+}
+
+export interface MimeHintResolutionOptions {
+	fetcher?: typeof fetch;
+	origin?: string;
+	maxRequests?: number;
+	concurrency?: number;
+	timeoutMs?: number;
+	cache?: Map<string, Promise<string | null>>;
+}
 
 export function createEmptyMoodlePageSnapshot(): MoodlePageSnapshot {
 	return {
@@ -58,10 +59,15 @@ export function safeCollectMoodlePageSnapshot(root: Document = document): Moodle
 /** 表示中ページに加えて、Moodleフォルダ配下の資料も取得したスナップショットを返す。 */
 export async function collectMoodlePageSnapshotWithNestedFolders(
 	root: Document = document,
+	options: MoodleSnapshotCollectionOptions = {},
 ): Promise<MoodlePageSnapshot> {
 	const snapshot = safeCollectMoodlePageSnapshot(root);
 	const nestedFiles = await collectNestedFolderFiles(root);
-	const files = await resolveMissingMimeHints(dedupeFiles([...snapshot.files, ...nestedFiles]));
+	const detectedFiles = dedupeFiles([...snapshot.files, ...nestedFiles]);
+	const files =
+		options.resolveMimeHints === false
+			? detectedFiles
+			: await resolveMissingMimeHints(detectedFiles);
 
 	return {
 		...snapshot,
@@ -71,32 +77,80 @@ export async function collectMoodlePageSnapshotWithNestedFolders(
 }
 
 /** URLやテーマアイコンから判定できない資料は、Moodleが返すContent-Typeで補完する。 */
-async function resolveMissingMimeHints(files: MoodleFileLink[]): Promise<MoodleFileLink[]> {
-	let requestCount = 0;
-	return Promise.all(
-		files.map(async (file) => {
-			if (file.mimeHint || requestCount >= MAX_MIME_HINT_REQUESTS || !isSameOriginUrl(file.url)) {
-				return file;
-			}
-			requestCount += 1;
-			const mimeHint = await fetchMimeHint(file.url);
-			return mimeHint ? { ...file, mimeHint } : file;
-		}),
+export async function resolveMissingMimeHints(
+	files: MoodleFileLink[],
+	options: MimeHintResolutionOptions = {},
+): Promise<MoodleFileLink[]> {
+	const origin = options.origin ?? currentOrigin();
+	const candidates = files
+		.map((file, index) => ({ file, index }))
+		.filter(({ file }) => !file.mimeHint && isSameOriginUrl(file.url, origin))
+		.slice(0, options.maxRequests ?? MAX_MIME_HINT_REQUESTS);
+	if (candidates.length === 0) return files;
+
+	const resolvedFiles = [...files];
+	const fetcher = options.fetcher ?? fetch;
+	const cache = options.cache ?? mimeHintCache;
+	const timeoutMs = options.timeoutMs ?? MOODLE_REQUEST_TIMEOUT_MS;
+	let nextIndex = 0;
+
+	async function runWorker(): Promise<void> {
+		while (nextIndex < candidates.length) {
+			const candidate = candidates[nextIndex++];
+			if (!candidate) return;
+			const mimeHint = await getCachedMimeHint(candidate.file.url, fetcher, timeoutMs, cache);
+			if (mimeHint) resolvedFiles[candidate.index] = { ...candidate.file, mimeHint };
+		}
+	}
+
+	const concurrency = Math.max(
+		1,
+		Math.min(options.concurrency ?? MAX_MIME_HINT_CONCURRENCY, candidates.length),
 	);
+	await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+	return resolvedFiles;
 }
 
-async function fetchMimeHint(url: string): Promise<string | null> {
+function getCachedMimeHint(
+	url: string,
+	fetcher: typeof fetch,
+	timeoutMs: number,
+	cache: Map<string, Promise<string | null>>,
+): Promise<string | null> {
+	const cached = cache.get(url);
+	if (cached) return cached;
+	const request = fetchMimeHint(url, fetcher, timeoutMs).then((mimeHint) => {
+		// 一時的な通信失敗やタイムアウトは固定化せず、明示的な再読み込みで再試行できるようにする。
+		if (!mimeHint) cache.delete(url);
+		return mimeHint;
+	});
+	cache.set(url, request);
+	return request;
+}
+
+async function fetchMimeHint(
+	url: string,
+	fetcher: typeof fetch,
+	timeoutMs: number,
+): Promise<string | null> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		const response = await fetch(url, { method: "HEAD", credentials: "include" });
+		const response = await fetcher(url, {
+			method: "HEAD",
+			credentials: "include",
+			signal: controller.signal,
+		});
 		if (!response.ok) return null;
 
-		const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase();
-		if (contentType && MIME_TYPE_HINTS[contentType]) return MIME_TYPE_HINTS[contentType];
+		const contentTypeHint = normalizeFileTypeHint(response.headers.get("content-type"));
+		if (contentTypeHint) return contentTypeHint;
 
-		const disposition = response.headers.get("content-disposition") ?? "";
-		return disposition.match(/\.([a-z0-9]{1,10})(?:["';]|$)/i)?.[1]?.toLowerCase() ?? null;
+		return fileExtensionFromContentDisposition(response.headers.get("content-disposition"));
 	} catch {
 		return null;
+	} finally {
+		clearTimeout(timeout);
 	}
 }
 
@@ -145,24 +199,34 @@ function withSectionFallback(
 }
 
 async function fetchMoodleDocument(url: string): Promise<Document> {
-	const response = await fetch(url, { credentials: "include" });
-	if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), MOODLE_REQUEST_TIMEOUT_MS);
+	try {
+		const response = await fetch(url, { credentials: "include", signal: controller.signal });
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-	const html = await response.text();
-	const parsed = new DOMParser().parseFromString(html, "text/html");
-	// 相対リンクをフォルダページ基準で解決できるよう、baseを差し込む
-	const base = parsed.createElement("base");
-	base.href = url;
-	parsed.head.prepend(base);
-	return parsed;
+		const html = await response.text();
+		const parsed = new DOMParser().parseFromString(html, "text/html");
+		// 相対リンクをフォルダページ基準で解決できるよう、baseを差し込む
+		const base = parsed.createElement("base");
+		base.href = url;
+		parsed.head.prepend(base);
+		return parsed;
+	} finally {
+		clearTimeout(timeout);
+	}
 }
 
-function isSameOriginUrl(url: string): boolean {
+function isSameOriginUrl(url: string, origin = currentOrigin()): boolean {
 	try {
-		return new URL(url).origin === location.origin;
+		return Boolean(origin) && new URL(url).origin === origin;
 	} catch {
 		return false;
 	}
+}
+
+function currentOrigin(): string {
+	return typeof location === "undefined" ? "" : location.origin;
 }
 
 function dedupeFiles(files: MoodleFileLink[]): MoodleFileLink[] {
