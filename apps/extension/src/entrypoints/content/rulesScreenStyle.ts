@@ -10,6 +10,11 @@ export function ensureRulesScreenStyle(): void {
 			padding-bottom: 24px;
 		}
 
+		.fuzzy-rule-settings-panel {
+			display: grid;
+			gap: 16px;
+		}
+
 		.fuzzy-rules-tabs {
 			display: flex;
 			flex-wrap: wrap;

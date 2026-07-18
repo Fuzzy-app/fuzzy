@@ -16,7 +16,7 @@ describe("未判定MIMEのHEAD補完", () => {
 			await new Promise((resolve) => setTimeout(resolve, 5));
 			activeRequests -= 1;
 			return new Response(null, { status: 200, headers: { "content-type": "application/pdf" } });
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 		const cache = new Map<string, Promise<string | null>>();
 		const files = [1, 2, 3, 4].map((id) => createFile(id));
 		const options = { fetcher, origin: ORIGIN, maxRequests: 3, concurrency: 2, cache };
@@ -38,12 +38,12 @@ describe("未判定MIMEのHEAD補完", () => {
 					"content-type": "application/octet-stream",
 					"content-disposition": "attachment; filename*=UTF-8''lecture%20notes.pptx",
 				},
-			})) as typeof fetch;
+			})) as unknown as typeof fetch;
 		const unknownFetcher = (async () =>
 			new Response(null, {
 				status: 200,
 				headers: { "content-disposition": 'attachment; filename="payload.bin"' },
-			})) as typeof fetch;
+			})) as unknown as typeof fetch;
 
 		const detected = await resolveMissingMimeHints([createFile(1)], {
 			fetcher: dispositionFetcher,

@@ -1,4 +1,8 @@
-import type { RuleUpdateResult } from "@fuzzy/shared";
+import type {
+	DuplicateGroupListItem,
+	RuleUpdateResult,
+	RuleViolationListItem,
+} from "@fuzzy/shared";
 import type {
 	RuleManagementApi,
 	RuleSet,
@@ -12,6 +16,8 @@ const RULE_MANAGEMENT_METHODS = [
 	"getRules",
 	"updateGlobalRule",
 	"updateCourseRuleOverride",
+	"getRuleViolations",
+	"getDuplicateGroups",
 ] as const;
 
 export type RuleManagementMethod = (typeof RULE_MANAGEMENT_METHODS)[number];
@@ -62,6 +68,12 @@ export async function respondToRuleManagementRequest(
 					message.request as UpdateCourseRuleOverrideRequest,
 				);
 				break;
+			case "getRuleViolations":
+				data = await api.getRuleViolations();
+				break;
+			case "getDuplicateGroups":
+				data = await api.getDuplicateGroups();
+				break;
 		}
 		return { ok: true, data, mode: api.mode };
 	} catch (error) {
@@ -95,6 +107,14 @@ export class BackgroundRuleManagementApi implements RuleManagementApi {
 
 	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult> {
 		return this.#call("updateCourseRuleOverride", request);
+	}
+
+	getRuleViolations(): Promise<RuleViolationListItem[]> {
+		return this.#call("getRuleViolations", {});
+	}
+
+	getDuplicateGroups(): Promise<DuplicateGroupListItem[]> {
+		return this.#call("getDuplicateGroups", {});
 	}
 
 	async #call<T>(method: RuleManagementMethod, request: unknown): Promise<T> {
