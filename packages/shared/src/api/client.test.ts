@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { NotificationRule, NotificationRuleInput } from "../types";
 import { createApiClient } from "./index";
-import { MockApiClient, courseFolderName, folderSegment } from "./mockClient";
+import { MockApiClient } from "./mockClient";
 
 describe("createApiClient フォールバック機構", () => {
 	test("native-hostが存在しない環境ではmockモードにフォールバックする", async () => {
@@ -46,9 +47,11 @@ describe("MockApiClient（サンプルデータ）", () => {
 				mimeHint: "pdf",
 			},
 		});
-		expect(result[0]?.path).toContain("データベース");
-		expect(result[0]?.path).not.toContain("第4回");
-		expect(result[1]?.path).toContain("第4回");
+		expect(result[0]?.relativePath).toBe("2026前期\\データベース\\第4回");
+		expect(result[0]?.path).toBe(
+			"C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+		);
+		expect(result[1]?.relativePath).toBe("2026前期\\データベース");
 
 		const syllabusResult = await client.suggestSavePath({
 			course: { name: "人工知能", sectionTitle: "授業計画", breadcrumbs: [] },
@@ -61,27 +64,50 @@ describe("MockApiClient（サンプルデータ）", () => {
 			},
 		});
 		expect(syllabusResult).toHaveLength(1);
-		expect(syllabusResult[0]?.path).not.toContain("授業計画");
+		expect(syllabusResult[0]?.relativePath).not.toContain("授業計画");
+	});
 
-		const sanitizedResult = await client.suggestSavePath({
-			course: { name: "情報科学📚（前期）", sectionTitle: "第4回🔬", breadcrumbs: [] },
-			fileMeta: null,
+	test("suggestSavePath: コース名の補足・角括弧・絵文字を保存先から除外する", async () => {
+		const result = await client.suggestSavePath({
+			course: {
+				name: "情報科学📚［2026年度・前期］",
+				sectionTitle: "第4回🔬[配布資料]",
+				breadcrumbs: ["2026前期"],
+			},
+			fileMeta: {
+				title: "講義資料.pdf",
+				url: "https://moodle.example/pluginfile.php/40/file.pdf",
+				moodleFileId: "40",
+				sectionTitle: "第4回🔬[配布資料]",
+				mimeHint: "pdf",
+			},
 		});
-		expect(sanitizedResult[0]?.path).toContain("情報科学");
-		expect(sanitizedResult[0]?.path).not.toMatch(/\p{Extended_Pictographic}/u);
-		expect(sanitizedResult[1]?.path).toContain("第4回");
+		expect(result[0]?.relativePath).toBe("2026前期\\情報科学\\第4回");
+		expect(result[0]?.relativePath).not.toMatch(/[()[\]（）［］\p{Extended_Pictographic}]/u);
 	});
 
-	test("suggestSavePath: コース名の括弧内補足を保存先から除外する", () => {
-		expect(courseFolderName("情報科学📚（2026年度・前期）")).toBe("情報科学");
-		expect(courseFolderName("統計学 (担当: 山田)")).toBe("統計学");
-		expect(folderSegment("第4回🔬（配布資料）")).toBe("第4回");
-	});
-
-	test("suggestSavePath: 同名になる場合も括弧内補足を候補名に表示しない", () => {
-		const courseNames = ["英語（A）", "英語（B）"];
-		expect(courseFolderName("英語（A）", courseNames)).toBe("英語");
-		expect(courseFolderName("英語（B）", courseNames)).toBe("英語");
+	test("suggestSavePath: 更新済みルールとコース別例外をその場で反映する", async () => {
+		const freshClient = new MockApiClient();
+		await freshClient.updateCourseRuleOverride({
+			courseId: 2,
+			override: {
+				splitBySection: false,
+				patternTemplate: "{term}/{course}",
+				note: null,
+			},
+		});
+		const result = await freshClient.suggestSavePath({
+			course: { name: "データベース", sectionTitle: "Week 4", breadcrumbs: [] },
+			fileMeta: {
+				title: "normalization.pdf",
+				url: "https://moodle.example/mod/resource/view.php?id=10",
+				moodleFileId: "10",
+				sectionTitle: "Week 4",
+				mimeHint: "pdf",
+			},
+		});
+		expect(result).toHaveLength(1);
+		expect(result[0]?.relativePath).toBe("2026前期\\データベース");
 	});
 
 	test("checkSimilarFiles: 保存前に似ている保存済みファイルを返す", async () => {
@@ -146,10 +172,45 @@ describe("MockApiClient（サンプルデータ）", () => {
 	});
 
 	test("updateNotificationRules → getNotificationRules: 更新内容が反映される", async () => {
-		const updated = [{ id: 1, offsetMinutes: 4320, label: "3日前", enabled: false }];
-		await client.updateNotificationRules(updated);
+		const input: NotificationRuleInput[] = [{ id: 1, offsetMinutes: 4320, enabled: false }];
+		const updated: NotificationRule[] = [
+			{ id: 1, offsetMinutes: 4320, label: "3日前", enabled: false },
+		];
+		const updateResult = await client.updateNotificationRules(input);
 		const result = await client.getNotificationRules();
+		expect(updateResult).toEqual({ ok: true, rules: updated });
 		expect(result).toEqual(updated);
+	});
+
+	test("updateNotificationRules: 任意ルールのIDを保存側で採番する", async () => {
+		const updateResult = await client.updateNotificationRules([
+			{ offsetMinutes: 30, enabled: true },
+		]);
+		expect(updateResult.rules).toEqual([
+			{ id: 5, offsetMinutes: 30, label: "30分前", enabled: true },
+		]);
+	});
+
+	test("updateNotificationRules: 範囲外と重複した通知タイミングを拒否する", async () => {
+		await expect(
+			client.updateNotificationRules([{ offsetMinutes: 525601, enabled: true }]),
+		).rejects.toMatchObject({ code: "RULE_CONFLICT" });
+		await expect(
+			client.updateNotificationRules([
+				{ offsetMinutes: 60, enabled: true },
+				{ offsetMinutes: 60, enabled: false },
+			]),
+		).rejects.toMatchObject({ code: "RULE_CONFLICT" });
+	});
+
+	test("通知設定はモッククライアントを作り直すとサンプルへ戻る", async () => {
+		const freshClient = new MockApiClient();
+		const result = await freshClient.getNotificationRules();
+		expect(result.find((rule) => rule.id === 1)?.enabled).toBe(true);
+		expect(result.find((rule) => rule.id === 3)).toMatchObject({
+			offsetMinutes: 540,
+			label: "9時間前",
+		});
 	});
 
 	test("getLatestSyncEvent: 直近の同期結果（データ取得通知用）が返る", async () => {

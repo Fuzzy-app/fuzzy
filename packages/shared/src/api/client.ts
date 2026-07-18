@@ -9,7 +9,10 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	RuleSet,
+	RuleUpdateResult,
 	RuleViolation,
 	SaveFilesRequest,
 	SaveFilesResult,
@@ -17,6 +20,8 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest,
 } from "../types";
 
 /**
@@ -51,13 +56,17 @@ export interface FuzzyApiClient {
 
 	getRules(): Promise<RuleSet>;
 
+	updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult>;
+
+	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult>;
+
 	getRuleViolations(): Promise<RuleViolation[]>;
 
 	getDuplicateGroups(): Promise<DuplicateGroup[]>;
 
 	getNotificationRules(): Promise<NotificationRule[]>;
 
-	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }>;
+	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult>;
 
 	/** 直近の同期（Moodleからのデータ取得）結果。データ取得通知の表示に使う。同期実績が無ければnull */
 	getLatestSyncEvent(): Promise<DataSyncEvent | null>;

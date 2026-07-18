@@ -9,7 +9,10 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	RuleSet,
+	RuleUpdateResult,
 	RuleViolation,
 	SaveFilesRequest,
 	SaveFilesResult,
@@ -17,6 +20,8 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
 import { ApiError } from "./client";
@@ -118,6 +123,14 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("getRules", {});
 	}
 
+	updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult> {
+		return this.send("updateGlobalRule", request);
+	}
+
+	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult> {
+		return this.send("updateCourseRuleOverride", request);
+	}
+
 	getRuleViolations(): Promise<RuleViolation[]> {
 		return this.send("getRuleViolations", {});
 	}
@@ -130,7 +143,7 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("getNotificationRules", {});
 	}
 
-	updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
+	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult> {
 		return this.send("updateNotificationRules", { rules });
 	}
 

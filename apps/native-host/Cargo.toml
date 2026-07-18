@@ -7,6 +7,8 @@ publish.workspace = true
 description = "Fuzzy Native Messagingホスト：拡張機能と標準入出力でenvelopeをやり取りする常駐エンジン"
 
 [dependencies]
+engine-core = { path = "../../crates/engine-core" }
 serde.workspace = true
 serde_json.workspace = true
-# コマンド実装（issue #36以降）で engine-core / rusqlite 等を追加する。
+# SQLite接続（issue #36）。bundled で libsqlite3 を同梱ビルドし外部依存を無くす。
+rusqlite = { version = "0.31", features = ["bundled"] }

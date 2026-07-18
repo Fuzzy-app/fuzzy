@@ -1,4 +1,10 @@
 import type { MoodleFileMeta } from "@fuzzy/shared";
+import {
+	fileExtensionFromName,
+	fileTypeFromMoodleIconUrl,
+	hasSupportedFileExtension,
+	normalizeFileTypeHint,
+} from "./fileType";
 
 /**
  * ページから抽出したファイルリンク。保存API（saveFiles等）へそのまま渡すため、
@@ -32,10 +38,34 @@ export interface MoodlePageSnapshot {
 
 export const MOODLE_PAGE_SNAPSHOT_MESSAGE = "fuzzy:getMoodlePageSnapshot";
 
-const FILE_EXTENSION_PATTERN =
-	/\.(pdf|docx?|pptx?|xlsx?|csv|txt|zip|7z|rar|kmz|kml|gpx|png|jpe?g|gif)(?:$|[?#])/i;
-const MOODLE_FILE_PATTERN = /\/pluginfile\.php\/|\/mod\/resource\/view\.php/i;
+const MOODLE_DIRECT_FILE_PATTERN = /\/pluginfile\.php\//i;
+const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
 const MOODLE_FOLDER_PATTERN = /\/mod\/folder\/view\.php/i;
+const MOODLE_ACTIVITY_SELECTOR = "li.activity, .activity, [data-activityname]";
+const MOODLE_SECTION_CONTAINER_SELECTOR = [
+	"[data-section-name]",
+	"[data-sectionid]",
+	"[data-section-number]",
+	"[data-region='section']",
+	"[id^='section-']",
+	"li.section",
+	".course-section",
+].join(", ");
+const MOODLE_SECTION_HEADING_SELECTOR = [
+	".sectionname",
+	".section-title",
+	"[data-region='section-title']",
+	".course-section-header h2",
+	".course-section-header h3",
+	".course-section-header h4",
+	"[data-region='section'] > header h2",
+	"[data-region='section'] > header h3",
+	"[data-region='section'] > header h4",
+	"[id^='section-'] > header h2",
+	"[id^='section-'] > header h3",
+	"[id^='section-'] > header h4",
+].join(", ");
+const WEB_PAGE_MIME_HINTS = new Set(["htm", "html"]);
 const ASSIGNMENT_KEYWORD_PATTERN =
 	/(課題|レポート|提出|締切|期限|小テスト|quiz|assignment|report|due)/i;
 const DUE_TEXT_PATTERN =
@@ -85,14 +115,18 @@ export function extractCourseName(root: Document | Element = document): string |
 }
 
 export function extractSectionTitle(root: Document | Element = document): string | null {
-	const candidates = [
-		textOf(root.querySelector("[data-section-name]")),
-		textOf(root.querySelector(".sectionname")),
-		textOf(root.querySelector("li.section.current h3, li.section.current h4")),
-		textOf(root.querySelector("h2, h3")),
-	];
+	const currentSection = root.querySelector(
+		"li.section.current, .course-section.current, [data-region='section'][aria-current='true']",
+	);
+	if (currentSection) {
+		const currentTitle = sectionContainerTitle(currentSection);
+		if (currentTitle) return currentTitle;
+	}
 
-	return firstMeaningful(candidates);
+	const heading = Array.from(root.querySelectorAll(MOODLE_SECTION_HEADING_SELECTOR)).find(
+		(candidate) => !candidate.closest(MOODLE_ACTIVITY_SELECTOR),
+	);
+	return textOf(heading ?? null);
 }
 
 export function extractBreadcrumbs(root: Document | Element = document): string[] {
@@ -106,14 +140,16 @@ export function extractBreadcrumbs(root: Document | Element = document): string[
 export function extractFileLinks(root: Document | Element = document): MoodleFileLink[] {
 	const contentRoot = findMoodleContentRoot(root);
 	const links = Array.from(contentRoot.querySelectorAll<HTMLAnchorElement>("a[href]"));
+	const precedingSectionTitles = createPrecedingSectionTitleLookup(contentRoot, links);
 	const files = links.filter(isFileLikeLink).map((link) => {
 		const url = normalizeUrl(link.href, root);
+		const mimeHint = extractMimeHint(link, url);
 		return {
-			title: extractLinkTitle(link),
+			title: extractFileTitle(link, url, mimeHint),
 			url,
 			moodleFileId: extractMoodleFileId(url),
-			sectionTitle: findSectionTitle(link),
-			mimeHint: extractMimeHint(link, url),
+			sectionTitle: findSectionTitle(link, precedingSectionTitles.get(link) ?? null),
+			mimeHint,
 		};
 	});
 
@@ -123,10 +159,11 @@ export function extractFileLinks(root: Document | Element = document): MoodleFil
 export function extractFolderLinks(root: Document | Element = document): MoodleFolderLink[] {
 	const contentRoot = findMoodleContentRoot(root);
 	const links = Array.from(contentRoot.querySelectorAll<HTMLAnchorElement>("a[href]"));
+	const precedingSectionTitles = createPrecedingSectionTitleLookup(contentRoot, links);
 	const folders = links.filter(isFolderLink).map((link) => ({
 		title: extractLinkTitle(link),
 		url: normalizeUrl(link.href, root),
-		sectionTitle: findSectionTitle(link),
+		sectionTitle: findSectionTitle(link, precedingSectionTitles.get(link) ?? null),
 	}));
 
 	return dedupeBy(folders, (folder) => folder.url);
@@ -188,10 +225,22 @@ function isFileLikeLink(link: HTMLAnchorElement): boolean {
 
 	const href = link.href;
 	const label = extractLinkTitle(link);
+	const mimeHint = extractMimeHint(link, href);
+
+	// Moodle resource URLs can point to a file or an HTML page. Only include them
+	// when the activity metadata identifies a non-page file type.
+	if (MOODLE_RESOURCE_PATTERN.test(href)) {
+		return (
+			!WEB_PAGE_MIME_HINTS.has(mimeHint ?? "") &&
+			(mimeHint !== null || hasSupportedFileExtension(href) || hasSupportedFileExtension(label))
+		);
+	}
+
 	return (
-		MOODLE_FILE_PATTERN.test(href) ||
-		FILE_EXTENSION_PATTERN.test(href) ||
-		FILE_EXTENSION_PATTERN.test(label)
+		!WEB_PAGE_MIME_HINTS.has(mimeHint ?? "") &&
+		(MOODLE_DIRECT_FILE_PATTERN.test(href) ||
+			hasSupportedFileExtension(href) ||
+			hasSupportedFileExtension(label))
 	);
 }
 
@@ -226,94 +275,92 @@ function extractLinkTitle(link: HTMLAnchorElement): string {
 	return normalizeText(clone.textContent) || normalizeText(link.getAttribute("title")) || link.href;
 }
 
-function findSectionTitle(element: Element): string | null {
-	const sectionContainer = element.closest(
-		[
-			"[data-section-name]",
-			"[data-sectionid]",
-			"[data-section-number]",
-			"[data-region='section']",
-			"[id^='section-']",
-			"li.section",
-			".course-section",
-			".section",
-		].join(", "),
-	);
+function extractFileTitle(link: HTMLAnchorElement, url: string, mimeHint: string | null): string {
+	const title = extractLinkTitle(link);
+	if (!mimeHint || hasSupportedFileExtension(title)) return title;
+
+	const fileName = extractFileNameFromUrl(url);
+	if (fileName && hasSupportedFileExtension(fileName)) return fileName;
+
+	return `${title}.${mimeHint}`;
+}
+
+function extractFileNameFromUrl(url: string): string | null {
+	const pathname = safeDecodeURIComponent(safeUrl(url)?.pathname ?? "");
+	const fileName = pathname.split("/").pop() ?? "";
+	return fileName && fileName !== "pluginfile.php" ? fileName : null;
+}
+
+function findSectionTitle(element: Element, precedingSectionTitle: string | null): string | null {
+	const sectionContainer = element.closest(MOODLE_SECTION_CONTAINER_SELECTOR);
 
 	if (sectionContainer) {
-		const explicitName = normalizeText(sectionContainer.getAttribute("data-section-name"));
-		const labelledBy = sectionContainer.getAttribute("aria-labelledby");
-		const labelledElement = labelledBy ? element.ownerDocument.getElementById(labelledBy) : null;
-		// activity 内の見出しはファイル名（例: "画像処理とは（7.6MB)"）なので、
-		// セクションの回・項目名として扱わない。
-		const heading = findSectionHeading(sectionContainer);
-		const sectionTitle = firstMeaningful([
-			textOf(heading ?? null),
-			textOf(labelledElement),
-			explicitName,
-		]);
+		const sectionTitle = sectionContainerTitle(sectionContainer);
 		if (sectionTitle) return sectionTitle;
 	}
 
-	const precedingSectionTitle = findPrecedingSectionTitle(element);
-	if (precedingSectionTitle) return precedingSectionTitle;
-
-	// 活動名やパンくずはファイル名・コース名になりやすく、資料の所属を表す
-	// セクション題名には使わない。
-	return null;
+	// 活動名・ファイル名・容量は所属セクションではないため、代替値には使わない。
+	return precedingSectionTitle;
 }
 
 /**
- * テーマによっては資料とセクション見出しが親子にならないため、
- * 直前にある活動外のセクション見出しを所属先として使う。
+ * 見出しとリンクをDOM順に一度だけ走査し、親子関係を持たないテーマ向けの
+ * 「直前のセクション見出し」をリンクごとに記録する。
  */
-function findPrecedingSectionTitle(element: Element): string | null {
-	const headings = Array.from(
-		element.ownerDocument.querySelectorAll(
-			[
-				"[data-section-name]",
-				".sectionname",
-				".section-title",
-				".course-section-header h2",
-				".course-section-header h3",
-				".course-section-header h4",
-				"[data-region='section'] > header h2",
-				"[data-region='section'] > header h3",
-				"[id^='section-'] > header h2",
-				"[id^='section-'] > header h3",
-			].join(", "),
-		),
-	).filter(
-		(candidate) =>
-			!candidate.closest("li.activity, .activity, [data-activityname]") &&
-			Boolean(candidate.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING),
+function createPrecedingSectionTitleLookup(
+	root: Document | Element,
+	links: HTMLAnchorElement[],
+): Map<HTMLAnchorElement, string | null> {
+	const linkSet = new Set<Element>(links);
+	const titles = new Map<HTMLAnchorElement, string | null>();
+	let currentSectionTitle: string | null = null;
+	const candidates = root.querySelectorAll(
+		`${MOODLE_SECTION_CONTAINER_SELECTOR}, ${MOODLE_SECTION_HEADING_SELECTOR}, a[href]`,
 	);
 
-	const heading = headings.at(-1) ?? null;
+	for (const candidate of candidates) {
+		if (linkSet.has(candidate)) {
+			titles.set(candidate as HTMLAnchorElement, currentSectionTitle);
+			continue;
+		}
+		const sectionTitle = sectionMarkerTitle(candidate);
+		if (sectionTitle) currentSectionTitle = sectionTitle;
+	}
+	return titles;
+}
+
+function sectionMarkerTitle(candidate: Element): string | null {
+	if (candidate.closest(MOODLE_ACTIVITY_SELECTOR)) return null;
+	if (candidate.matches(MOODLE_SECTION_CONTAINER_SELECTOR)) {
+		return sectionContainerTitle(candidate);
+	}
+	return candidate.matches(MOODLE_SECTION_HEADING_SELECTOR) ? textOf(candidate) : null;
+}
+
+function sectionContainerTitle(sectionContainer: Element): string | null {
+	const heading = findSectionHeading(sectionContainer);
+	const labelledBy = sectionContainer.getAttribute("aria-labelledby")?.split(/\s+/) ?? [];
+	const labelledTitles = labelledBy.map((id) =>
+		textOf(sectionContainer.ownerDocument.getElementById(id)),
+	);
 	return firstMeaningful([
-		normalizeText(heading?.getAttribute("data-section-name")),
 		textOf(heading),
+		...labelledTitles,
+		normalizeText(sectionContainer.getAttribute("data-section-name")),
 	]);
 }
 
-/** セクションを囲む要素の本文ではなく、見出し要素そのものを優先する。 */
 function findSectionHeading(sectionContainer: Element): Element | null {
-	const selectors = [
-		"[data-section-name]",
-		".sectionname",
-		".section-title",
-		".course-section-header h2, .course-section-header h3, .course-section-header h4",
-		"header h2, header h3, header h4",
-		"h2, h3, h4",
-	];
-
-	for (const selector of selectors) {
-		const heading = Array.from(sectionContainer.querySelectorAll(selector)).find(
-			(candidate) => !candidate.closest("li.activity, .activity, [data-activityname]"),
-		);
-		if (heading) return heading;
-	}
-	return null;
+	const candidates = sectionContainer.querySelectorAll(
+		`${MOODLE_SECTION_HEADING_SELECTOR}, h2, h3, h4`,
+	);
+	return (
+		Array.from(candidates).find(
+			(candidate) =>
+				!candidate.closest(MOODLE_ACTIVITY_SELECTOR) &&
+				candidate.closest(MOODLE_SECTION_CONTAINER_SELECTOR) === sectionContainer,
+		) ?? null
+	);
 }
 
 function extractMoodleFileId(url: string): string | null {
@@ -322,21 +369,26 @@ function extractMoodleFileId(url: string): string | null {
 }
 
 function extractMimeHint(link: HTMLAnchorElement, url: string): string | null {
-	const fromMoodleActivity = extractMoodleActivityMimeHint(link);
-	if (fromMoodleActivity) return fromMoodleActivity;
-
 	const pathname = safeDecodeURIComponent(safeUrl(url)?.pathname ?? url);
-	const fileName = pathname.split("/").pop() ?? pathname;
-	const match = fileName.match(/\.([a-z0-9]{2,5})$/i);
-	const extension = match?.[1]?.toLowerCase() ?? null;
-
-	return extension === "php" ? null : extension;
+	const fromUrl = fileExtensionFromName(pathname);
+	if (fromUrl) return fromUrl;
+	return extractMoodleActivityMimeHint(link);
 }
 
 function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
+	const activity = link.closest(
+		".activity-item, li.activity, .activity, [data-region='activity-card']",
+	);
+	const activityHint = resolveMoodleActivityMimeHint(
+		activity?.querySelector(".activitybadge, .badge")?.textContent,
+		activity?.querySelector<HTMLImageElement>("[data-region='activity-icon'], img.activityicon")
+			?.src,
+	);
+	if (activityHint) return activityHint;
+
 	for (const scope of fileTypeScopes(link)) {
 		// pluginfile.php や resource/view.php は URL から拡張子を取り出せない。
-		// Moodle のテーマ差分を吸収するため、画像だけでなくアイコン文字・alt・クラス名も読む。
+		// Moodle のテーマ差分を吸収するため、構造化属性とアイコンURLを確認する。
 		const elements = [
 			scope,
 			...scope.querySelectorAll<HTMLElement>(
@@ -345,24 +397,18 @@ function extractMoodleActivityMimeHint(link: HTMLAnchorElement): string | null {
 		];
 		for (const element of elements) {
 			const labels = [
-				normalizeText(element.textContent),
 				normalizeText(element.getAttribute("alt")),
 				normalizeText(element.getAttribute("aria-label")),
 				normalizeText(element.getAttribute("title")),
 				normalizeText(element.getAttribute("data-file-type")),
 				normalizeText(element.getAttribute("data-mimetype")),
-				normalizeText(element.getAttribute("class")),
 			];
 			for (const label of labels) {
-				const mimeHint = normalizeMimeLabel(label);
+				const mimeHint = normalizeFileTypeHint(label);
 				if (mimeHint) return mimeHint;
 			}
-
 			const source = element.getAttribute("src") ?? "";
-			const iconName = source.match(
-				/\/(?:f|file)\/([a-z0-9]+)(?:-\d+)?(?:\.(?:svg|png|gif|webp))?(?:[?#]|$)/i,
-			)?.[1];
-			const mimeHint = normalizeMimeLabel(iconName ?? null);
+			const mimeHint = fileTypeFromMoodleIconUrl(source);
 			if (mimeHint) return mimeHint;
 		}
 	}
@@ -380,33 +426,14 @@ function fileTypeScopes(link: HTMLAnchorElement): Element[] {
 	return candidates.filter((candidate): candidate is Element => candidate !== null);
 }
 
-function normalizeMimeLabel(value: string | null): string | null {
-	const normalized = normalizeText(value).toLowerCase();
-	if (!normalized) return null;
-
-	const aliases: Record<string, string> = {
-		pdf: "pdf",
-		word: "docx",
-		doc: "doc",
-		docx: "docx",
-		powerpoint: "pptx",
-		ppt: "ppt",
-		pptx: "pptx",
-		excel: "xlsx",
-		xls: "xls",
-		xlsx: "xlsx",
-		zip: "zip",
-		kmz: "kmz",
-		kml: "kml",
-		gpx: "gpx",
-	};
-
-	if (aliases[normalized]) return aliases[normalized];
-	if (/(word|ワード|文書)/i.test(normalized)) return "docx";
-	if (/(powerpoint|パワーポイント|プレゼン)/i.test(normalized)) return "pptx";
-	if (/(excel|エクセル|表計算)/i.test(normalized)) return "xlsx";
-	if (/(pdf|ピーディーエフ)/i.test(normalized)) return "pdf";
-	return null;
+/** MoodleアクティビティのバッジとアイコンURLからファイル種別を推定する。 */
+export function resolveMoodleActivityMimeHint(
+	badgeText: string | null | undefined,
+	iconSrc: string | null | undefined,
+): string | null {
+	const badgeHint = normalizeFileTypeHint(badgeText);
+	if (badgeHint) return badgeHint;
+	return fileTypeFromMoodleIconUrl(iconSrc);
 }
 
 function extractAssignmentTitle(line: string): string {

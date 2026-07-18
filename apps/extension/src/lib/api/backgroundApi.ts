@@ -1,4 +1,4 @@
-// content script と background の間で保存系APIを中継するための共有定義。
+// content script と background の間で、Native Messagingが必要なAPIを中継する共有定義。
 //
 // 【背景】NativeApiClient は chrome.runtime.connectNative を使うが、これは
 // content script からは利用できないため、content script で createApiClient() を
@@ -11,6 +11,9 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	FuzzyApiClient,
+	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	SaveFilesRequest,
 	SaveFilesResult,
 	SaveSuggestion,
@@ -20,18 +23,20 @@ import type {
 
 export const FUZZY_API_MESSAGE_TYPE = "fuzzy:apiRequest";
 
-const SAVE_API_METHODS = [
+const BACKGROUND_API_METHODS = [
 	"suggestSavePath",
 	"checkSimilarFiles",
 	"saveFiles",
 	"extractZip",
+	"getNotificationRules",
+	"updateNotificationRules",
 ] as const;
 
-export type SaveApiMethod = (typeof SAVE_API_METHODS)[number];
+export type BackgroundApiMethod = (typeof BACKGROUND_API_METHODS)[number];
 
 export interface FuzzyApiRequestMessage {
 	type: typeof FUZZY_API_MESSAGE_TYPE;
-	method: SaveApiMethod;
+	method: BackgroundApiMethod;
 	request: unknown;
 }
 
@@ -45,18 +50,18 @@ export function isFuzzyApiRequestMessage(message: unknown): message is FuzzyApiR
 	return (
 		candidate.type === FUZZY_API_MESSAGE_TYPE &&
 		typeof candidate.method === "string" &&
-		(SAVE_API_METHODS as readonly string[]).includes(candidate.method)
+		(BACKGROUND_API_METHODS as readonly string[]).includes(candidate.method)
 	);
 }
 
-/** background経由で呼び出せる保存系APIの部分集合。 */
-type SaveApi = Pick<FuzzyApiClient, SaveApiMethod>;
+/** background経由で呼び出せるAPIの部分集合。 */
+type BackgroundApi = Pick<FuzzyApiClient, BackgroundApiMethod>;
 
 /**
- * background経由で保存系APIを呼ぶ、content script用のクライアント。
+ * background経由で対象APIを呼ぶ、content script用のクライアント。
  * メソッドのシグネチャは FuzzyApiClient の該当メソッドと同一。
  */
-export class BackgroundApiClient implements SaveApi {
+export class BackgroundApiClient implements BackgroundApi {
 	/** 直近の応答で判明した接続モード。応答を受け取るまでは "unknown"。 */
 	#mode: FuzzyApiClient["mode"] | "unknown" = "unknown";
 
@@ -80,7 +85,15 @@ export class BackgroundApiClient implements SaveApi {
 		return this.#call("extractZip", request);
 	}
 
-	async #call<T>(method: SaveApiMethod, request: unknown): Promise<T> {
+	getNotificationRules(): Promise<NotificationRule[]> {
+		return this.#call("getNotificationRules", {});
+	}
+
+	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult> {
+		return this.#call("updateNotificationRules", rules);
+	}
+
+	async #call<T>(method: BackgroundApiMethod, request: unknown): Promise<T> {
 		const message: FuzzyApiRequestMessage = { type: FUZZY_API_MESSAGE_TYPE, method, request };
 		const response = (await browser.runtime.sendMessage(message)) as
 			| FuzzyApiResponseMessage<T>

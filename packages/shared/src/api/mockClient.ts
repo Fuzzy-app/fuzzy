@@ -1,3 +1,12 @@
+import { type CourseFolderIdentity, courseFolderName } from "../folderNames";
+import { isValidNotificationOffsetMinutes, notificationRuleLabel } from "../notificationRules";
+import {
+	createRulePreviewValues,
+	removeSectionSegment,
+	resolveRulePattern,
+	validateCourseRuleOverride,
+	validateRulePattern,
+} from "../rules";
 import assignmentChanges from "../sample-data/assignment-changes.json" with { type: "json" };
 import courses from "../sample-data/courses.json" with { type: "json" };
 import dashboard from "../sample-data/dashboard.json" with { type: "json" };
@@ -5,13 +14,17 @@ import deadlines from "../sample-data/deadlines.json" with { type: "json" };
 import duplicateGroups from "../sample-data/duplicate-groups.json" with { type: "json" };
 import notificationRules from "../sample-data/notification-rules.json" with { type: "json" };
 import ruleViolations from "../sample-data/rule-violations.json" with { type: "json" };
-import rules from "../sample-data/rules.json" with { type: "json" };
+import sampleRules from "../sample-data/rules.json" with { type: "json" };
 import searchResults from "../sample-data/search-results.json" with { type: "json" };
 import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
+import { normalizeWindowsPath } from "../savePaths";
 import type {
 	Assignment,
 	AssignmentChange,
 	CheckSimilarFilesRequest,
+	Course,
+	CourseRuleOverride,
+	CourseRuleOverrideInput,
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
@@ -19,7 +32,10 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
+	NotificationRuleInput,
+	NotificationRuleUpdateResult,
 	RuleSet,
+	RuleUpdateResult,
 	RuleViolation,
 	SaveFilesRequest,
 	SaveFilesResult,
@@ -27,10 +43,13 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest,
 } from "../types";
-import type { FuzzyApiClient } from "./client";
+import { ApiError, type FuzzyApiClient } from "./client";
 
 const LATENCY_MS = 30;
+const MOCK_SAVE_ROOT = "C:\\Users\\sample\\Documents\\大学";
 const delay = <T>(value: T) =>
 	new Promise<T>((resolve) => setTimeout(() => resolve(value), LATENCY_MS));
 
@@ -44,7 +63,16 @@ export class MockApiClient implements FuzzyApiClient {
 
 	// 更新系コマンドの結果をプロセス内に保持し、デモ中の見た目の一貫性を保つ
 	private deadlines: Assignment[] = deadlines as Assignment[];
-	private notificationRules: NotificationRule[] = notificationRules as NotificationRule[];
+	private notificationRules: NotificationRule[] = (notificationRules as NotificationRule[]).map(
+		(rule) => ({
+			...rule,
+			label: notificationRuleLabel(rule.offsetMinutes),
+		}),
+	);
+	private nextNotificationRuleId =
+		this.notificationRules.reduce((max, rule) => Math.max(max, rule.id), 0) + 1;
+	private rules: RuleSet = cloneRuleSet(sampleRules as RuleSet);
+	private ruleMutationQueue: Promise<void> = Promise.resolve();
 
 	async ping(): Promise<boolean> {
 		return delay(true);
@@ -82,27 +110,50 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
-		const knownCourse = (courses as { id: number; name: string }[]).find(
-			(c) => c.name === request.course.name,
-		);
-		const knownCourseNames = (courses as { id: number; name: string }[]).map(
-			(course) => course.name,
-		);
+		const knownCourses = courses as Course[];
+		const requestedCourseName = request.course.name ?? "不明なコース";
+		const knownCourse = knownCourses.find((course) => course.name === requestedCourseName);
+		const courseIdentities: CourseFolderIdentity[] = knownCourses.map((course) => ({
+			name: course.name,
+			stableId: course.moodleCourseId,
+		}));
 		const courseLabel = courseFolderName(
-			knownCourse?.name ?? request.course.name ?? "不明なコース",
-			knownCourseNames,
+			knownCourse?.name ?? requestedCourseName,
+			courseIdentities,
+			knownCourse?.moodleCourseId,
 		);
-		const sectionLabel = folderSegment(
-			request.fileMeta?.sectionTitle ?? request.course.sectionTitle ?? "",
-		);
-		const coursePath = `C:\\Users\\sample\\Documents\\大学\\2026前期\\${courseLabel}`;
-		const suggestions: SaveSuggestion[] = [{ path: coursePath, confidence: 0.92 }];
+		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
+		const section = extractSectionNumber(sectionLabel);
+		const fallbackValues = createRulePreviewValues();
+		const term =
+			knownCourse?.term ??
+			request.course.breadcrumbs.find((item) => /^\d{4}(?:前期|後期|通年)$/.test(item)) ??
+			fallbackValues.term;
+		const override = knownCourse
+			? this.rules.courseOverrides.find((candidate) => candidate.courseId === knownCourse.id)
+			: undefined;
+		let patternTemplate = override?.patternTemplate ?? this.rules.globalPatternTemplate;
+		if (override?.splitBySection === false || (!section && patternTemplate.includes("{section}"))) {
+			patternTemplate = removeSectionSegment(patternTemplate);
+		}
 
-		// 「授業計画」のような活動名を保存先フォルダにすると、資料を分類するどころか
-		// 一件ごとの不要な階層になってしまう。回次・週次のように整理単位として明確な場合だけ、
-		// 補助候補として提示する。
-		if (sectionLabel && /^(第\s*\d+\s*回|week\s*\d+|\d+週目)/i.test(sectionLabel)) {
-			suggestions.push({ path: `${coursePath}\\${sectionLabel}`, confidence: 0.6 });
+		const values = {
+			...fallbackValues,
+			year: term.match(/^\d{4}/)?.[0] ?? fallbackValues.year,
+			term,
+			course: courseLabel,
+			assignment: request.fileMeta?.title.replace(/\.[a-z0-9]{1,10}$/i, "") ?? "資料",
+			section: section ?? fallbackValues.section,
+		};
+		const primaryRelativePath = resolveRulePattern(patternTemplate, values);
+		const suggestions: SaveSuggestion[] = [createSaveSuggestion(primaryRelativePath, 0.92)];
+
+		// 回ごとの候補が最有力の場合も、ユーザーが科目直下へまとめられるよう補助候補を返す。
+		if (section && patternTemplate.includes("{section}")) {
+			const courseRelativePath = resolveRulePattern(removeSectionSegment(patternTemplate), values);
+			if (courseRelativePath !== primaryRelativePath) {
+				suggestions.push(createSaveSuggestion(courseRelativePath, 0.6));
+			}
 		}
 
 		return delay(suggestions);
@@ -148,7 +199,63 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async getRules(): Promise<RuleSet> {
-		return delay(rules as RuleSet);
+		return delay(cloneRuleSet(this.rules));
+	}
+
+	async updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult> {
+		if (!request || typeof request.patternTemplate !== "string") {
+			throw new ApiError("RULE_CONFLICT", "グローバルルールを入力してください。");
+		}
+		const patternTemplate = request.patternTemplate.trim();
+		const patternError = validateRulePattern(patternTemplate);
+		if (patternError) throw new ApiError("RULE_CONFLICT", patternError);
+
+		return this.enqueueRuleMutation(() => {
+			for (const override of this.rules.courseOverrides) {
+				const consistencyError = validateCourseRuleOverride(override, patternTemplate);
+				if (consistencyError) {
+					throw new ApiError(
+						"RULE_CONFLICT",
+						`${override.courseName}の例外ルールと矛盾しています: ${consistencyError}`,
+					);
+				}
+			}
+			this.rules = { ...this.rules, globalPatternTemplate: patternTemplate };
+		});
+	}
+
+	async updateCourseRuleOverride(
+		request: UpdateCourseRuleOverrideRequest,
+	): Promise<RuleUpdateResult> {
+		if (!request || !Number.isInteger(request.courseId) || request.courseId <= 0) {
+			throw new ApiError("NOT_FOUND", "コースを選択してください。");
+		}
+		const override = normalizeCourseRuleOverrideInput(request.override);
+
+		return this.enqueueRuleMutation(() => {
+			const course = (dashboard as DashboardSummary).courses.find(
+				(candidate) => candidate.courseId === request.courseId,
+			);
+			if (!course) throw new ApiError("NOT_FOUND", "対象のコースが見つかりません。");
+			const consistencyError = validateCourseRuleOverride(
+				override,
+				this.rules.globalPatternTemplate,
+			);
+			if (consistencyError) throw new ApiError("RULE_CONFLICT", consistencyError);
+
+			const nextOverride: CourseRuleOverride = {
+				courseId: request.courseId,
+				courseName: course.courseName,
+				...override,
+			};
+			const existingIndex = this.rules.courseOverrides.findIndex(
+				(candidate) => candidate.courseId === request.courseId,
+			);
+			const courseOverrides = this.rules.courseOverrides.map((candidate) => ({ ...candidate }));
+			if (existingIndex === -1) courseOverrides.push(nextOverride);
+			else courseOverrides[existingIndex] = nextOverride;
+			this.rules = { ...this.rules, courseOverrides };
+		});
 	}
 
 	async getRuleViolations(): Promise<RuleViolation[]> {
@@ -160,12 +267,38 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async getNotificationRules(): Promise<NotificationRule[]> {
-		return delay(this.notificationRules);
+		return delay(this.notificationRules.map((rule) => ({ ...rule })));
 	}
 
-	async updateNotificationRules(rules: NotificationRule[]): Promise<{ ok: boolean }> {
-		this.notificationRules = rules;
-		return delay({ ok: true });
+	async updateNotificationRules(
+		rules: NotificationRuleInput[],
+	): Promise<NotificationRuleUpdateResult> {
+		const knownIds = new Set(this.notificationRules.map((rule) => rule.id));
+		const offsets = new Set<number>();
+		for (const rule of rules) {
+			if (typeof rule.enabled !== "boolean") {
+				throw new ApiError("RULE_CONFLICT", "通知の有効・無効を選択してください。");
+			}
+			if (!isValidNotificationOffsetMinutes(rule.offsetMinutes)) {
+				throw new ApiError(
+					"RULE_CONFLICT",
+					"通知タイミングは締切時刻から365日前までの整数で指定してください。",
+				);
+			}
+			if (offsets.has(rule.offsetMinutes)) {
+				throw new ApiError("RULE_CONFLICT", "同じ通知タイミングは重複して登録できません。");
+			}
+			if (rule.id !== undefined && !knownIds.has(rule.id)) {
+				throw new ApiError("NOT_FOUND", "更新対象の通知ルールが見つかりません。");
+			}
+			offsets.add(rule.offsetMinutes);
+		}
+		this.notificationRules = rules.map((rule) => ({
+			...rule,
+			id: rule.id ?? this.nextNotificationRuleId++,
+			label: notificationRuleLabel(rule.offsetMinutes),
+		}));
+		return delay({ ok: true, rules: this.notificationRules.map((rule) => ({ ...rule })) });
 	}
 
 	async getLatestSyncEvent(): Promise<DataSyncEvent | null> {
@@ -183,36 +316,60 @@ export class MockApiClient implements FuzzyApiClient {
 		}
 		return delay(assignmentChanges as AssignmentChange[]);
 	}
+
+	private async enqueueRuleMutation(mutate: () => void): Promise<RuleUpdateResult> {
+		const operation = this.ruleMutationQueue.then(async () => {
+			mutate();
+			await delay(undefined);
+		});
+		this.ruleMutationQueue = operation.catch(() => undefined);
+		await operation;
+		return { ok: true };
+	}
 }
 
-/**
- * Moodle のコース名に付く年度・担当者などの補足を、保存先フォルダ名には含めない。
- * 同名になる場合でも、候補に表示する名前は簡潔な表記を優先する。
- */
-export function courseFolderName(
-	courseName: string,
-	_knownCourseNames: readonly string[] = [],
-): string {
-	const original = normalizeCourseName(courseName) || "不明なコース";
-	const simplified = removeParentheticalNotes(original);
-	return simplified || original;
+function normalizeCourseRuleOverrideInput(value: unknown): CourseRuleOverrideInput {
+	if (!value || typeof value !== "object") {
+		throw new ApiError("RULE_CONFLICT", "コース別例外を入力してください。");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.splitBySection !== "boolean") {
+		throw new ApiError("RULE_CONFLICT", "回ごとの整理方法を選択してください。");
+	}
+	if (candidate.patternTemplate !== null && typeof candidate.patternTemplate !== "string") {
+		throw new ApiError("RULE_CONFLICT", "例外ルールを入力してください。");
+	}
+	if (candidate.note !== null && typeof candidate.note !== "string") {
+		throw new ApiError("RULE_CONFLICT", "メモを文字列で入力してください。");
+	}
+	return {
+		splitBySection: candidate.splitBySection,
+		patternTemplate:
+			typeof candidate.patternTemplate === "string"
+				? candidate.patternTemplate.trim() || null
+				: null,
+		note: typeof candidate.note === "string" ? candidate.note.trim() || null : null,
+	};
 }
 
-/** 保存先候補に使うフォルダ名から、絵文字と括弧内の補足を取り除く。 */
-export function folderSegment(value: string): string {
-	return removeParentheticalNotes(normalizeCourseName(value));
+function cloneRuleSet(rules: RuleSet): RuleSet {
+	return {
+		globalPatternTemplate: rules.globalPatternTemplate,
+		courseOverrides: rules.courseOverrides.map((override) => ({ ...override })),
+	};
 }
 
-function removeParentheticalNotes(value: string): string {
-	return value
-		.replace(/\s*[（(][^（）()]*[）)]\s*/g, " ")
-		.replace(/\s{2,}/g, " ")
-		.trim();
+function createSaveSuggestion(relativePath: string, confidence: number): SaveSuggestion {
+	const normalizedRelativePath = normalizeWindowsPath(relativePath);
+	return {
+		path: `${MOCK_SAVE_ROOT}\\${normalizedRelativePath}`,
+		relativePath: normalizedRelativePath,
+		confidence,
+	};
 }
 
-function normalizeCourseName(value: string): string {
-	return value
-		.replace(/(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\uFE0F|\u200D|\u20E3)/gu, "")
-		.replace(/\s+/g, " ")
-		.trim();
+function extractSectionNumber(sectionTitle: string | null): string | null {
+	const normalized = sectionTitle?.normalize("NFKC").trim() ?? "";
+	const match = normalized.match(/(?:第\s*)?(\d{1,3})\s*(?:回|週目?|week)|week\s*(\d{1,3})/i);
+	return match?.[1] ?? match?.[2] ?? null;
 }

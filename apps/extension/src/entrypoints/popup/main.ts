@@ -1,3 +1,4 @@
+import "@fuzzy/shared/theme.css";
 import "./app.css";
 
 const target = document.getElementById("app");

@@ -17,7 +17,10 @@ export interface SimilarFileMatch {
 }
 
 export interface SaveSuggestion {
+	/** native-hostが保存に使用する、初期設定の保存ルートを含む絶対パス。 */
 	path: string;
+	/** UI表示・手動編集に使用する、初期設定の保存ルート以下の相対パス。 */
+	relativePath: string;
 	confidence: number; // 0.0〜1.0、確からしさ順の表示に使う
 	similarMatches?: SimilarFileMatch[];
 }
@@ -117,6 +120,25 @@ export interface RuleSet {
 	courseOverrides: CourseRuleOverride[];
 }
 
+export interface UpdateGlobalRuleRequest {
+	patternTemplate: string;
+}
+
+export interface CourseRuleOverrideInput {
+	splitBySection: boolean;
+	patternTemplate: string | null;
+	note: string | null;
+}
+
+export interface UpdateCourseRuleOverrideRequest {
+	courseId: number;
+	override: CourseRuleOverrideInput;
+}
+
+export interface RuleUpdateResult {
+	ok: true;
+}
+
 export interface RuleViolation {
 	fileId: number;
 	fileName: string;
@@ -136,6 +158,18 @@ export interface NotificationRule {
 	offsetMinutes: number;
 	label: string;
 	enabled: boolean;
+}
+
+/** 通知ルール保存時の入力。新規ルールのIDはSQLite側で採番する。 */
+export interface NotificationRuleInput {
+	id?: number;
+	offsetMinutes: number;
+	enabled: boolean;
+}
+
+export interface NotificationRuleUpdateResult {
+	ok: boolean;
+	rules: NotificationRule[];
 }
 
 export interface DeadlineFilter {

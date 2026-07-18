@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-01
+最終更新: 2026-07-18
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はRust構造体を正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期の暫定型は `packages/shared/src/types.ts` に手書きしている。
 
@@ -38,19 +38,29 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `updateSubmissionStatus`   | 提出状況の手動更新               | `{ assignmentId, submitted }` → `{ ok }`            |
 | `getRules`                 | グローバル／コース別ルール取得         | `{}` → `RuleSet`                                    |
 | `updateGlobalRule`         | グローバルルール更新              | `{ patternTemplate }` → `{ ok }`                    |
-| `updateCourseRuleOverride` | コース別例外ルール更新             | `{ courseId, override }` → `{ ok }`                 |
+| `updateCourseRuleOverride` | コース別例外ルール更新             | `{ courseId, override: { splitBySection, patternTemplate, note } }` → `{ ok }` |
 | `getRuleViolations`        | ルール違反ファイル一覧             | `{}` → `RuleViolation[]`                            |
 | `getDuplicateGroups`       | 重複ファイル一覧                | `{}` → `DuplicateGroup[]`                           |
 | `getNotificationRules`     | 通知タイミング設定取得             | `{}` → `NotificationRule[]`                         |
-| `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules[] }` → `{ ok }`                            |
+| `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules: NotificationRuleInput[] }` → `{ ok, rules: NotificationRule[] }` |
 | `getLatestSyncEvent`       | 直近の同期結果取得（データ取得通知用）     | `{}` → `DataSyncEvent \| null`                      |
 | `getAssignmentChanges`     | 同期で検出された課題の変更点一覧（変更点表示用） | `{ sinceSyncEventId? }` → `AssignmentChange[]`      |
 | `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 
+`SaveSuggestion` は `{ path, relativePath, confidence, similarMatches? }` とする。`path` はnative-hostが保存に使う、`app_settings.base_folder_path`を含む絶対パス、`relativePath`はUI表示・手動編集に使う保存ルート以下の相対パスである。`suggestSavePath`はSQLiteに保存されたグローバルルールとコース別例外を適用する。コース名・セクション名の半角／全角の補足括弧と絵文字は推薦フォルダ名から除外するが、簡略化後に同名となるコースはMoodleの安定コースIDで区別する。クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
+
+`NotificationRule.offsetMinutes` は締切日時から遡る相対時間（分）を表し、0以上525,600以下の整数（締切時刻から365日前まで）に限定する。`NotificationRuleInput` は `{ id?, offsetMinutes, enabled }` とし、新規ルールでは`id`を省略する。native-hostはSQLiteのトランザクション内で、ID付きの既存行を更新、IDなしの行を新規採番、入力から除かれた既存行を削除し、保存後の`NotificationRule[]`を返す。
+
+`label`はクライアント入力として受け取らず、保存側が`offsetMinutes`から生成する。0は「締切時刻」、24時間の倍数は「n日前」、60分の倍数は「n時間前」、それ以外は時間と分または分単位で表示し、「当日9:00」のような固定時刻として解釈しない。同じ`offsetMinutes`の重複は拒否する。
+
+Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issueで定義する。Google認証、送信対象の確認、明示的な追加操作、認証解除を必須とし、既存のローカルAPIへ暗黙の外部送信を追加しない。Windowsデスクトップ通知の常駐方式とAPIも別Issueで定義する。
+
 ### 1.3 起動・接続方針
 
 `docs/仕様書.md` 3.3節のとおり、Moodleドメインのタブが存在する間 `connectNative` で接続を維持する。拡張機能側は `ping` にタイムアウト（目安800ms）を設定し、応答がなければサンプルデータへのモック動作にフォールバックする（`packages/shared/src/api/`）。単発のコマンド（ルール更新など）は `sendNativeMessage` でも構わない。
+
+ルール更新時のコース名はクライアントから受け取らず、`courseId` を使ってSQLiteの `courses` から解決する。保存パターンは相対パスのみを許可し、既知のトークン（`{year}` / `{term}` / `{course}` / `{assignment}` / `{section}`）以外、絶対パス、UNCパス、`.` / `..`、Windowsの禁止文字・予約名を拒否する。拡張機能側の検証は入力支援であり、native-host側でも同じ制約を再検証する。
 
 ### 1.4 データ取得通知・変更点表示のフロー
 

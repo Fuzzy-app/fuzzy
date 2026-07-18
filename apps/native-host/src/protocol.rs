@@ -45,8 +45,6 @@ pub struct ErrorBody {
 
 impl Response {
 	/// 成功レスポンスを作る。
-	// Phase0では全コマンド未実装のため本体側からは未使用（issue #37 のpingで使用予定）。
-	#[allow(dead_code)]
 	pub fn ok(id: String, data: Value) -> Self {
 		Self {
 			id: Some(id),

@@ -40,6 +40,7 @@ docs/*      ドキュメント
 - [`docs/データベース設計.md`](docs/データベース設計.md) + [`crates/engine-core/fixtures/schema.sql`](crates/engine-core/fixtures/schema.sql) — SQLiteスキーマの正
 - [`docs/api/contract.md`](docs/api/contract.md) — Native Messaging / Tauri コマンド契約
 - [`docs/セットアップ.md`](docs/セットアップ.md) — 開発環境構築
+- [`docs/開発判断.md`](docs/開発判断.md) — Issueと仕様書の優先関係、外部連携、Moodle資料取得などの継続時の合意事項
 
 型・API・DBスキーマのいずれかを変更する場合は、**仕様書・contract.md・schema.sql・packages/shared の型定義を必ずセットで更新**し、矛盾が生じないようにする。
 
@@ -71,3 +72,4 @@ docs/*      ドキュメント
 3. 仕様に無い自動実行系の機能（自動移動・自動削除・外部送信等）を提案・実装しない
 4. 既存のサンプルデータ（6科目：情報アーキテクチャ・データベース・離散数学・アプリ演習・認知科学概論・英語IIB）の世界観に合わせてテストデータを作る
 5. 変更後は `bun run build` を実行し、型エラー・Lintエラーがないことを確認してから完了報告する
+6. 実装の着手・完了判定はGitHub Issueを優先する。ただし仕様書・API契約・DB設計との相違を見つけた場合は、黙って上書きせずユーザーへ報告する。継続時の合意事項は `docs/開発判断.md` を参照する

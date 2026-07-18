@@ -2,6 +2,7 @@
 // シェルUI（サイドバー付き検索・締切画面）は ./shell.ts に、
 // 資料保存パネル（issue48〜51）は ./savePanel.ts に分離している。
 // DOM操作は issue48 のダッシュボード注入と同様に、このディレクトリ内で完結させる。
+import "@fuzzy/shared/theme.css";
 import { MOODLE_PAGE_SNAPSHOT_MESSAGE } from "../../lib/moodle/pageSnapshot";
 import { collectMoodlePageSnapshotWithNestedFolders } from "../../lib/moodle/snapshotCollector";
 import { mountSavePanel } from "./savePanel";

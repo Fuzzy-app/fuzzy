@@ -6,6 +6,7 @@ CREATE TABLE app_settings (
 	value TEXT NOT NULL
 );
 -- 例: base_folder_path（初期セットアップで選んだ保存先実パス）, app_version, last_full_scan_at
+-- suggestSavePathはbase_folder_pathを含む実パスと、UI表示用のルート相対パスを返す。
 
 CREATE TABLE courses (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,6 +26,7 @@ CREATE TABLE global_rule (
 
 CREATE TABLE course_rule_overrides (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
+	-- コース名はクライアント入力として重複保持せず、course_idからcourses.nameを参照する
 	course_id        INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
 	split_by_section INTEGER NOT NULL DEFAULT 1,
 	pattern_template TEXT,
@@ -84,7 +86,7 @@ CREATE INDEX idx_assignments_course ON assignments(course_id);
 
 CREATE TABLE notification_rules (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
-	offset_minutes INTEGER NOT NULL,
+	offset_minutes INTEGER NOT NULL UNIQUE CHECK(offset_minutes BETWEEN 0 AND 525600),
 	label          TEXT NOT NULL,
 	enabled        INTEGER NOT NULL DEFAULT 1
 );
