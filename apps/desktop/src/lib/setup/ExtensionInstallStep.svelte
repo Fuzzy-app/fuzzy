@@ -156,33 +156,13 @@
 		}
 	}
 
-	async function handleSkip(): Promise<void> {
-		isSaving = true;
-		errorMessage = null;
-		successMessage = null;
-
-		try {
-			await persistStatus("skipped", {
-				completedAt: new Date().toISOString(),
-			});
-			confirmationChecked = false;
-			successMessage =
-				"拡張機能の導入を今回はスキップしました。後から同じ手順を再確認できます。";
-		} catch {
-			errorMessage = "スキップ状態を保存できませんでした。";
-		} finally {
-			isSaving = false;
-		}
-	}
-
 	$: detectedBrowserOption = getSupportedBrowserOption(detectedBrowser);
 	$: selectedBrowserOption = getSupportedBrowserOption(selectedBrowser);
 	$: destination = getExtensionInstallDestination(
 		selectedBrowser,
 		selectedChannel,
 	);
-	$: isCompleted =
-		installState.status === "confirmed" || installState.status === "skipped";
+	$: isCompleted = installState.status === "confirmed";
 	$: canConfirm =
 		installState.status === "destination-opened" ||
 		installState.status === "confirmed" ||
@@ -209,11 +189,7 @@
 			<div class="completion-banner" role="status">
 				<div class="completion-icon" aria-hidden="true">✓</div>
 				<div>
-					<strong>
-						{installState.status === "confirmed"
-							? "拡張機能の導入を確認済みです"
-							: "拡張機能の導入はスキップ済みです"}
-					</strong>
+					<strong>拡張機能の導入を確認済みです</strong>
 					<p>
 						{formatDate(installState.completedAt)}
 						に保存しました。必要なら下の手順をもう一度実行できます。
@@ -295,7 +271,7 @@
 		{#if selectedBrowser === "unsupported"}
 			<p class="error-banner" role="alert">
 				現在はGoogle ChromeとMicrosoft
-				Edgeに対応しています。どちらかを選ぶか、今回はスキップしてください。
+				Edgeに対応しています。セットアップを完了するには、どちらかを選択してください。
 			</p>
 		{/if}
 
@@ -405,29 +381,19 @@
 			>
 				初期ルールを確認する
 			</button>
-			<div class="primary-actions">
-				<button
-					class="secondary-button"
-					type="button"
-					on:click={handleSkip}
-					disabled={isBusy}
-				>
-					今回はスキップ
-				</button>
-				<button
-					class="primary-button"
-					type="button"
-					on:click={handleOpenDestination}
-					disabled={!destination.available || isBusy}
-					aria-busy={isOpening}
-				>
-					{isOpening
-						? "公式の導入手順を開いています..."
-						: errorMessage
-							? "公式の導入手順を再度開く"
-							: "公式の導入手順を開く"}
-				</button>
-			</div>
+			<button
+				class="primary-button"
+				type="button"
+				on:click={handleOpenDestination}
+				disabled={!destination.available || isBusy}
+				aria-busy={isOpening}
+			>
+				{isOpening
+					? "公式の導入手順を開いています..."
+					: errorMessage
+						? "公式の導入手順を再度開く"
+						: "公式の導入手順を開く"}
+			</button>
 		</div>
 
 		{#if canConfirm}
@@ -476,8 +442,7 @@
 
 	.install-header,
 	.guide-heading,
-	.install-actions,
-	.primary-actions {
+	.install-actions {
 		display: flex;
 		align-items: flex-start;
 		justify-content: space-between;
@@ -852,11 +817,6 @@
 		align-items: center;
 	}
 
-	.primary-actions {
-		align-items: center;
-		justify-content: flex-end;
-	}
-
 	button {
 		border: none;
 		border-radius: 8px;
@@ -877,16 +837,10 @@
 		font-weight: 700;
 	}
 
-	.secondary-button,
 	.primary-button,
 	.confirm-button {
 		padding: 12px 15px;
 		font-weight: 700;
-	}
-
-	.secondary-button {
-		background: #eef0f7;
-		color: #59607e;
 	}
 
 	.primary-button,
@@ -938,14 +892,12 @@
 
 		.install-header,
 		.install-actions,
-		.primary-actions,
 		.browser-fieldset legend {
 			flex-direction: column;
 			align-items: stretch;
 		}
 
-		.primary-actions,
-		.primary-actions button,
+		.install-actions .primary-button,
 		.confirm-button {
 			width: 100%;
 		}

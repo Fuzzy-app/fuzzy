@@ -163,20 +163,5 @@ describe("extension install state", () => {
 				"2026-07-17T01:00:00.000Z",
 			),
 		).toMatchObject({ status: "destination-opened" });
-		expect(
-			createDestinationOpenedStateInput(
-				{
-					...createInitialExtensionInstallState("chrome"),
-					status: "skipped",
-					completedAt: "2026-07-17T00:30:00.000Z",
-				},
-				"chrome",
-				"development",
-				"2026-07-17T01:00:00.000Z",
-			),
-		).toMatchObject({
-			status: "skipped",
-			completedAt: "2026-07-17T00:30:00.000Z",
-		});
 	});
 });

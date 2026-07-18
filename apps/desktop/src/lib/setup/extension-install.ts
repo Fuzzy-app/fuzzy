@@ -4,7 +4,7 @@ export type BrowserChoice = SupportedBrowserId | "unsupported";
 
 export type ExtensionInstallChannel = "development" | "store";
 
-export type ExtensionInstallStatus = "not-started" | "destination-opened" | "confirmed" | "skipped";
+export type ExtensionInstallStatus = "not-started" | "destination-opened" | "confirmed";
 
 export type SupportedBrowserOption = {
 	id: SupportedBrowserId;
@@ -91,7 +91,6 @@ const installStatuses: readonly ExtensionInstallStatus[] = [
 	"not-started",
 	"destination-opened",
 	"confirmed",
-	"skipped",
 ];
 const installChannels: readonly ExtensionInstallChannel[] = ["development", "store"];
 
@@ -201,14 +200,14 @@ export function createDestinationOpenedStateInput(
 	channel: ExtensionInstallChannel,
 	openedAt: string,
 ): ExtensionInstallStateInput {
-	const isCompleted = currentState.status === "confirmed" || currentState.status === "skipped";
+	const isConfirmed = currentState.status === "confirmed";
 
 	return {
 		browserId,
 		channel,
-		status: isCompleted ? currentState.status : "destination-opened",
+		status: isConfirmed ? currentState.status : "destination-opened",
 		lastOpenedAt: openedAt,
-		completedAt: isCompleted ? currentState.completedAt : undefined,
+		completedAt: isConfirmed ? currentState.completedAt : undefined,
 	};
 }
 
