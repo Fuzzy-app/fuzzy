@@ -28,7 +28,7 @@ import type {
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
-	DuplicateGroup,
+	DuplicateGroupListItem,
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
@@ -36,7 +36,7 @@ import type {
 	NotificationRuleUpdateResult,
 	RuleSet,
 	RuleUpdateResult,
-	RuleViolation,
+	RuleViolationListItem,
 	SaveFilesRequest,
 	SaveFilesResult,
 	SaveSuggestion,
@@ -258,12 +258,12 @@ export class MockApiClient implements FuzzyApiClient {
 		});
 	}
 
-	async getRuleViolations(): Promise<RuleViolation[]> {
-		return delay(ruleViolations as RuleViolation[]);
+	async getRuleViolations(): Promise<RuleViolationListItem[]> {
+		return delay(ruleViolations as RuleViolationListItem[]);
 	}
 
-	async getDuplicateGroups(): Promise<DuplicateGroup[]> {
-		return delay(duplicateGroups as DuplicateGroup[]);
+	async getDuplicateGroups(): Promise<DuplicateGroupListItem[]> {
+		return delay(duplicateGroups as DuplicateGroupListItem[]);
 	}
 
 	async getNotificationRules(): Promise<NotificationRule[]> {

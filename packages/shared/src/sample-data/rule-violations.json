@@ -2,15 +2,17 @@
 	{
 		"fileId": 4,
 		"fileName": "正規化_メモ.docx",
+		"courseId": 2,
 		"courseName": "データベース",
-		"savedPath": "C:\\Users\\sample\\Documents\\大学\\正規化_メモ.docx",
-		"reason": "グローバルルール（年度/学期/コース名/回）から外れた場所に保存されています"
+		"relativePath": "正規化_メモ.docx",
+		"reason": "グローバルルール（学期/コース名/回）から外れた場所に保存されています"
 	},
 	{
 		"fileId": 9,
 		"fileName": "第4回_正規化(1).pdf",
+		"courseId": 2,
 		"courseName": "データベース",
-		"savedPath": "C:\\Users\\sample\\Documents\\大学\\ダウンロード\\第4回_正規化(1).pdf",
-		"reason": "グローバルルール（年度/学期/コース名/回）から外れた場所に保存されています。データベース/第4回に同一内容のファイルが既にあります"
+		"relativePath": "ダウンロード\\第4回_正規化(1).pdf",
+		"reason": "グローバルルール（学期/コース名/回）から外れた場所に保存されています。データベース/第4回に同一内容のファイルが既にあります"
 	}
 ]

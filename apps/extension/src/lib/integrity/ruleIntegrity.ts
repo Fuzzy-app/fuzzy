@@ -1,4 +1,4 @@
-import type { DuplicateGroup, RuleViolation } from "@fuzzy/shared";
+import type { DuplicateGroupListItem, RuleViolationListItem } from "@fuzzy/shared";
 
 export interface RuleIntegritySummary {
 	violationCount: number;
@@ -12,13 +12,13 @@ export interface RuleIntegritySummary {
  * 重複ファイル数は、同じfileIdが複数グループに含まれても1件として数える。
  */
 export function summarizeRuleIntegrity(
-	violations: readonly RuleViolation[],
-	duplicateGroups: readonly DuplicateGroup[],
+	violations: readonly RuleViolationListItem[],
+	duplicateGroups: readonly DuplicateGroupListItem[],
 ): RuleIntegritySummary {
-	const courseNames = new Set(
+	const courseIds = new Set(
 		violations
-			.map((violation) => violation.courseName?.trim())
-			.filter((courseName): courseName is string => Boolean(courseName)),
+			.map((violation) => violation.courseId)
+			.filter((courseId): courseId is number => courseId !== null),
 	);
 	const duplicateFileIds = new Set(
 		duplicateGroups.flatMap((group) => group.members.map((member) => member.fileId)),
@@ -26,12 +26,17 @@ export function summarizeRuleIntegrity(
 
 	return {
 		violationCount: violations.length,
-		affectedCourseCount: courseNames.size,
+		affectedCourseCount: courseIds.size,
 		duplicateGroupCount: duplicateGroups.length,
 		duplicateFileCount: duplicateFileIds.size,
 	};
 }
 
-export function duplicateMethodLabel(method: DuplicateGroup["method"]): string {
-	return method === "exact" ? "完全一致" : "類似";
+export function duplicateMethodLabel(method: DuplicateGroupListItem["method"]): string {
+	switch (method) {
+		case "exact":
+			return "完全一致";
+		case "similar":
+			return "類似";
+	}
 }

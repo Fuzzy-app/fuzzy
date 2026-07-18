@@ -97,7 +97,7 @@ function canUseLocalStorage(): boolean {
 }
 
 export async function pickBaseFolderClient(): Promise<string | null> {
-	const folder = mockBaseFolders[mockFolderIndex % mockBaseFolders.length];
+	const folder = mockBaseFolders[mockFolderIndex % mockBaseFolders.length] ?? null;
 
 	mockFolderIndex += 1;
 
