@@ -28,9 +28,10 @@ const BUTTON_ID = "fuzzy-shell-nav-button";
 const DRAWER_BUTTON_ID = "fuzzy-shell-drawer-button";
 const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
+const BRAND_ICON_PATH = "/icon/fuzzy.svg";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "rules" | "organize";
+type ScreenId = "dashboard" | "search" | "deadlines" | "rules" | "organize";
 // 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
 // import 時の衝突・混同を避けるため View 用として別名にしている。
 type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -46,7 +47,6 @@ const menuItems: readonly MenuItem[] = [
 	{ id: "dashboard", label: "ダッシュボード", enabled: true, description: "issue57" },
 	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
 	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
-	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
 	{ id: "rules", label: "整理ルール", enabled: true, description: "issue52" },
 	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
 ];
@@ -59,7 +59,6 @@ const placeholderCopy: Record<
 		title: "締切ハブ",
 		copy: "課題一覧と提出状況を、この画面でまとめて確認できます。",
 	},
-	courses: { title: "コース一覧", copy: "今後の画面としてここへ統合していきます。" },
 	organize: { title: "重複の整理", copy: "保存済み資料の整理UIをここへ追加する予定です。" },
 };
 
@@ -272,7 +271,7 @@ export function mountFuzzyShell(): void {
 	navButton.id = BUTTON_ID;
 	navButton.href = "#";
 	navButton.setAttribute("aria-pressed", "false");
-	navButton.append(el("span", "fuzzy-nav-mark", "F"), el("span", "", "Fuzzy"));
+	navButton.append(createBrandIcon("fuzzy-nav-mark"), el("span", "", "Fuzzy"));
 
 	const root = el(
 		navHost.tagName === "UL" ? "li" : "div",
@@ -1180,7 +1179,7 @@ export function mountFuzzyShell(): void {
 
 		const sidebar = el("div", "fuzzy-sidebar");
 		const brand = el("div", "fuzzy-brand");
-		brand.append(el("span", "fuzzy-brand-mark", "F"), el("span", "", "Fuzzy"));
+		brand.append(createBrandIcon("fuzzy-brand-mark"), el("span", "", "Fuzzy"));
 
 		const nav = el("nav", "fuzzy-side-nav");
 		nav.setAttribute("aria-label", "Fuzzy menu");
@@ -1190,7 +1189,8 @@ export function mountFuzzyShell(): void {
 			link.dataset.screen = item.id;
 			link.disabled = !item.enabled;
 			link.title = item.description;
-			link.append(el("span", "fuzzy-side-dot"), el("span", "", item.label));
+			link.append(el("span", "fuzzy-side-dot"), el("span", "fuzzy-side-label", item.label));
+			if (!item.enabled) link.append(el("span", "fuzzy-side-status", "準備中"));
 			link.addEventListener("click", () => {
 				activeScreen = item.id;
 				renderScreen();
@@ -1275,6 +1275,16 @@ function el<K extends keyof HTMLElementTagNameMap>(
 	if (className) node.className = className;
 	if (textContent) node.textContent = textContent;
 	return node;
+}
+
+function createBrandIcon(className: string): HTMLImageElement {
+	const icon = el("img", className);
+	icon.src = browser.runtime.getURL(BRAND_ICON_PATH);
+	icon.alt = "";
+	icon.loading = "eager";
+	icon.decoding = "async";
+	icon.setAttribute("aria-hidden", "true");
+	return icon;
 }
 
 function buildScreenHeader(kicker: string, title: string): HTMLElement {
@@ -1453,15 +1463,12 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-nav-mark {
-			display: inline-grid;
-			place-items: center;
+			display: block;
+			flex: 0 0 auto;
 			width: 28px;
 			height: 28px;
 			border-radius: 10px;
-			background: var(--fuzzy-color-primary);
-			color: var(--fuzzy-color-surface);
-			font-weight: 900;
-			line-height: 1;
+			object-fit: cover;
 		}
 
 		#${PAGE_ID} {
@@ -1475,7 +1482,7 @@ function ensureStyle(): void {
 			min-height: 0;
 			overflow: hidden;
 			background:
-				radial-gradient(circle at top left, rgba(108, 99, 255, 0.12), transparent 22%),
+				radial-gradient(circle at top left, rgba(108, 60, 255, 0.12), transparent 22%),
 				linear-gradient(180deg, #eef1ff 0%, var(--fuzzy-color-page) 100%);
 			color: var(--fuzzy-color-text-strong);
 			font-family: var(--fuzzy-font-family);
@@ -1486,7 +1493,7 @@ function ensureStyle(): void {
 			grid-template-rows: auto 1fr auto;
 			gap: 24px;
 			padding: 18px 12px;
-			background: var(--fuzzy-color-text);
+			background: var(--fuzzy-color-sidebar);
 			color: #f4f6ff;
 		}
 
@@ -1499,14 +1506,12 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-brand-mark {
-			display: inline-grid;
-			place-items: center;
-			width: 24px;
-			height: 24px;
+			display: block;
+			flex: 0 0 auto;
+			width: 28px;
+			height: 28px;
 			border-radius: 8px;
-			background: #5c5cff;
-			font-size: 0.85rem;
-			font-weight: 900;
+			object-fit: cover;
 		}
 
 		.fuzzy-side-nav {
@@ -1523,7 +1528,7 @@ function ensureStyle(): void {
 			border-radius: 10px;
 			padding: 12px 10px;
 			background: transparent;
-			color: #c6c9de;
+			color: var(--fuzzy-color-sidebar-text);
 			font: inherit;
 			font-size: var(--fuzzy-font-size-small);
 			font-weight: 700;
@@ -1532,24 +1537,39 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-side-link.is-active {
-			background: #353b67;
+			background: var(--fuzzy-color-sidebar-active);
 			color: var(--fuzzy-color-surface);
 		}
 
 		.fuzzy-side-link.is-disabled {
 			cursor: not-allowed;
-			opacity: 0.65;
+			opacity: 0.72;
+		}
+
+		.fuzzy-side-label {
+			min-width: 0;
+			flex: 1 1 auto;
+		}
+
+		.fuzzy-side-status {
+			flex: 0 0 auto;
+			margin-left: auto;
+			border-radius: 999px;
+			padding: 2px 5px;
+			background: rgba(255, 255, 255, 0.1);
+			font-size: 0.56rem;
+			line-height: 1.4;
 		}
 
 		.fuzzy-side-dot {
 			width: 12px;
 			height: 12px;
 			border-radius: 4px;
-			background: #6d7295;
+			background: var(--fuzzy-color-sidebar-icon);
 		}
 
 		.fuzzy-side-link.is-active .fuzzy-side-dot {
-			background: #756cff;
+			background: var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-sidebar-footer {
@@ -1595,20 +1615,25 @@ function ensureStyle(): void {
 			margin: 0;
 			border-radius: 999px;
 			padding: 6px 12px;
-			background: var(--fuzzy-color-success-soft);
-			color: var(--fuzzy-color-success);
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-muted);
 			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 		}
 
 		.fuzzy-top-status[data-mode="checking"] {
-			background: #f0f1f8;
-			color: #656b88;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-muted);
+		}
+
+		.fuzzy-top-status[data-mode="mock"] {
+			background: var(--fuzzy-color-info-soft);
+			color: var(--fuzzy-color-info);
 		}
 
 		.fuzzy-top-status[data-mode="native"] {
-			background: #d8f6ff;
-			color: #00759a;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success);
 		}
 
 		.fuzzy-close-button {
@@ -1928,14 +1953,25 @@ function ensureStyle(): void {
 
 		.fuzzy-metric-card {
 			padding: 16px;
+			border-radius: 14px;
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-metric-card.is-warn {
-			background: var(--fuzzy-color-warning-soft);
+			background: linear-gradient(90deg, var(--fuzzy-color-warning-soft), var(--fuzzy-color-surface) 56%);
+			box-shadow:
+				inset 4px 0 0 var(--fuzzy-color-warning-border),
+				var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-metric-card.is-soft {
-			background: var(--fuzzy-color-background);
+			background: var(--fuzzy-color-surface);
+		}
+
+		.fuzzy-metric-card.is-warn .fuzzy-metric-label,
+		.fuzzy-metric-card.is-warn .fuzzy-metric-value {
+			color: var(--fuzzy-color-warning);
 		}
 
 		.fuzzy-metric-label {
@@ -1989,7 +2025,7 @@ function ensureStyle(): void {
 
 		.fuzzy-dashboard-course.is-warn {
 			box-shadow:
-				inset 4px 0 0 #f2bd41,
+				inset 4px 0 0 var(--fuzzy-color-warning-border),
 				var(--fuzzy-shadow-card);
 		}
 
@@ -2442,6 +2478,14 @@ function ensureStyle(): void {
 				font-size: 0.68rem;
 				line-height: 1.25;
 				text-align: center;
+			}
+
+			.fuzzy-side-label {
+				flex: none;
+			}
+
+			.fuzzy-side-status {
+				margin-left: 0;
 			}
 
 			.fuzzy-sidebar-footer {

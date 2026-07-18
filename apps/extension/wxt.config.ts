@@ -5,6 +5,12 @@ export default defineConfig({
 	srcDir: "src",
 	modules: ["@wxt-dev/module-svelte"],
 	manifest: {
+		web_accessible_resources: [
+			{
+				resources: ["icon/fuzzy.svg"],
+				matches: ["https://*.wakayama-u.ac.jp/*"],
+			},
+		],
 		permissions: [
 			// native-host（Rust）とのNative Messaging接続に使用（仕様書3.4節）。
 			// 接続はbackground(service worker)へ集約している（lib/api/backgroundApi.ts）。
