@@ -62,6 +62,7 @@
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
 	const minimumScanLoadingMs = 450;
+	const extensionVerificationStartedAt = new Date().toISOString();
 
 	onMount(async () => {
 		setupStatus = await getSetupStatusClient();
@@ -552,7 +553,10 @@
 				</div>
 			</section>
 			{#if currentStepIndex === 3}
-				<ExtensionInstallStep onBack={() => (currentStepIndex = 2)} />
+				<ExtensionInstallStep
+					verificationStartedAt={extensionVerificationStartedAt}
+					onBack={() => (currentStepIndex = 2)}
+				/>
 			{/if}
 		</section>
 	</section>

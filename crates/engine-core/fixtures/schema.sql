@@ -7,6 +7,19 @@ CREATE TABLE app_settings (
 );
 -- 例: base_folder_path（初期セットアップで選んだ保存先実パス）, app_version, last_full_scan_at
 
+-- 拡張機能からNative Messagingで受信した、インストール・バージョン単位の実応答。
+-- 導入済みフラグは持たず、初回／最終応答日時からセットアップ状態を算出する。
+CREATE TABLE extension_runtime_observations (
+	installation_id   TEXT NOT NULL,
+	extension_version TEXT NOT NULL,
+	protocol_version  INTEGER NOT NULL CHECK (protocol_version > 0),
+	first_seen_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	last_seen_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	PRIMARY KEY (installation_id, extension_version, protocol_version)
+);
+CREATE INDEX idx_extension_runtime_last_seen
+	ON extension_runtime_observations(last_seen_at);
+
 CREATE TABLE courses (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
 	moodle_course_id TEXT NOT NULL UNIQUE,

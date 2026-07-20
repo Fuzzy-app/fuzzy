@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { validateExtensionManifest } from "../../apps/desktop/scripts/prepare-extension";
-import { validateExtensionStoreUrls } from "../../apps/desktop/scripts/validate-extension-store";
+import { validateExtensionStoreUrl } from "../../apps/desktop/scripts/validate-extension-store";
 
 const repositoryRoot = resolve(import.meta.dir, "..", "..");
 
@@ -36,21 +36,17 @@ describe("Tauri extension bundle", () => {
 		expect(desktopPackage.scripts["build:tauri:store"]).toContain("validate:extension-store");
 		expect(storeConfig.build.beforeBuildCommand).toBe("bun run build:tauri:store");
 		expect(storeConfig.bundle.resources).toBeNull();
+		expect(() => validateExtensionStoreUrl(null)).toThrow(
+			"同梱を外す前に公開URLを設定してください",
+		);
 		expect(() =>
-			validateExtensionStoreUrls({
-				chrome: null,
-				edge: null,
-			}),
-		).toThrow("同梱を外す前に公開URLを設定してください");
-		expect(() =>
-			validateExtensionStoreUrls({
-				chrome: "https://chromewebstore.google.com/detail/fuzzy/abcdefghijklmnop",
-				edge: "https://microsoftedge.microsoft.com/addons/detail/fuzzy/abcdefghijklmnop",
-			}),
+			validateExtensionStoreUrl(
+				"https://chromewebstore.google.com/detail/fuzzy/abcdefghijklmnopabcdefghijklmnop",
+			),
 		).not.toThrow();
 	});
 
-	test("公式ストアは選択したブラウザだけで開く権限に限定する", async () => {
+	test("公式配布ページは許可したストアURLだけを既定ブラウザで開く", async () => {
 		const capability = await Bun.file(
 			resolve(repositoryRoot, "apps/desktop/src-tauri/capabilities/default.json"),
 		).json();
@@ -67,11 +63,9 @@ describe("Tauri extension bundle", () => {
 		expect(storePermission.allow).toEqual([
 			{
 				url: "https://chromewebstore.google.com/*",
-				app: "chrome.exe",
 			},
 			{
 				url: "https://microsoftedge.microsoft.com/addons/*",
-				app: "msedge.exe",
 			},
 		]);
 	});

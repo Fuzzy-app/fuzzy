@@ -1,38 +1,10 @@
-export type SupportedBrowserId = "chrome" | "edge";
-
-export type BrowserChoice = SupportedBrowserId | "unsupported";
+import type { ExtensionSetupStatus } from "@fuzzy/shared";
 
 export type ExtensionInstallChannel = "bundled" | "store";
 
-export type ExtensionInstallStatus = "not-started" | "destination-opened" | "confirmed";
-
-export type ExtensionStoreUrls = Readonly<Record<SupportedBrowserId, string | null>>;
-
-export type SupportedBrowserOption = {
-	id: SupportedBrowserId;
-	name: string;
-	shortName: string;
-	description: string;
-	managementUrl: string;
-	bundledManifestResourcePath: string;
-	storeUrl: string | null;
-	storeApplication: string;
-};
-
-export type ExtensionInstallState = {
-	browserId: BrowserChoice;
-	channel: ExtensionInstallChannel;
-	status: ExtensionInstallStatus;
-	lastOpenedAt?: string;
-	completedAt?: string;
-	updatedAt: string;
-};
-
-export type ExtensionInstallStateInput = Omit<ExtensionInstallState, "updatedAt">;
-
 export type ExtensionInstallTarget =
 	| { kind: "bundled-resource"; value: string }
-	| { kind: "store-url"; value: string; openWith: string };
+	| { kind: "store-url"; value: string };
 
 export type ExtensionInstallDestination = {
 	available: boolean;
@@ -52,14 +24,18 @@ export type ExtensionInstallOpenResult = {
 export type ExtensionInstallRuntime = {
 	resolveResource: (resourcePath: string) => Promise<string>;
 	revealItemInDir: (path: string) => Promise<void>;
-	openUrl: (url: string, openWith?: string) => Promise<void>;
+	openUrl: (url: string) => Promise<void>;
+};
+
+export type ExtensionStatusRuntime = {
+	invoke: <T>(command: string, args: Record<string, unknown>) => Promise<T>;
 };
 
 export type ExtensionInstallErrorCode =
-	| "UNSUPPORTED_BROWSER"
 	| "DESTINATION_UNAVAILABLE"
 	| "RESOURCE_UNAVAILABLE"
-	| "OPEN_FAILED";
+	| "OPEN_FAILED"
+	| "STATUS_UNAVAILABLE";
 
 export class ExtensionInstallError extends Error {
 	constructor(
@@ -73,308 +49,111 @@ export class ExtensionInstallError extends Error {
 
 const bundledManifestResourcePath = "extension/chrome-mv3/manifest.json";
 
-// 公式ストア公開後はURLを設定するだけで、未完了の新規導入がstore優先へ切り替わる。
-export const extensionStoreUrls: ExtensionStoreUrls = {
-	chrome: null,
-	edge: null,
-};
-
-const storeHosts: Readonly<Record<SupportedBrowserId, string>> = {
-	chrome: "chromewebstore.google.com",
-	edge: "microsoftedge.microsoft.com",
-};
-
-export function createSupportedBrowserOptions(
-	storeUrls: ExtensionStoreUrls = extensionStoreUrls,
-): readonly SupportedBrowserOption[] {
-	return [
-		{
-			id: "chrome",
-			name: "Google Chrome",
-			shortName: "Chrome",
-			description: "MoodleをGoogle Chromeで利用する場合に選択します。",
-			managementUrl: "chrome://extensions",
-			bundledManifestResourcePath,
-			storeUrl: storeUrls.chrome,
-			storeApplication: "chrome.exe",
-		},
-		{
-			id: "edge",
-			name: "Microsoft Edge",
-			shortName: "Edge",
-			description: "MoodleをMicrosoft Edgeで利用する場合に選択します。",
-			managementUrl: "edge://extensions",
-			bundledManifestResourcePath,
-			storeUrl: storeUrls.edge,
-			storeApplication: "msedge.exe",
-		},
-	] as const;
-}
-
-export const supportedBrowserOptions = createSupportedBrowserOptions();
-
-const extensionInstallStorageKey = "fuzzy.desktop.extensionInstall";
-const installStatuses: readonly ExtensionInstallStatus[] = [
-	"not-started",
-	"destination-opened",
-	"confirmed",
-];
-const installChannels: readonly ExtensionInstallChannel[] = ["bundled", "store"];
-
-let memoryInstallState: ExtensionInstallState | null = null;
-
-function canUseLocalStorage(): boolean {
-	return typeof localStorage !== "undefined";
-}
-
-function isBrowserChoice(value: unknown): value is BrowserChoice {
-	return value === "chrome" || value === "edge" || value === "unsupported";
-}
-
-function isInstallChannel(value: unknown): value is ExtensionInstallChannel {
-	return installChannels.includes(value as ExtensionInstallChannel);
-}
-
-function isInstallStatus(value: unknown): value is ExtensionInstallStatus {
-	return installStatuses.includes(value as ExtensionInstallStatus);
-}
-
-function isValidStoredDate(value: unknown): value is string {
-	return typeof value === "string" && !Number.isNaN(Date.parse(value));
-}
-
-function isValidOptionalStoredDate(value: unknown): value is string | undefined {
-	return value === undefined || isValidStoredDate(value);
-}
+// 公式配布開始後は、利用する1つの配布ページを設定する。
+// ブラウザの種類は判定せず、既定ブラウザでページを開く。
+export const extensionStoreUrl: string | null = null;
 
 function isTauriRuntime(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function isAllowedStoreUrl(browserId: SupportedBrowserId, value: string | null): value is string {
-	if (!value) {
-		return false;
-	}
+/**
+ * Fuzzyの拡張機能詳細ページだけを許可する。
+ * ストアのトップページや任意パスを配布先として受け入れない。
+ */
+export function isAllowedExtensionStoreUrl(value: string | null): value is string {
+	if (!value) return false;
 
 	try {
 		const url = new URL(value);
-		return url.protocol === "https:" && url.hostname === storeHosts[browserId];
+		if (url.protocol !== "https:") return false;
+
+		const segments = url.pathname.split("/").filter(Boolean);
+		const extensionId = segments.at(-1) ?? "";
+		const hasValidExtensionId = /^[a-p]{32}$/.test(extensionId);
+
+		if (url.hostname === "chromewebstore.google.com") {
+			return segments.length === 3 && segments[0] === "detail" && hasValidExtensionId;
+		}
+		if (url.hostname === "microsoftedge.microsoft.com") {
+			return (
+				segments.length === 4 &&
+				segments[0] === "addons" &&
+				segments[1] === "detail" &&
+				hasValidExtensionId
+			);
+		}
+		return false;
 	} catch {
 		return false;
 	}
 }
 
-async function createRuntimeInstaller(): Promise<ExtensionInstallRuntime | null> {
-	if (!isTauriRuntime()) {
-		return null;
-	}
-
-	const [{ resolveResource }, { openUrl, revealItemInDir }] = await Promise.all([
-		import("@tauri-apps/api/path"),
-		import("@tauri-apps/plugin-opener"),
-	]);
-
-	return { resolveResource, revealItemInDir, openUrl };
-}
-
-export function detectSupportedBrowser(userAgent: string): BrowserChoice {
-	if (/Edg\//i.test(userAgent)) {
-		return "edge";
-	}
-
-	if (/(?:Chrome|Chromium)\//i.test(userAgent)) {
-		return "chrome";
-	}
-
-	return "unsupported";
-}
-
-export function getSupportedBrowserOption(
-	browserId: BrowserChoice,
-	options: readonly SupportedBrowserOption[] = supportedBrowserOptions,
-): SupportedBrowserOption | null {
-	return options.find(({ id }) => id === browserId) ?? null;
-}
-
 export function getPreferredExtensionInstallChannel(
-	browserId: BrowserChoice,
-	options: readonly SupportedBrowserOption[] = supportedBrowserOptions,
+	storeUrl: string | null = extensionStoreUrl,
 ): ExtensionInstallChannel {
-	const browser = getSupportedBrowserOption(browserId, options);
-
-	return browser && isAllowedStoreUrl(browser.id, browser.storeUrl) ? "store" : "bundled";
-}
-
-export function getExtensionInstallChannelForState(
-	state: ExtensionInstallState,
-	options: readonly SupportedBrowserOption[] = supportedBrowserOptions,
-): ExtensionInstallChannel {
-	const currentDestination = getExtensionInstallDestination(
-		state.browserId,
-		state.channel,
-		options,
-	);
-
-	// 確認済みの導入先は維持し、配布切替で同じ拡張機能の二重導入を強制しない。
-	if (state.status === "confirmed" && currentDestination.available) {
-		return state.channel;
-	}
-
-	return getPreferredExtensionInstallChannel(state.browserId, options);
-}
-
-export function createInitialExtensionInstallState(
-	browserId: BrowserChoice,
-): ExtensionInstallState {
-	return {
-		browserId,
-		channel: getPreferredExtensionInstallChannel(browserId),
-		status: "not-started",
-		updatedAt: new Date(0).toISOString(),
-	};
-}
-
-export function parseExtensionInstallState(value: unknown): ExtensionInstallState | null {
-	if (!value || typeof value !== "object") {
-		return null;
-	}
-
-	const candidate = value as Record<string, unknown>;
-	const channel = candidate.channel === "development" ? "bundled" : candidate.channel;
-	const wasSkipped = candidate.status === "skipped";
-	const status = wasSkipped ? "not-started" : candidate.status;
-
-	if (
-		!isBrowserChoice(candidate.browserId) ||
-		!isInstallChannel(channel) ||
-		!isInstallStatus(status) ||
-		!isValidStoredDate(candidate.updatedAt)
-	) {
-		return null;
-	}
-
-	if (
-		!isValidOptionalStoredDate(candidate.lastOpenedAt) ||
-		!isValidOptionalStoredDate(candidate.completedAt)
-	) {
-		return null;
-	}
-
-	return {
-		browserId: candidate.browserId,
-		channel,
-		status,
-		lastOpenedAt: wasSkipped ? undefined : candidate.lastOpenedAt,
-		completedAt: wasSkipped ? undefined : candidate.completedAt,
-		updatedAt: candidate.updatedAt,
-	};
-}
-
-export function createDestinationOpenedStateInput(
-	currentState: ExtensionInstallState,
-	browserId: BrowserChoice,
-	channel: ExtensionInstallChannel,
-	openedAt: string,
-): ExtensionInstallStateInput {
-	const isConfirmed = currentState.status === "confirmed";
-
-	return {
-		browserId,
-		channel,
-		status: isConfirmed ? currentState.status : "destination-opened",
-		lastOpenedAt: openedAt,
-		completedAt: isConfirmed ? currentState.completedAt : undefined,
-	};
-}
-
-export function isExtensionInstallStateForDestination(
-	state: ExtensionInstallState,
-	browserId: BrowserChoice,
-	channel: ExtensionInstallChannel,
-): boolean {
-	return state.browserId === browserId && state.channel === channel;
+	return isAllowedExtensionStoreUrl(storeUrl) ? "store" : "bundled";
 }
 
 export function getExtensionInstallDestination(
-	browserId: BrowserChoice,
 	channel: ExtensionInstallChannel,
-	options: readonly SupportedBrowserOption[] = supportedBrowserOptions,
+	storeUrl: string | null = extensionStoreUrl,
 ): ExtensionInstallDestination {
-	const browser = getSupportedBrowserOption(browserId, options);
-
-	if (!browser) {
-		return {
-			available: false,
-			kind: channel,
-			label: "未対応ブラウザ",
-			displayTarget: null,
-			target: null,
-			reason: "Google Chrome または Microsoft Edge を選択してください。",
-		};
-	}
-
 	if (channel === "store") {
-		const storeUrl = isAllowedStoreUrl(browser.id, browser.storeUrl) ? browser.storeUrl : null;
-
+		const allowedStoreUrl = isAllowedExtensionStoreUrl(storeUrl) ? storeUrl : null;
 		return {
-			available: storeUrl !== null,
+			available: allowedStoreUrl !== null,
 			kind: channel,
-			label: `${browser.shortName} の公式ストア`,
-			displayTarget: storeUrl,
-			target: storeUrl
-				? {
-						kind: "store-url",
-						value: storeUrl,
-						openWith: browser.storeApplication,
-					}
-				: null,
+			label: "Fuzzy公式配布ページ",
+			displayTarget: allowedStoreUrl,
+			target: allowedStoreUrl ? { kind: "store-url", value: allowedStoreUrl } : null,
 			reason:
-				storeUrl !== null
+				allowedStoreUrl !== null
 					? null
-					: browser.storeUrl === null
-						? "公式ストアの配布URLはまだ設定されていません。"
-						: "公式ストアの配布URLが安全なURLではありません。",
+					: storeUrl === null
+						? "公式配布ページはまだ設定されていません。"
+						: "公式配布ページのURLが安全な拡張機能詳細ページではありません。",
 		};
 	}
 
 	return {
 		available: true,
 		kind: channel,
-		label: `${browser.shortName} 用の同梱版`,
+		label: "Fuzzyアプリ同梱版",
 		displayTarget: "Fuzzyアプリに同梱済み",
 		target: {
 			kind: "bundled-resource",
-			value: browser.bundledManifestResourcePath,
+			value: bundledManifestResourcePath,
 		},
 		reason: null,
 	};
 }
 
+async function createRuntimeInstaller(): Promise<ExtensionInstallRuntime | null> {
+	if (!isTauriRuntime()) return null;
+
+	const [{ resolveResource }, { openUrl, revealItemInDir }] = await Promise.all([
+		import("@tauri-apps/api/path"),
+		import("@tauri-apps/plugin-opener"),
+	]);
+	return { resolveResource, revealItemInDir, openUrl };
+}
+
 export async function openExtensionInstallDestinationClient(
-	browserId: BrowserChoice,
 	channel: ExtensionInstallChannel,
 	runtime?: ExtensionInstallRuntime | null,
-	options: readonly SupportedBrowserOption[] = supportedBrowserOptions,
+	storeUrl: string | null = extensionStoreUrl,
 ): Promise<ExtensionInstallOpenResult> {
-	const destination = getExtensionInstallDestination(browserId, channel, options);
-
-	if (browserId === "unsupported") {
-		throw new ExtensionInstallError(
-			"UNSUPPORTED_BROWSER",
-			destination.reason ?? "このブラウザには対応していません。",
-		);
-	}
-
+	const destination = getExtensionInstallDestination(channel, storeUrl);
 	if (!destination.available || !destination.target) {
 		throw new ExtensionInstallError(
 			"DESTINATION_UNAVAILABLE",
-			destination.reason ?? "導入先を利用できません。",
+			destination.reason ?? "拡張機能の導入先を利用できません。",
 		);
 	}
 
-	const runtimeInstaller = runtime === undefined ? await createRuntimeInstaller() : runtime;
-
-	if (!runtimeInstaller) {
+	const installer = runtime === undefined ? await createRuntimeInstaller() : runtime;
+	if (!installer) {
 		return {
 			destination,
 			mocked: true,
@@ -384,9 +163,8 @@ export async function openExtensionInstallDestinationClient(
 
 	if (destination.target.kind === "bundled-resource") {
 		try {
-			const manifestPath = await runtimeInstaller.resolveResource(destination.target.value);
-			await runtimeInstaller.revealItemInDir(manifestPath);
-
+			const manifestPath = await installer.resolveResource(destination.target.value);
+			await installer.revealItemInDir(manifestPath);
 			return { destination, mocked: false, openedTarget: manifestPath };
 		} catch {
 			throw new ExtensionInstallError(
@@ -397,67 +175,89 @@ export async function openExtensionInstallDestinationClient(
 	}
 
 	try {
-		await runtimeInstaller.openUrl(destination.target.value, destination.target.openWith);
+		await installer.openUrl(destination.target.value);
+		return {
+			destination,
+			mocked: false,
+			openedTarget: destination.target.value,
+		};
 	} catch {
 		throw new ExtensionInstallError(
 			"OPEN_FAILED",
-			"選択したブラウザで公式ストアを開けませんでした。ブラウザを起動してから再試行してください。",
+			"公式配布ページを既定のブラウザで開けませんでした。ブラウザを起動してから再試行してください。",
 		);
+	}
+}
+
+async function createStatusRuntime(): Promise<ExtensionStatusRuntime | null> {
+	if (!isTauriRuntime()) return null;
+	const { invoke } = await import("@tauri-apps/api/core");
+	return { invoke };
+}
+
+export function parseExtensionSetupStatus(value: unknown): ExtensionSetupStatus | null {
+	if (!value || typeof value !== "object") return null;
+	const candidate = value as Record<string, unknown>;
+
+	if (candidate.state === "waiting") {
+		return candidate.observation === null ? { state: "waiting", observation: null } : null;
+	}
+	if (candidate.state !== "ready" && candidate.state !== "incompatible") return null;
+	if (!candidate.observation || typeof candidate.observation !== "object") return null;
+
+	const observation = candidate.observation as Record<string, unknown>;
+	if (
+		typeof observation.installationId !== "string" ||
+		typeof observation.extensionVersion !== "string" ||
+		typeof observation.protocolVersion !== "number" ||
+		!Number.isInteger(observation.protocolVersion) ||
+		observation.protocolVersion <= 0 ||
+		typeof observation.firstSeenAt !== "string" ||
+		Number.isNaN(Date.parse(observation.firstSeenAt)) ||
+		typeof observation.lastSeenAt !== "string" ||
+		Number.isNaN(Date.parse(observation.lastSeenAt))
+	) {
+		return null;
 	}
 
 	return {
-		destination,
-		mocked: false,
-		openedTarget: destination.target.value,
+		state: candidate.state,
+		observation: {
+			installationId: observation.installationId,
+			extensionVersion: observation.extensionVersion,
+			protocolVersion: observation.protocolVersion,
+			firstSeenAt: observation.firstSeenAt,
+			lastSeenAt: observation.lastSeenAt,
+		},
 	};
 }
 
-export async function getExtensionInstallStateClient(
-	fallbackBrowserId: BrowserChoice,
-): Promise<ExtensionInstallState> {
-	if (memoryInstallState) {
-		return Promise.resolve(memoryInstallState);
+export async function getExtensionSetupStatusClient(
+	since: string,
+	runtime?: ExtensionStatusRuntime | null,
+): Promise<ExtensionSetupStatus> {
+	if (Number.isNaN(Date.parse(since))) {
+		throw new ExtensionInstallError("STATUS_UNAVAILABLE", "確認開始日時が不正です。");
 	}
 
-	if (!canUseLocalStorage()) {
-		return Promise.resolve(createInitialExtensionInstallState(fallbackBrowserId));
-	}
-
-	const savedState = localStorage.getItem(extensionInstallStorageKey);
-
-	if (!savedState) {
-		return Promise.resolve(createInitialExtensionInstallState(fallbackBrowserId));
+	const statusRuntime = runtime === undefined ? await createStatusRuntime() : runtime;
+	if (!statusRuntime) {
+		return { state: "waiting", observation: null };
 	}
 
 	try {
-		const parsedState = parseExtensionInstallState(JSON.parse(savedState));
-
-		if (parsedState) {
-			memoryInstallState = parsedState;
-			return Promise.resolve(parsedState);
+		const value = await statusRuntime.invoke<unknown>("get_extension_setup_status", {
+			since,
+		});
+		const status = parseExtensionSetupStatus(value);
+		if (!status) {
+			throw new Error("invalid response");
 		}
+		return status;
 	} catch {
-		// 壊れたモック値は破棄し、初期状態から安全にやり直す。
+		throw new ExtensionInstallError(
+			"STATUS_UNAVAILABLE",
+			"SQLiteから拡張機能の応答情報を読み込めませんでした。Fuzzyを再起動してから再試行してください。",
+		);
 	}
-
-	localStorage.removeItem(extensionInstallStorageKey);
-
-	return Promise.resolve(createInitialExtensionInstallState(fallbackBrowserId));
-}
-
-export async function saveExtensionInstallStateClient(
-	input: ExtensionInstallStateInput,
-): Promise<ExtensionInstallState> {
-	const state: ExtensionInstallState = {
-		...input,
-		updatedAt: new Date().toISOString(),
-	};
-
-	memoryInstallState = state;
-
-	if (canUseLocalStorage()) {
-		localStorage.setItem(extensionInstallStorageKey, JSON.stringify(state));
-	}
-
-	return Promise.resolve(state);
 }

@@ -15,14 +15,21 @@
 //! 【重要な設計制約】このクレートはファイルの自動移動・自動削除を一切行わない。
 //! すべて推薦・提示・警告のためのデータを返すに留め、実行はユーザー操作のみとする。
 
+pub mod database;
 pub mod duplicate;
 pub mod error;
+pub mod extension_runtime;
 pub mod index;
 pub mod rule;
 pub mod scan;
 pub mod types;
 
+pub use database::{resolve_db_path, Database};
 pub use error::{EngineError, EngineResult};
+pub use extension_runtime::{
+	ExtensionRuntimeObservation, ExtensionRuntimeReport, ExtensionSetupState, ExtensionSetupStatus,
+	EXTENSION_RUNTIME_PROTOCOL_VERSION,
+};
 
 /// SQLiteスキーマ定義（DDL）の正本。native-host が初回起動時に適用する（issue #36）。
 /// 実体は [`crates/engine-core/fixtures/schema.sql`]。

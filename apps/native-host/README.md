@@ -1,9 +1,7 @@
 # native-host
 
-Native Messaging ホスト（常駐エンジン）。GUIを持たない Rust バイナリで、ブラウザ拡張機能（`apps/extension`）から Native Messaging 経由で起動・通信される。
+ブラウザ拡張機能からNative Messaging経由で起動される、GUIを持たないRustバイナリ。
 
-役割：保存・フォルダ生成・再帰走査・全文検索・重複検出・ルール照合・集計・SQLite管理。
+標準入出力の4byteリトルエンディアン長プレフィックス付きJSONを処理し、共有DB層を通じてSQLiteへアクセスする。初期セットアップでは`reportExtensionRuntime`を受信し、拡張機能のインストール識別子・バージョン・通信仕様バージョン・受信日時を保存する。
 
-中核ロジックは `crates/engine-core` を参照し、ここには Native Messaging のプロトコル処理（標準入出力でのJSON送受信、起動・終了制御）のみを実装する。
-
-未生成：`cargo new --bin apps/native-host` で生成し、`crates/engine-core` に依存させる。詳細は `docs/セットアップ.md` を参照。
+DBパス解決、スキーマ適用、マイグレーションはTauriと共通の`crates/engine-core`を使用する。コマンド契約は`docs/api/contract.md`、開発時のホスト登録手順は`docs/セットアップ.md`を参照する。

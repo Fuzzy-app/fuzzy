@@ -10,12 +10,10 @@
 			"identifier": "opener:allow-open-url",
 			"allow": [
 				{
-					"url": "https://chromewebstore.google.com/*",
-					"app": "chrome.exe"
+					"url": "https://chromewebstore.google.com/*"
 				},
 				{
-					"url": "https://microsoftedge.microsoft.com/addons/*",
-					"app": "msedge.exe"
+					"url": "https://microsoftedge.microsoft.com/addons/*"
 				}
 			]
 		}
