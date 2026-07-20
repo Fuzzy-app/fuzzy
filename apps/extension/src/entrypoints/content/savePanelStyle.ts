@@ -2,6 +2,10 @@
 export const SAVE_PANEL_ID = "fuzzy-save-panel";
 export const SAVE_PANEL_STYLE_ID = "fuzzy-save-panel-style";
 export const SAVE_HANDLE_ID = "fuzzy-save-handle";
+export const SAVE_PANEL_MAX_WIDTH_PX = 340;
+export const SAVE_HANDLE_WIDTH_PX = 28;
+
+const RESPONSIVE_PANEL_WIDTH = `min(${SAVE_PANEL_MAX_WIDTH_PX}px, calc(100vw - ${SAVE_HANDLE_WIDTH_PX}px))`;
 
 export const SAVE_PANEL_STYLE = `
 		#${SAVE_PANEL_ID} {
@@ -9,7 +13,7 @@ export const SAVE_PANEL_STYLE = `
 			top: 0;
 			right: 0;
 			z-index: 2147483647;
-			width: min(340px, calc(100vw - 28px));
+			width: ${RESPONSIVE_PANEL_WIDTH};
 			height: 100vh;
 			box-sizing: border-box;
 			/* 縦スクロールは内側の .fuzzy-panel-scroll が担当する。
@@ -134,12 +138,12 @@ export const SAVE_PANEL_STYLE = `
 			position: fixed;
 			z-index: 2147483647;
 			top: 50%;
-			right: min(340px, calc(100vw - 28px));
+			right: ${RESPONSIVE_PANEL_WIDTH};
 			transform: translateY(-50%);
 			display: grid;
 			place-items: center;
 			box-sizing: border-box;
-			width: 28px;
+			width: ${SAVE_HANDLE_WIDTH_PX}px;
 			height: 66px;
 			margin: 0;
 			padding: 0;

@@ -16,6 +16,7 @@ import {
 	collectMoodlePageSnapshotWithNestedFolders,
 	safeCollectMoodlePageSnapshot,
 } from "../../lib/moodle/snapshotCollector";
+import { createCollapseHandleIcon } from "./savePanelHandle";
 import { createSavePanelOpenStateWriter, loadSavePanelOpenState } from "./savePanelState";
 import {
 	SAVE_HANDLE_ID,
@@ -43,22 +44,6 @@ interface SimilarWarning {
 	match: SimilarFileMatch;
 }
 
-function createCollapseHandleIcon(): SVGSVGElement {
-	const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-	icon.setAttribute("viewBox", "0 0 10 16");
-	icon.setAttribute("aria-hidden", "true");
-	icon.setAttribute("focusable", "false");
-	const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-	path.setAttribute("d", "M2 2L8 8L2 14");
-	path.setAttribute("fill", "none");
-	path.setAttribute("stroke", "currentColor");
-	path.setAttribute("stroke-width", "2.5");
-	path.setAttribute("stroke-linecap", "round");
-	path.setAttribute("stroke-linejoin", "round");
-	icon.append(path);
-	return icon;
-}
-
 export async function mountSavePanel(): Promise<void> {
 	document.getElementById(SAVE_PANEL_ID)?.remove();
 	document.getElementById(SAVE_HANDLE_ID)?.remove();
@@ -74,7 +59,7 @@ export async function mountSavePanel(): Promise<void> {
 	const collapseHandle = document.createElement("button");
 	collapseHandle.id = SAVE_HANDLE_ID;
 	collapseHandle.type = "button";
-	collapseHandle.append(createCollapseHandleIcon());
+	collapseHandle.append(createCollapseHandleIcon(document));
 	collapseHandle.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
 	collapseHandle.addEventListener("click", () => setPanelOpen(false));
 	collapseHandle.style.display = "none";

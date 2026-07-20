@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	SAVE_PANEL_FORCE_CLOSED_ONCE_KEY,
 	SAVE_PANEL_OPEN_STATE_KEY,
 	type SavePanelStateStorage,
 	createSavePanelOpenStateWriter,
 	loadSavePanelOpenState,
-	resetSavePanelOpenState,
+	requestSavePanelClosedOnNextMount,
 } from "../../apps/extension/src/entrypoints/content/savePanelState";
 
 describe("保存パネルの開閉状態", () => {
@@ -27,20 +28,20 @@ describe("保存パネルの開閉状態", () => {
 		expect(errors).toHaveLength(1);
 	});
 
-	test("再ログイン前のリセット結果を呼び出し側へ返す", async () => {
-		const writes: boolean[] = [];
+	test("再ログイン前に次回だけ閉じる指示を保存する", async () => {
+		const writes: Record<string, unknown>[] = [];
 		const storage: SavePanelStateStorage = {
 			get: async () => ({}),
 			set: async (items) => {
-				writes.push(items[SAVE_PANEL_OPEN_STATE_KEY] === true);
+				writes.push(items);
 			},
 		};
-		expect(await resetSavePanelOpenState(storage)).toBe(true);
-		expect(writes).toEqual([false]);
+		expect(await requestSavePanelClosedOnNextMount(storage)).toBe(true);
+		expect(writes).toEqual([{ [SAVE_PANEL_FORCE_CLOSED_ONCE_KEY]: true }]);
 
 		const errors: unknown[] = [];
 		expect(
-			await resetSavePanelOpenState(
+			await requestSavePanelClosedOnNextMount(
 				{
 					get: async () => ({}),
 					set: async () => {
@@ -51,6 +52,33 @@ describe("保存パネルの開閉状態", () => {
 			),
 		).toBe(false);
 		expect(errors).toHaveLength(1);
+	});
+
+	test("遷移元の遅延書き込み後も次回マウントだけ閉じる", async () => {
+		const stored: Record<string, unknown> = { [SAVE_PANEL_OPEN_STATE_KEY]: false };
+		let releaseOldPageWrite: (() => void) | undefined;
+		const oldPageWritePending = new Promise<void>((resolve) => {
+			releaseOldPageWrite = resolve;
+		});
+		const storage: SavePanelStateStorage = {
+			get: async (key) => ({ [key]: stored[key] }),
+			set: async (items) => {
+				if (items[SAVE_PANEL_OPEN_STATE_KEY] === true) await oldPageWritePending;
+				Object.assign(stored, items);
+			},
+		};
+		const writeOpenState = createSavePanelOpenStateWriter(storage);
+		const staleWrite = writeOpenState(true);
+		await Promise.resolve();
+
+		expect(await requestSavePanelClosedOnNextMount(storage)).toBe(true);
+		releaseOldPageWrite?.();
+		await staleWrite;
+		expect(stored[SAVE_PANEL_OPEN_STATE_KEY]).toBe(true);
+		expect(await loadSavePanelOpenState(storage)).toBe(false);
+		expect(stored[SAVE_PANEL_FORCE_CLOSED_ONCE_KEY]).toBe(false);
+		// 一度消費した後は通常の保存値を復元する。
+		expect(await loadSavePanelOpenState(storage)).toBe(true);
 	});
 
 	test("連続した開閉操作を順番どおり保存する", async () => {
@@ -81,7 +109,7 @@ describe("保存パネルの開閉状態", () => {
 
 function createStorage(value: unknown): SavePanelStateStorage {
 	return {
-		get: async () => ({ [SAVE_PANEL_OPEN_STATE_KEY]: value }),
+		get: async (key) => ({ [key]: key === SAVE_PANEL_OPEN_STATE_KEY ? value : undefined }),
 		set: async () => {},
 	};
 }

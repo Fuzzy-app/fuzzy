@@ -9,6 +9,7 @@ import {
 	setupMoodleLogoutTracking,
 } from "../../apps/extension/src/entrypoints/content/loginAutomation";
 import {
+	SAVE_PANEL_FORCE_CLOSED_ONCE_KEY,
 	SAVE_PANEL_OPEN_STATE_KEY,
 	type SavePanelStateStorage,
 } from "../../apps/extension/src/entrypoints/content/savePanelState";
@@ -179,8 +180,8 @@ describe("Moodle再ログイン補助", () => {
 				get: storage.get,
 				set: async (items) => {
 					Object.assign(stored, items);
-					if (SAVE_PANEL_OPEN_STATE_KEY in items) {
-						writes.push(items[SAVE_PANEL_OPEN_STATE_KEY] === true);
+					if (SAVE_PANEL_FORCE_CLOSED_ONCE_KEY in items) {
+						writes.push(items[SAVE_PANEL_FORCE_CLOSED_ONCE_KEY] === true);
 					}
 				},
 			},
@@ -188,7 +189,8 @@ describe("Moodle再ログイン補助", () => {
 		});
 
 		expect(result).toBe("automatic-login-suppressed");
-		expect(writes).toEqual([false]);
+		expect(writes).toEqual([true]);
+		expect(stored[SAVE_PANEL_FORCE_CLOSED_ONCE_KEY]).toBe(true);
 		expect(clickCount).toBe(0);
 	});
 
@@ -249,6 +251,71 @@ describe("Moodle再ログイン補助", () => {
 		]);
 	});
 
+	test("ログアウト画面の書き込みが先に完了しても同じトークンを保持する", async () => {
+		const sessionStorage = new MemorySessionStorage();
+		const { document: authenticatedDocument, window } = parseHTML(`
+			<html><body class="loggedin">
+				<a id="logout" href="/2026/login/logout.php?sesskey=example">ログアウト</a>
+			</body></html>
+		`);
+		const stored: Record<string, unknown> = {};
+		const pendingWrites: Array<{
+			token: unknown;
+			release: () => void;
+		}> = [];
+		const storage: SavePanelStateStorage = {
+			get: async (key) => ({ [key]: stored[key] }),
+			set: async (items) => {
+				if (!(EXPLICIT_LOGOUT_STORAGE_KEY in items)) {
+					Object.assign(stored, items);
+					return;
+				}
+				let release: (() => void) | undefined;
+				const pending = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				pendingWrites.push({
+					token: items[EXPLICIT_LOGOUT_STORAGE_KEY],
+					release: () => release?.(),
+				});
+				await pending;
+				Object.assign(stored, items);
+			},
+		};
+		await setupMoodleLogoutTracking({
+			document: authenticatedDocument,
+			pageUrl: PAGE_URL,
+			panelStateStorage: storage,
+			sessionStorage,
+			createLogoutToken: () => "one-logout-flow",
+			navigate: () => {},
+		});
+		authenticatedDocument
+			.querySelector("#logout")
+			?.dispatchEvent(new window.Event("click", { bubbles: true, cancelable: true }));
+		await Promise.resolve();
+
+		const { document: logoutDocument } = parseHTML("<html><body></body></html>");
+		const logoutPageSetup = setupMoodleLogoutTracking({
+			document: logoutDocument,
+			pageUrl: "https://moodle2026.wakayama-u.ac.jp/2026/login/logout.php",
+			panelStateStorage: storage,
+			sessionStorage,
+			createLogoutToken: () => "must-not-be-created",
+		});
+		await Promise.resolve();
+
+		expect(pendingWrites.map((write) => write.token)).toEqual([
+			"one-logout-flow",
+			"one-logout-flow",
+		]);
+		pendingWrites[1]?.release();
+		await logoutPageSetup;
+		pendingWrites[0]?.release();
+		await nextTask();
+		expect(stored[EXPLICIT_LOGOUT_STORAGE_KEY]).toBe("one-logout-flow");
+	});
+
 	test("ログアウト抑止の永続化に失敗しても同じタブでは自動再ログインしない", async () => {
 		const sessionStorage = new MemorySessionStorage();
 		const { document: authenticatedDocument, window } = parseHTML(`
@@ -300,7 +367,8 @@ describe("Moodle再ログイン補助", () => {
 		});
 
 		expect(result).toBe("automatic-login-suppressed");
-		expect(stored[SAVE_PANEL_OPEN_STATE_KEY]).toBe(false);
+		expect(stored[SAVE_PANEL_OPEN_STATE_KEY]).toBe(true);
+		expect(stored[SAVE_PANEL_FORCE_CLOSED_ONCE_KEY]).toBe(true);
 	});
 
 	test("認証失敗でログイン画面へ戻っても自動操作を繰り返さない", async () => {
