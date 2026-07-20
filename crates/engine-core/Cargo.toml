@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 description = "Fuzzy 共有エンジン：再帰走査・ルール照合・全文索引・重複検出（docs/仕様書.md 3.3節）"
 
-# Phase0 では依存なし（トレイト境界の定義のみ）。
-# Phase1 で tantivy / blake3 / rusqlite 等を実装issueごとに追加する。
 [dependencies]
+serde.workspace = true
+# SQLite接続はTauriとnative-hostで共有する。bundledで外部DLL依存を避ける。
+rusqlite = { version = "0.31", features = ["bundled"] }

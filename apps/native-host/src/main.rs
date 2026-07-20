@@ -8,19 +8,18 @@
 //! を実装し疎通確認できるようにした。他コマンドは順次 `dispatch` に追加していく。
 
 pub mod api_types;
-mod db;
 mod protocol;
 
 use std::io::{stdin, stdout};
 
-use db::Db;
+use engine_core::{Database, EngineError, ExtensionRuntimeReport};
 use protocol::{Request, Response};
 
 fn main() -> std::io::Result<()> {
 	// 起動時にSQLiteへ接続する（必要ならスキーマ適用・FK有効化）。
 	// 接続できなければホストとして機能しないため、stderrへ記録して異常終了する
 	// （拡張機能側は ping タイムアウトでサンプルデータのモック動作へフォールバックする）。
-	let database = Db::open_default().map_err(|e| {
+	let database = Database::open_default().map_err(|e| {
 		eprintln!("DB接続に失敗しました: {e}");
 		std::io::Error::other(e)
 	})?;
@@ -45,15 +44,51 @@ fn main() -> std::io::Result<()> {
 ///
 /// 実装済みコマンドは issue #37 の `ping` のみ。未実装コマンドは `INTERNAL` を返す。
 /// 以降の issue でここに分岐を追加し、`db` を通じてSQLiteへアクセスする。
-fn dispatch(_db: &Db, request: Request) -> Response {
+fn dispatch(database: &Database, request: Request) -> Response {
 	match request.command.as_str() {
 		"ping" => ping(request.id),
+		"reportExtensionRuntime" => report_extension_runtime(database, request),
 		_ => Response::err(
 			Some(request.id),
 			"INTERNAL",
 			format!("コマンド '{}' は未実装です", request.command),
 		),
 	}
+}
+
+/// 拡張機能の実応答を、native-hostの受信時刻・バージョン付きでSQLiteへ保存する。
+fn report_extension_runtime(database: &Database, request: Request) -> Response {
+	let report = match serde_json::from_value::<ExtensionRuntimeReport>(request.payload) {
+		Ok(report) => report,
+		Err(error) => {
+			return Response::err(
+				Some(request.id),
+				"INVALID_REQUEST",
+				format!("拡張機能の実行情報を解釈できません: {error}"),
+			);
+		}
+	};
+
+	match database.record_extension_runtime(&report) {
+		Ok(observation) => match serde_json::to_value(observation) {
+			Ok(data) => Response::ok(request.id, data),
+			Err(error) => Response::err(
+				Some(request.id),
+				"INTERNAL",
+				format!("応答を生成できません: {error}"),
+			),
+		},
+		Err(error) => engine_error_response(request.id, error),
+	}
+}
+
+fn engine_error_response(id: String, error: EngineError) -> Response {
+	let code = match error {
+		EngineError::InvalidInput { .. } => "INVALID_REQUEST",
+		EngineError::Database { .. } => "DB_ERROR",
+		_ => "INTERNAL",
+	};
+	Response::err(Some(id), code, error.to_string())
 }
 
 /// `ping`：疎通確認（docs/api/contract.md 1.2節）。`{}` → `{ version }`。
@@ -73,7 +108,7 @@ mod tests {
 	/// 未知コマンドには `INTERNAL` エラーを返すこと。
 	#[test]
 	fn unknown_cmd_internal_err() {
-		let db = Db::open_in_memory().unwrap();
+		let db = Database::open_in_memory().unwrap();
 		let request = Request {
 			id: "req-1".to_string(),
 			command: "unknownCommand".to_string(),
@@ -88,7 +123,7 @@ mod tests {
 	/// `ping` は ok レスポンスで version を返すこと。
 	#[test]
 	fn ping_returns_version() {
-		let db = Db::open_in_memory().unwrap();
+		let db = Database::open_in_memory().unwrap();
 		let request = Request {
 			id: "req-ping".to_string(),
 			command: "ping".to_string(),
@@ -99,5 +134,51 @@ mod tests {
 		assert!(response.ok);
 		let data = response.data.expect("data があること");
 		assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
+	}
+
+	#[test]
+	fn report_extension_runtime_persists_observation() {
+		let database = Database::open_in_memory().unwrap();
+		let request = Request {
+			id: "req-runtime".to_string(),
+			command: "reportExtensionRuntime".to_string(),
+			payload: serde_json::json!({
+				"installationId": "550e8400-e29b-41d4-a716-446655440000",
+				"extensionVersion": "0.1.0",
+				"protocolVersion": 1
+			}),
+		};
+
+		let response = dispatch(&database, request);
+		assert!(response.ok);
+		assert_eq!(
+			response.data.unwrap()["extensionVersion"],
+			serde_json::json!("0.1.0")
+		);
+		assert_eq!(
+			database
+				.extension_setup_status_since("2000-01-01T00:00:00.000Z")
+				.unwrap()
+				.state,
+			engine_core::ExtensionSetupState::Ready
+		);
+	}
+
+	#[test]
+	fn report_extension_runtime_rejects_invalid_payload() {
+		let database = Database::open_in_memory().unwrap();
+		let request = Request {
+			id: "req-invalid-runtime".to_string(),
+			command: "reportExtensionRuntime".to_string(),
+			payload: serde_json::json!({
+				"installationId": "../invalid",
+				"extensionVersion": "0.1.0",
+				"protocolVersion": 1
+			}),
+		};
+
+		let response = dispatch(&database, request);
+		assert!(!response.ok);
+		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
 	}
 }

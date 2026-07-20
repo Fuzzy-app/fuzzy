@@ -11,6 +11,8 @@ pub type EngineResult<T> = Result<T, EngineError>;
 /// エンジン共通のエラー。
 #[derive(Debug)]
 pub enum EngineError {
+	/// API入力の形式・値が契約を満たさない。
+	InvalidInput { field: String, reason: String },
 	/// 指定パスが存在しない・アクセスできない等。
 	InvalidPath { path: String, reason: String },
 	/// ファイルI/Oエラー。
@@ -26,6 +28,9 @@ pub enum EngineError {
 impl fmt::Display for EngineError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
+			Self::InvalidInput { field, reason } => {
+				write!(f, "入力値 '{field}' が不正です: {reason}")
+			}
 			Self::InvalidPath { path, reason } => {
 				write!(f, "無効なパス '{path}': {reason}")
 			}

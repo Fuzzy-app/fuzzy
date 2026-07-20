@@ -1,7 +1,7 @@
-# Tauri + SvelteKit + TypeScript
+# desktop
 
-This template should help get you started developing with Tauri, SvelteKit and TypeScript in Vite.
+Fuzzyの初期セットアップを行うTauri 2 + SvelteKitアプリ。
 
-## Recommended IDE Setup
+保存先・保存パターン・初期ルールを設定した後、Fuzzyブラウザ拡張機能の導入を必須で案内する。ブラウザ名による分岐や自己申告チェックは行わず、拡張機能からnative-hostへ届いてSQLiteに保存された実応答を確認すると完了する。
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
+開発時の起動方法とNative Messagingホストの前提は`docs/セットアップ.md`を参照する。

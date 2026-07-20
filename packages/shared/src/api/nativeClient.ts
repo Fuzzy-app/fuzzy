@@ -6,6 +6,8 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroupListItem,
+	ExtensionRuntimeObservation,
+	ExtensionRuntimeReport,
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
@@ -85,6 +87,15 @@ export class NativeApiClient implements FuzzyApiClient {
 		} catch {
 			return false;
 		}
+	}
+
+	/**
+	 * 拡張機能自身の起動情報をSQLiteへ記録する。
+	 *
+	 * FuzzyApiClientの通常データAPIには含めず、拡張機能backgroundからだけ呼び出す。
+	 */
+	reportExtensionRuntime(report: ExtensionRuntimeReport): Promise<ExtensionRuntimeObservation> {
+		return this.send("reportExtensionRuntime", report);
 	}
 
 	getDashboard(): Promise<DashboardSummary> {

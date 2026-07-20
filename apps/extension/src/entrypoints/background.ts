@@ -18,6 +18,7 @@ import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
 } from "../lib/rules/backgroundApi";
+import { reportCurrentExtensionRuntime } from "../lib/runtime/extensionRuntime";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
@@ -82,6 +83,9 @@ export default defineBackground(() => {
 	const startNotificationMonitoring = () => {
 		startSyncNotificationMonitoring();
 		deadlineNotificationMonitor.start();
+		void reportCurrentExtensionRuntime().catch((error) => {
+			console.warn("[fuzzy] 拡張機能の実行情報をnative-hostへ保存できませんでした", error);
+		});
 	};
 
 	browser.runtime.onInstalled.addListener(startNotificationMonitoring);

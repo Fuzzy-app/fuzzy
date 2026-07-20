@@ -216,3 +216,27 @@ export interface AssignmentChange {
 	newValue: string | null;
 	detectedAt: string; // ISO8601
 }
+
+/** 現在の拡張機能実応答APIの通信仕様バージョン。 */
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 1 as const;
+
+/** 拡張機能がnative-hostへ報告する、ブラウザ名に依存しない実行情報。 */
+export interface ExtensionRuntimeReport {
+	installationId: string;
+	extensionVersion: string;
+	protocolVersion: number;
+}
+
+/** SQLiteに保存された、インストール・バージョン単位の初回／最終応答。 */
+export interface ExtensionRuntimeObservation extends ExtensionRuntimeReport {
+	firstSeenAt: string;
+	lastSeenAt: string;
+}
+
+export type ExtensionSetupState = "waiting" | "ready" | "incompatible";
+
+/** 初期セットアップ画面がSQLiteから読み取る拡張機能の応答状態。 */
+export interface ExtensionSetupStatus {
+	state: ExtensionSetupState;
+	observation: ExtensionRuntimeObservation | null;
+}
