@@ -10,7 +10,7 @@ INSERT INTO app_settings (key, value) VALUES
 	('last_full_scan_at', '2026-07-01T08:00:00');
 
 INSERT INTO global_rule (id, pattern_key, pattern_template) VALUES
-	(1, 'year_term_course_section', '{year}/{term}/{course}/第{section}回');
+	(1, 'term_course_section', '{term}/{course}/第{section}回');
 
 INSERT INTO courses (id, moodle_course_id, name, term) VALUES
 	(1, 'course-350', '情報アーキテクチャ', '2026前期'),
@@ -22,19 +22,19 @@ INSERT INTO courses (id, moodle_course_id, name, term) VALUES
 
 -- アプリ演習だけ「回ごとに分けない」例外ルール（仕様書の例に対応）
 INSERT INTO course_rule_overrides (course_id, split_by_section, pattern_template, note) VALUES
-	(4, 0, '{year}/{term}/{course}', '実習課題はまとめて1フォルダで管理したいため回ごとに分けない');
+	(4, 0, '{term}/{course}', '実習課題はまとめて1フォルダで管理したいため回ごとに分けない');
 
 INSERT INTO files (id, course_id, section_no, moodle_file_id, original_name, saved_path, size_bytes, mime_type, hash_blake3, simhash, text_extracted, rule_compliant, violation_reason, downloaded_at) VALUES
 	(1, 1, 9, 'res-9001', '09_情報アーキテクチャ_講義資料.pdf', 'C:\Users\sample\Documents\大学\2026前期\情報アーキテクチャ\第9回\09_情報アーキテクチャ_講義資料.pdf', 2456000, 'application/pdf', 'b3:1a2b3c...', 84512, 1, 1, NULL, '2026-06-29T10:12:00'),
 	(2, 1, 9, 'res-9002', '09_演習課題.docx', 'C:\Users\sample\Documents\大学\2026前期\情報アーキテクチャ\第9回\09_演習課題.docx', 88000, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'b3:9f8e7d...', 84520, 1, 1, NULL, '2026-06-29T10:12:30'),
 	(3, 2, 4, 'res-4101', '第4回_正規化.pdf', 'C:\Users\sample\Documents\大学\2026前期\データベース\第4回\第4回_正規化.pdf', 1980000, 'application/pdf', 'b3:2c3d4e...', 55012, 1, 1, NULL, '2026-06-20T09:00:00'),
-	(4, 2, NULL, NULL, '正規化_メモ.docx', 'C:\Users\sample\Documents\大学\正規化_メモ.docx', 12000, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'b3:aa11bb...', 55090, 1, 0, 'グローバルルール（年度/学期/コース名/回）から外れた場所に保存されています', '2026-06-21T19:40:00'),
+	(4, 2, NULL, NULL, '正規化_メモ.docx', 'C:\Users\sample\Documents\大学\正規化_メモ.docx', 12000, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'b3:aa11bb...', 55090, 1, 0, 'グローバルルール（学期/コース名/回）から外れた場所に保存されています', '2026-06-21T19:40:00'),
 	(5, 3, 6, 'res-6044', '離散数学_第6回_グラフ理論.pdf', 'C:\Users\sample\Documents\大学\2026前期\離散数学\第6回\離散数学_第6回_グラフ理論.pdf', 3100000, 'application/pdf', 'b3:3d4e5f...', 71234, 1, 1, NULL, '2026-06-22T13:05:00'),
 	(6, 4, NULL, 'res-7701', 'アプリ演習_中間プレゼン資料.pptx', 'C:\Users\sample\Documents\大学\2026前期\アプリ演習\アプリ演習_中間プレゼン資料.pptx', 5400000, 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'b3:4e5f6a...', 91022, 0, 1, NULL, '2026-06-27T15:30:00'),
 	(7, 5, 3, 'res-3302', '認知科学概論_第3回レジュメ.pdf', 'C:\Users\sample\Documents\大学\2026前期\認知科学概論\第3回\認知科学概論_第3回レジュメ.pdf', 1450000, 'application/pdf', 'b3:5f6a7b...', 62211, 1, 1, NULL, '2026-05-18T11:00:00'),
 	(8, 6, 2, 'res-2201', 'English_IIB_Unit2_reading.pdf', 'C:\Users\sample\Documents\大学\2026前期\英語IIB\第2回\English_IIB_Unit2_reading.pdf', 980000, 'application/pdf', 'b3:6a7b8c...', 48899, 1, 1, NULL, '2026-04-30T09:20:00'),
 	-- 重複ペア（同一資料を2回DLしてしまった例）
-	(9,  2, 4, 'res-4101', '第4回_正規化(1).pdf', 'C:\Users\sample\Documents\大学\ダウンロード\第4回_正規化(1).pdf', 1980000, 'application/pdf', 'b3:2c3d4e...', 55012, 1, 0, 'グローバルルール（年度/学期/コース名/回）から外れた場所に保存されています。データベース/第4回に同一内容のファイルが既にあります', '2026-06-25T08:10:00');
+	(9,  2, 4, 'res-4101', '第4回_正規化(1).pdf', 'C:\Users\sample\Documents\大学\ダウンロード\第4回_正規化(1).pdf', 1980000, 'application/pdf', 'b3:2c3d4e...', 55012, 1, 0, 'グローバルルール（学期/コース名/回）から外れた場所に保存されています。データベース/第4回に同一内容のファイルが既にあります', '2026-06-25T08:10:00');
 
 INSERT INTO duplicate_groups (id, method) VALUES
 	(1, 'exact');

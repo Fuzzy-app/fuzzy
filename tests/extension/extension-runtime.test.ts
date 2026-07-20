@@ -10,7 +10,9 @@ function createStorage(initial: Record<string, unknown> = {}) {
 	const values = { ...initial };
 	const storage: InstallationIdStorage = {
 		get: async () => ({ ...values }),
-		set: async (next) => Object.assign(values, next),
+		set: async (next) => {
+			Object.assign(values, next);
+		},
 	};
 	return { storage, values };
 }

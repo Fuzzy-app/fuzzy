@@ -2,7 +2,7 @@
 
 最終更新: 2026-07-20
 
-DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はRust構造体を正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期の暫定型は `packages/shared/src/types.ts` に手書きしている。
+DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はnative-hostのAPI DTOを正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期のRust DTOは `apps/native-host/src/api_types.rs`、暫定TS型は `packages/shared/src/types.ts` に定義する。`crates/engine-core` の絶対パスを含む内部型をそのままwire形式にしない。
 
 ---
 
@@ -40,14 +40,56 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `getRules`                 | グローバル／コース別ルール取得         | `{}` → `RuleSet`                                    |
 | `updateGlobalRule`         | グローバルルール更新              | `{ patternTemplate }` → `{ ok }`                    |
 | `updateCourseRuleOverride` | コース別例外ルール更新             | `{ courseId, override: { splitBySection, patternTemplate, note } }` → `{ ok }` |
-| `getRuleViolations`        | ルール違反ファイル一覧             | `{}` → `RuleViolation[]`                            |
-| `getDuplicateGroups`       | 重複ファイル一覧                | `{}` → `DuplicateGroup[]`                           |
+| `getRuleViolations`        | ルール違反ファイル一覧             | `{}` → `RuleViolationListItem[]`                    |
+| `getDuplicateGroups`       | 重複ファイル一覧                | `{}` → `DuplicateGroupListItem[]`                   |
 | `getNotificationRules`     | 通知タイミング設定取得             | `{}` → `NotificationRule[]`                         |
 | `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules: NotificationRuleInput[] }` → `{ ok, rules: NotificationRule[] }` |
 | `getLatestSyncEvent`       | 直近の同期結果取得（データ取得通知用）     | `{}` → `DataSyncEvent \| null`                      |
 | `getAssignmentChanges`     | 同期で検出された課題の変更点一覧（変更点表示用） | `{ sinceSyncEventId? }` → `AssignmentChange[]`      |
 | `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
+
+`SaveSuggestion` は `{ path, relativePath, confidence, similarMatches? }` とする。`path` はnative-hostが保存に使う、`app_settings.base_folder_path`を含む絶対パス、`relativePath`はUI表示・手動編集に使う保存ルート以下の相対パスである。`suggestSavePath`はSQLiteに保存されたグローバルルールとコース別例外を適用する。コース名・セクション名の半角／全角の補足括弧と絵文字は推薦フォルダ名から除外するが、簡略化後に同名となるコースはMoodleの安定コースIDで区別する。クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
+
+#### 1.2.1 ルール違反・重複一覧の型と安全境界
+
+`getRuleViolations` は次の形式を返す。
+
+```ts
+interface RuleViolationListItem {
+	fileId: number;
+	fileName: string;
+	courseId: number | null;
+	courseName: string | null;
+	relativePath: string;
+	reason: string;
+}
+```
+
+`courseId` と `courseName` は、授業に紐付く場合は両方を設定し、未紐付けの場合は両方を `null` にする。授業数の集計や同名授業の区別には `courseId` を使う。
+
+`getDuplicateGroups` は次の形式を返す。
+
+```ts
+interface DuplicateFileListItem {
+	fileId: number;
+	fileName: string;
+	relativePath: string;
+	similarity: number;
+}
+
+interface DuplicateGroupListItem {
+	groupId: number;
+	method: "exact" | "similar";
+	members: DuplicateFileListItem[];
+}
+```
+
+`similarity` は0.0以上1.0以下とし、`method = "exact"` の全メンバーは1.0とする。同名ファイルを識別できるよう、各メンバーにファイル名を含む `relativePath` を必ず含める。
+
+両一覧の `relativePath` は `files.saved_path` から `app_settings.base_folder_path` を除いてnative-hostが導出する。Windows向けの正規化済みバックスラッシュ区切りとし、絶対パス、UNCパス、`.`、`..` を含めない。保存ルート外の行を相対化できない場合は、その絶対パスをレスポンスやエラーメッセージへ含めず、固定の `INTERNAL` エラーにする。拡張機能は受信値を再検証し、不正な一覧をDOMへ表示しない。例外の生メッセージもDOMへ表示しない。
+
+content scriptはNative Messagingへ直接接続せず、ルール取得・更新と同じbackgroundのメッセージ境界を通じて両コマンドを呼ぶ。これにより接続とSQLiteの正本をbackgroundへ集約する。
 
 `NotificationRule.offsetMinutes` は締切日時から遡る相対時間（分）を表し、0以上525,600以下の整数（締切時刻から365日前まで）に限定する。`NotificationRuleInput` は `{ id?, offsetMinutes, enabled }` とし、新規ルールでは`id`を省略する。native-hostはSQLiteのトランザクション内で、ID付きの既存行を更新、IDなしの行を新規採番、入力から除かれた既存行を削除し、保存後の`NotificationRule[]`を返す。
 
@@ -125,6 +167,8 @@ type ExtensionSetupStatus =
 | `RULE_CONFLICT`      | ルール定義が矛盾している                         |
 | `MOODLE_UNREACHABLE` | Moodle側の情報取得に失敗（拡張機能側で発生、ホストには関係しない） |
 | `INTERNAL`           | 想定外のエラー                              |
+
+エラーの `message` は利用者向けの概要に限定し、保存ルート、DBファイル、対象ファイルの絶対パスや内部例外の生文字列を含めない。詳細はローカルログ側で扱う。
 
 ---
 

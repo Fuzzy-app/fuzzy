@@ -482,7 +482,7 @@
 						<input
 							id="manualPath"
 							type="text"
-							placeholder="C:\Users\sample\Documents\大学\2026前期\データベース"
+							placeholder="2026前期/データベース"
 						/>
 					</div>
 					<div class="action-panel">
@@ -528,14 +528,17 @@
 		const suggestions = [
 			{
 				path: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+				relativePath: "2026前期\\データベース\\第4回",
 				confidence: 0.92,
 			},
 			{
 				path: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース",
+				relativePath: "2026前期\\データベース",
 				confidence: 0.6,
 			},
 			{
-				path: "C:\\Users\\sample\\Downloads\\Moodle\\データベース",
+				path: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\補足",
+				relativePath: "2026前期\\データベース\\補足",
 				confidence: 0.34,
 			},
 		].sort((a, b) => b.confidence - a.confidence);
@@ -608,7 +611,7 @@
 						selectedPath === suggestion.path ? "checked" : ""
 					} />
 					<span>
-						<p class="suggestion-path">${suggestion.path}</p>
+						<p class="suggestion-path">保存ルート › ${suggestion.relativePath.replaceAll("\\", " › ")}</p>
 						<span class="confidence">
 							<span class="confidence-bar">
 								<span class="confidence-fill" style="width: ${confidencePercent}%"></span>
@@ -634,7 +637,8 @@
 
 		function renderSummary() {
 			const files = moodleSnapshot.files.filter((file) => selectedFileIds.has(file.id));
-			const path = manualPath.value.trim() || selectedPath;
+			const suggestion = suggestions.find((item) => item.path === selectedPath);
+			const path = manualPath.value.trim() || suggestion?.relativePath || "";
 			selectedCount.textContent = `${files.length}件選択中`;
 			saveButton.disabled = files.length === 0 || !path;
 			saveSummary.textContent =
@@ -659,7 +663,8 @@
 
 		saveButton.addEventListener("click", () => {
 			const files = moodleSnapshot.files.filter((file) => selectedFileIds.has(file.id));
-			const path = manualPath.value.trim() || selectedPath;
+			const suggestion = suggestions.find((item) => item.path === selectedPath);
+			const path = manualPath.value.trim() || suggestion?.relativePath || "";
 			if (files.length === 0 || !path) {
 				return;
 			}

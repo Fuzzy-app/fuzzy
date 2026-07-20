@@ -47,8 +47,67 @@ describe("MockApiClient（サンプルデータ）", () => {
 				mimeHint: "pdf",
 			},
 		});
-		expect(result[0]?.path).toContain("データベース");
-		expect(result[0]?.path).toContain("第4回");
+		expect(result[0]?.relativePath).toBe("2026前期\\データベース\\第4回");
+		expect(result[0]?.path).toBe(
+			"C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+		);
+		expect(result[1]?.relativePath).toBe("2026前期\\データベース");
+
+		const syllabusResult = await client.suggestSavePath({
+			course: { name: "人工知能", sectionTitle: "授業計画", breadcrumbs: [] },
+			fileMeta: {
+				title: "授業計画.pdf",
+				url: "https://moodle.example/mod/resource/view.php?id=10",
+				moodleFileId: "10",
+				sectionTitle: "授業計画",
+				mimeHint: "pdf",
+			},
+		});
+		expect(syllabusResult).toHaveLength(1);
+		expect(syllabusResult[0]?.relativePath).not.toContain("授業計画");
+	});
+
+	test("suggestSavePath: コース名の補足・角括弧・絵文字を保存先から除外する", async () => {
+		const result = await client.suggestSavePath({
+			course: {
+				name: "情報科学📚［2026年度・前期］",
+				sectionTitle: "第4回🔬[配布資料]",
+				breadcrumbs: ["2026前期"],
+			},
+			fileMeta: {
+				title: "講義資料.pdf",
+				url: "https://moodle.example/pluginfile.php/40/file.pdf",
+				moodleFileId: "40",
+				sectionTitle: "第4回🔬[配布資料]",
+				mimeHint: "pdf",
+			},
+		});
+		expect(result[0]?.relativePath).toBe("2026前期\\情報科学\\第4回");
+		expect(result[0]?.relativePath).not.toMatch(/[()[\]（）［］\p{Extended_Pictographic}]/u);
+	});
+
+	test("suggestSavePath: 更新済みルールとコース別例外をその場で反映する", async () => {
+		const freshClient = new MockApiClient();
+		await freshClient.updateCourseRuleOverride({
+			courseId: 2,
+			override: {
+				splitBySection: false,
+				patternTemplate: "{term}/{course}",
+				note: null,
+			},
+		});
+		const result = await freshClient.suggestSavePath({
+			course: { name: "データベース", sectionTitle: "Week 4", breadcrumbs: [] },
+			fileMeta: {
+				title: "normalization.pdf",
+				url: "https://moodle.example/mod/resource/view.php?id=10",
+				moodleFileId: "10",
+				sectionTitle: "Week 4",
+				mimeHint: "pdf",
+			},
+		});
+		expect(result).toHaveLength(1);
+		expect(result[0]?.relativePath).toBe("2026前期\\データベース");
 	});
 
 	test("checkSimilarFiles: 保存前に似ている保存済みファイルを返す", async () => {
@@ -101,6 +160,28 @@ describe("MockApiClient（サンプルデータ）", () => {
 	test("getRuleViolations: ルール違反ファイルが2件返る", async () => {
 		const violations = await client.getRuleViolations();
 		expect(violations.length).toBe(2);
+		expect(violations[0]).toMatchObject({
+			courseId: 2,
+			relativePath: "正規化_メモ.docx",
+		});
+		expect(violations.every((item) => !("savedPath" in item))).toBe(true);
+		expect(violations.every((item) => !/^(?:[a-z]:[\\/]|[\\/]{2})/i.test(item.relativePath))).toBe(
+			true,
+		);
+	});
+
+	test("getDuplicateGroups: 相対パスと0.0〜1.0の類似度を返す", async () => {
+		const groups = await client.getDuplicateGroups();
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.members.map((member) => member.relativePath)).toEqual([
+			"2026前期\\データベース\\第4回\\第4回_正規化.pdf",
+			"ダウンロード\\第4回_正規化(1).pdf",
+		]);
+		expect(
+			groups.every((group) =>
+				group.members.every((member) => member.similarity >= 0 && member.similarity <= 1),
+			),
+		).toBe(true);
 	});
 
 	test("getRules: アプリ演習のコース別例外ルールが含まれる", async () => {

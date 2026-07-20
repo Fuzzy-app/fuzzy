@@ -5,7 +5,7 @@ import type {
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
-	DuplicateGroup,
+	DuplicateGroupListItem,
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
@@ -13,7 +13,7 @@ import type {
 	NotificationRuleUpdateResult,
 	RuleSet,
 	RuleUpdateResult,
-	RuleViolation,
+	RuleViolationListItem,
 	SaveFilesRequest,
 	SaveFilesResult,
 	SaveSuggestion,
@@ -60,9 +60,9 @@ export interface FuzzyApiClient {
 
 	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult>;
 
-	getRuleViolations(): Promise<RuleViolation[]>;
+	getRuleViolations(): Promise<RuleViolationListItem[]>;
 
-	getDuplicateGroups(): Promise<DuplicateGroup[]>;
+	getDuplicateGroups(): Promise<DuplicateGroupListItem[]>;
 
 	getNotificationRules(): Promise<NotificationRule[]>;
 

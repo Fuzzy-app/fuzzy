@@ -1,7 +1,9 @@
 import { type CourseDashboardEntry, type RuleSet, removeSectionSegment } from "@fuzzy/shared";
+import { RuleIntegrityController } from "../../lib/integrity/state";
 import type { RuleManagementStore } from "../../lib/rules/state";
 import { buildCourseRulePanel } from "./courseRulePanel";
 import { buildGlobalRulePanel } from "./globalRulePanel";
+import { createRuleIntegrityPanel } from "./ruleIntegrityPanel";
 import {
 	buildRulesHeader,
 	buildRulesMessage,
@@ -22,7 +24,7 @@ import { ensureRulesScreenStyle } from "./rulesScreenStyle";
 
 export interface RuleManagementScreen {
 	root: HTMLElement;
-	activate(): void;
+	activate(): Promise<void>;
 }
 
 export interface RuleManagementScreenOptions {
@@ -36,6 +38,7 @@ export function createRuleManagementScreen(
 	ensureRulesScreenStyle();
 
 	const root = element("div", "fuzzy-screen fuzzy-rules-screen");
+	const integrityPanel = createRuleIntegrityPanel(new RuleIntegrityController(options.store));
 	const previewValues = createScreenPreviewValues();
 	const overrideDrafts = new Map<number, CourseRuleDraft>();
 	let globalDraft = "";
@@ -49,6 +52,14 @@ export function createRuleManagementScreen(
 	let loadPromise: Promise<void> | null = null;
 	let message: { kind: "success" | "error"; text: string } | null = null;
 	let courseLoadError: string | null = null;
+	let activeView: "rules" | "integrity" = "rules";
+	let mutationRevision = options.store.snapshot.mutationRevision;
+
+	options.store.subscribe((state) => {
+		if (state.mutationRevision === mutationRevision) return;
+		mutationRevision = state.mutationRevision;
+		integrityPanel.invalidate("violations");
+	});
 
 	const clearMessage = () => {
 		message = null;
@@ -112,10 +123,15 @@ export function createRuleManagementScreen(
 	};
 
 	const activate = () => {
-		if (loadPromise) return;
+		if (activeView === "integrity") {
+			integrityPanel.deactivate();
+			return integrityPanel.activate();
+		}
+		if (loadPromise) return loadPromise;
 		loadPromise = initialize().finally(() => {
 			loadPromise = null;
 		});
+		return loadPromise;
 	};
 
 	const reloadRules = async () => {
@@ -261,16 +277,62 @@ export function createRuleManagementScreen(
 		}
 	};
 
+	const selectView = (view: "rules" | "integrity") => {
+		if (activeView === view) return;
+		activeView = view;
+		if (view === "integrity") void integrityPanel.activate();
+		else integrityPanel.deactivate();
+		render();
+	};
+
 	const buildTabs = (): HTMLElement => {
 		const tabs = element("nav", "fuzzy-rules-tabs");
 		tabs.setAttribute("aria-label", "整理ルールの表示内容");
-		const ruleTab = element("button", "fuzzy-rules-tab is-active", "ルール設定");
+		tabs.setAttribute("role", "tablist");
+		const ruleTab = element(
+			"button",
+			activeView === "rules" ? "fuzzy-rules-tab is-active" : "fuzzy-rules-tab",
+			"ルール設定",
+		);
 		ruleTab.type = "button";
-		ruleTab.setAttribute("aria-current", "page");
-		const warningTab = element("button", "fuzzy-rules-tab", "警告・未整理ファイル");
+		ruleTab.id = "fuzzy-rule-settings-tab";
+		ruleTab.setAttribute("role", "tab");
+		ruleTab.setAttribute("aria-selected", String(activeView === "rules"));
+		ruleTab.setAttribute("aria-controls", "fuzzy-rule-settings-panel");
+		ruleTab.tabIndex = activeView === "rules" ? 0 : -1;
+		const warningTab = element(
+			"button",
+			activeView === "integrity" ? "fuzzy-rules-tab is-active" : "fuzzy-rules-tab",
+			"警告・未整理ファイル",
+		);
 		warningTab.type = "button";
-		warningTab.disabled = true;
-		warningTab.title = "issue #53 でルール違反の一覧へ接続します";
+		warningTab.id = "fuzzy-rule-integrity-tab";
+		warningTab.setAttribute("role", "tab");
+		warningTab.setAttribute("aria-selected", String(activeView === "integrity"));
+		warningTab.setAttribute("aria-controls", "fuzzy-rule-integrity-panel");
+		warningTab.tabIndex = activeView === "integrity" ? 0 : -1;
+		ruleTab.addEventListener("click", () => selectView("rules"));
+		warningTab.addEventListener("click", () => selectView("integrity"));
+		const tabButtons = [ruleTab, warningTab];
+		for (const [index, button] of tabButtons.entries()) {
+			button.addEventListener("keydown", (event) => {
+				let targetIndex: number | null = null;
+				if (event.key === "ArrowRight") targetIndex = (index + 1) % tabButtons.length;
+				if (event.key === "ArrowLeft") {
+					targetIndex = (index - 1 + tabButtons.length) % tabButtons.length;
+				}
+				if (event.key === "Home") targetIndex = 0;
+				if (event.key === "End") targetIndex = tabButtons.length - 1;
+				if (targetIndex === null) return;
+				event.preventDefault();
+				selectView(targetIndex === 0 ? "rules" : "integrity");
+				root
+					.querySelector<HTMLButtonElement>(
+						targetIndex === 0 ? "#fuzzy-rule-settings-tab" : "#fuzzy-rule-integrity-tab",
+					)
+					?.focus();
+			});
+		}
 		tabs.append(ruleTab, warningTab);
 		return tabs;
 	};
@@ -290,9 +352,9 @@ export function createRuleManagementScreen(
 				"グローバルと違う保存方法だけを保持します。",
 			),
 			buildSummaryCard(
-				"警告への接続",
-				"同じルールを利用",
-				"issue #53 ではこの保存状態を違反・未整理ファイルの判定基準にします。",
+				"整合性チェック",
+				"警告タブで確認",
+				"この保存状態を違反・未整理ファイルの判定基準にします。",
 				"is-future",
 			),
 		);
@@ -302,9 +364,19 @@ export function createRuleManagementScreen(
 	function render(): void {
 		const rules = currentRules();
 		root.replaceChildren(buildRulesHeader(), buildTabs());
+		if (activeView === "integrity") {
+			root.append(integrityPanel.root);
+			return;
+		}
+
+		const rulesPanel = element("section", "fuzzy-rule-settings-panel");
+		rulesPanel.id = "fuzzy-rule-settings-panel";
+		rulesPanel.setAttribute("role", "tabpanel");
+		rulesPanel.setAttribute("aria-labelledby", "fuzzy-rule-settings-tab");
+		root.append(rulesPanel);
 
 		if (rules && options.store.mode === "mock") {
-			root.append(
+			rulesPanel.append(
 				element(
 					"div",
 					"fuzzy-rules-message is-mock",
@@ -312,9 +384,11 @@ export function createRuleManagementScreen(
 				),
 			);
 		}
-		if (message) root.append(buildRulesMessage(message));
+		if (message) rulesPanel.append(buildRulesMessage(message));
 		if (loadingRules && !rules) {
-			root.append(element("section", "fuzzy-placeholder", "保存済みルールを読み込んでいます…"));
+			rulesPanel.append(
+				element("section", "fuzzy-placeholder", "保存済みルールを読み込んでいます…"),
+			);
 			return;
 		}
 
@@ -330,11 +404,11 @@ export function createRuleManagementScreen(
 				element("p", "", options.store.snapshot.error ?? "ルールを読み込めませんでした。"),
 				retry,
 			);
-			root.append(errorPanel);
+			rulesPanel.append(errorPanel);
 			return;
 		}
 
-		root.append(
+		rulesPanel.append(
 			buildOverview(rules),
 			buildGlobalRulePanel({
 				rules,

@@ -30,7 +30,7 @@ const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "rules" | "organize";
+type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "rules";
 // 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
 // import 時の衝突・混同を避けるため View 用として別名にしている。
 type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -43,12 +43,16 @@ interface MenuItem {
 }
 
 const menuItems: readonly MenuItem[] = [
-	{ id: "dashboard", label: "ダッシュボード", enabled: true, description: "issue57" },
-	{ id: "search", label: "横断検索", enabled: true, description: "issue54" },
-	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "issue55" },
+	{
+		id: "dashboard",
+		label: "ダッシュボード",
+		enabled: true,
+		description: "資料と締切の概要",
+	},
+	{ id: "search", label: "横断検索", enabled: true, description: "保存資料を横断検索" },
+	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "課題と締切を確認" },
 	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
-	{ id: "rules", label: "整理ルール", enabled: true, description: "issue52" },
-	{ id: "organize", label: "重複の整理", enabled: false, description: "今後の画面" },
+	{ id: "rules", label: "整理ルール", enabled: true, description: "保存ルールと警告を確認" },
 ];
 
 const placeholderCopy: Record<
@@ -60,7 +64,6 @@ const placeholderCopy: Record<
 		copy: "課題一覧と提出状況を、この画面でまとめて確認できます。",
 	},
 	courses: { title: "コース一覧", copy: "今後の画面としてここへ統合していきます。" },
-	organize: { title: "重複の整理", copy: "保存済み資料の整理UIをここへ追加する予定です。" },
 };
 
 interface SearchState {
@@ -1199,9 +1202,7 @@ export function mountFuzzyShell(): void {
 			nav.append(link);
 		}
 
-		const footer = el("div", "fuzzy-sidebar-footer");
-		footer.append(el("p", "", "開発中"), el("span", "", "issue55 + issue56 + issue57"));
-		sidebar.append(brand, nav, footer);
+		sidebar.append(brand, nav);
 
 		const content = el("div", "fuzzy-content");
 		const topbar = el("header", "fuzzy-topbar");
@@ -1550,27 +1551,6 @@ function ensureStyle(): void {
 
 		.fuzzy-side-link.is-active .fuzzy-side-dot {
 			background: #756cff;
-		}
-
-		.fuzzy-sidebar-footer {
-			border-radius: 10px;
-			padding: 12px 10px;
-			background: rgba(255, 255, 255, 0.08);
-			font-size: var(--fuzzy-font-size-caption);
-			font-weight: 600;
-			line-height: 1.6;
-		}
-
-		.fuzzy-sidebar-footer p,
-		.fuzzy-sidebar-footer span {
-			margin: 0;
-			display: block;
-		}
-
-		.fuzzy-sidebar-footer p {
-			margin-bottom: 4px;
-			color: #a9f2b9;
-			font-weight: 800;
 		}
 
 		.fuzzy-content {
@@ -2442,10 +2422,6 @@ function ensureStyle(): void {
 				font-size: 0.68rem;
 				line-height: 1.25;
 				text-align: center;
-			}
-
-			.fuzzy-sidebar-footer {
-				display: none;
 			}
 
 			.fuzzy-brand {

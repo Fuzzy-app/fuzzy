@@ -159,9 +159,9 @@ describe("SQLite-backed extension setup status", () => {
 	test("確認開始日時をTauriへ渡し、SQLite由来の応答だけで完了する", async () => {
 		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 		const runtime: ExtensionStatusRuntime = {
-			invoke: async (command, args) => {
+			invoke: async <T>(command: string, args: Record<string, unknown>) => {
 				calls.push({ command, args });
-				return readyStatus;
+				return readyStatus as T;
 			},
 		};
 		const since = "2026-07-20T12:00:30.000Z";
@@ -187,7 +187,7 @@ describe("SQLite-backed extension setup status", () => {
 			code: "STATUS_UNAVAILABLE",
 		});
 		const runtime: ExtensionStatusRuntime = {
-			invoke: async () => ({ state: "ready", observation: null }),
+			invoke: async <T>() => ({ state: "ready", observation: null }) as T,
 		};
 		await expect(
 			getExtensionSetupStatusClient("2026-07-20T12:00:00.000Z", runtime),

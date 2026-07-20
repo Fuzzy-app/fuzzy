@@ -10,20 +10,23 @@ import { parseHTML } from "linkedom";
 import { createRuleManagementScreen } from "../../apps/extension/src/entrypoints/content/rulesScreen";
 import {
 	BackgroundRuleManagementApi,
+	FUZZY_RULE_MANAGEMENT_MESSAGE_TYPE,
+	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
 } from "../../apps/extension/src/lib/rules/backgroundApi";
 import { RuleManagementStore } from "../../apps/extension/src/lib/rules/state";
+import type { RuleManagementApi } from "../../apps/extension/src/lib/rules/types";
 
 describe("MockApiClient のルール管理", () => {
 	test("共有サンプルで初期化し、アプリ演習の例外を返す", async () => {
 		const rules = await new MockApiClient().getRules();
 
-		expect(rules.globalPatternTemplate).toBe("{year}/{term}/{course}/第{section}回");
+		expect(rules.globalPatternTemplate).toBe("{term}/{course}/第{section}回");
 		expect(rules.courseOverrides).toContainEqual({
 			courseId: 4,
 			courseName: "アプリ演習",
 			splitBySection: false,
-			patternTemplate: "{year}/{term}/{course}",
+			patternTemplate: "{term}/{course}",
 			note: "実習課題はまとめて1フォルダで管理したいため回ごとに分けない",
 		});
 	});
@@ -34,7 +37,7 @@ describe("MockApiClient のルール管理", () => {
 
 		expect((await firstApi.getRules()).globalPatternTemplate).toBe("{year}/{course}/{assignment}");
 		expect((await new MockApiClient().getRules()).globalPatternTemplate).toBe(
-			"{year}/{term}/{course}/第{section}回",
+			"{term}/{course}/第{section}回",
 		);
 	});
 
@@ -127,6 +130,28 @@ describe("MockApiClient のルール管理", () => {
 			note: null,
 		});
 	});
+
+	test("警告・重複一覧もルール専用のbackground境界で中継する", async () => {
+		const centralApi = new MockApiClient();
+		const transport = {
+			sendMessage: (message: Parameters<typeof respondToRuleManagementRequest>[1]) =>
+				respondToRuleManagementRequest(Promise.resolve(centralApi), message),
+		};
+		const client = new BackgroundRuleManagementApi(transport);
+
+		expect((await client.getRuleViolations())[0]).toMatchObject({
+			courseId: 2,
+			relativePath: "正規化_メモ.docx",
+		});
+		expect((await client.getDuplicateGroups())[0]?.members[0]).toHaveProperty("relativePath");
+		expect(
+			isRuleManagementRequestMessage({
+				type: FUZZY_RULE_MANAGEMENT_MESSAGE_TYPE,
+				method: "getDuplicateGroups",
+				request: {},
+			}),
+		).toBe(true);
+	});
 });
 
 describe("ルールテンプレート", () => {
@@ -170,6 +195,32 @@ describe("RuleManagementStore", () => {
 		expect(store.snapshot.saving).toBeNull();
 		expect(store.snapshot.lastSavedTarget).toEqual({ scope: "global" });
 		expect(store.snapshot.lastSavedAt).not.toBeNull();
+		expect(store.snapshot.mutationRevision).toBe(1);
+	});
+
+	test("更新後の再読込に失敗しても、更新成功revisionを失わない", async () => {
+		const mock = new MockApiClient();
+		let failReload = false;
+		const api: RuleManagementApi = {
+			mode: "mock",
+			getRules: () => (failReload ? Promise.reject(new Error("再読込に失敗")) : mock.getRules()),
+			updateGlobalRule: async (request) => {
+				const result = await mock.updateGlobalRule(request);
+				failReload = true;
+				return result;
+			},
+			updateCourseRuleOverride: (request) => mock.updateCourseRuleOverride(request),
+			getRuleViolations: () => mock.getRuleViolations(),
+			getDuplicateGroups: () => mock.getDuplicateGroups(),
+		};
+		const store = new RuleManagementStore(api);
+		await store.load();
+
+		await expect(
+			store.updateGlobalRule({ patternTemplate: "{course}/{assignment}" }),
+		).rejects.toThrow("再読込に失敗");
+		expect(store.snapshot.mutationRevision).toBe(1);
+		expect(store.snapshot.rules?.globalPatternTemplate).toBe("{term}/{course}/第{section}回");
 	});
 });
 
@@ -187,8 +238,7 @@ describe("ルール管理画面", () => {
 			loadCourses: async () => (await api.getDashboard()).courses,
 		});
 		document.body.append(screen.root);
-		screen.activate();
-		await Bun.sleep(100);
+		await screen.activate();
 
 		expect(screen.root.querySelector("h1")?.textContent).toBe("保存ルールを管理");
 		expect(screen.root.querySelector(".fuzzy-rules-message.is-mock")?.textContent).toContain(
@@ -207,5 +257,29 @@ describe("ルール管理画面", () => {
 		expect(screen.root.querySelector<HTMLButtonElement>(".fuzzy-rules-save-button")?.disabled).toBe(
 			true,
 		);
+
+		const warningTab = screen.root.querySelector<HTMLButtonElement>("#fuzzy-rule-integrity-tab");
+		expect(warningTab?.disabled).toBe(false);
+		expect(warningTab?.getAttribute("role")).toBe("tab");
+		warningTab?.click();
+		await screen.activate();
+		expect(warningTab?.getAttribute("aria-controls")).toBe("fuzzy-rule-integrity-panel");
+		const currentWarningTab = screen.root.querySelector<HTMLButtonElement>(
+			"#fuzzy-rule-integrity-tab",
+		);
+		expect(currentWarningTab?.getAttribute("aria-selected")).toBe("true");
+		expect(
+			screen.root.querySelector("#fuzzy-rule-integrity-panel")?.getAttribute("aria-labelledby"),
+		).toBe("fuzzy-rule-integrity-tab");
+		expect(screen.root.querySelector("#fuzzy-rule-integrity-panel")?.textContent).toContain(
+			"正規化_メモ.docx",
+		);
+
+		const homeKey = new window.Event("keydown", { bubbles: true });
+		Object.defineProperty(homeKey, "key", { value: "Home" });
+		currentWarningTab?.dispatchEvent(homeKey);
+		expect(
+			screen.root.querySelector("#fuzzy-rule-settings-tab")?.getAttribute("aria-selected"),
+		).toBe("true");
 	});
 });

@@ -7,6 +7,7 @@
 //! 起動時に issue #36 でSQLiteへ接続しスキーマを適用する。issue #37 で `ping`
 //! を実装し疎通確認できるようにした。他コマンドは順次 `dispatch` に追加していく。
 
+pub mod api_types;
 mod protocol;
 
 use std::io::{stdin, stdout};

@@ -5,7 +5,7 @@ import type {
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
-	DuplicateGroup,
+	DuplicateGroupListItem,
 	ExtensionRuntimeObservation,
 	ExtensionRuntimeReport,
 	ExtractZipRequest,
@@ -15,7 +15,7 @@ import type {
 	NotificationRuleUpdateResult,
 	RuleSet,
 	RuleUpdateResult,
-	RuleViolation,
+	RuleViolationListItem,
 	SaveFilesRequest,
 	SaveFilesResult,
 	SaveSuggestion,
@@ -142,11 +142,11 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("updateCourseRuleOverride", request);
 	}
 
-	getRuleViolations(): Promise<RuleViolation[]> {
+	getRuleViolations(): Promise<RuleViolationListItem[]> {
 		return this.send("getRuleViolations", {});
 	}
 
-	getDuplicateGroups(): Promise<DuplicateGroup[]> {
+	getDuplicateGroups(): Promise<DuplicateGroupListItem[]> {
 		return this.send("getDuplicateGroups", {});
 	}
 
