@@ -16,6 +16,7 @@ import {
 	collectMoodlePageSnapshotWithNestedFolders,
 	safeCollectMoodlePageSnapshot,
 } from "../../lib/moodle/snapshotCollector";
+import { createCollapseHandleIcon } from "./savePanelHandle";
 import { createSavePanelOpenStateWriter, loadSavePanelOpenState } from "./savePanelState";
 import {
 	SAVE_HANDLE_ID,
@@ -58,7 +59,7 @@ export async function mountSavePanel(): Promise<void> {
 	const collapseHandle = document.createElement("button");
 	collapseHandle.id = SAVE_HANDLE_ID;
 	collapseHandle.type = "button";
-	collapseHandle.textContent = "›";
+	collapseHandle.append(createCollapseHandleIcon(document));
 	collapseHandle.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
 	collapseHandle.addEventListener("click", () => setPanelOpen(false));
 	collapseHandle.style.display = "none";
