@@ -10,4 +10,4 @@
 - `IndexEngine` — Tantivy を用いた全文索引の構築・検索
 - `DuplicateDetector` — blake3 / simhash・LSH による重複・類似ファイル検出
 
-保存パターン推定には `folder_only`、`frequency`、`evidence_weighted` の3方式があり、`ConfigurableScanEngine` から選択できる。将来の学習方式も `PatternEstimator` を実装して同じ入出力で追加する。詳細は `docs/保存パターン推定方式.md` を参照。
+保存パターン推定には`folder_only`、`frequency`、`evidence_weighted`の3方式があり、`ConfigurableScanEngine`から選択できる。推定結果はDB用のディレクトリテンプレートと比較評価用のファイル名テンプレートを分離する。将来の学習方式も`PatternEstimator`を実装して同じ入出力で追加する。詳細は`docs/保存パターン推定方式.md`を参照。
