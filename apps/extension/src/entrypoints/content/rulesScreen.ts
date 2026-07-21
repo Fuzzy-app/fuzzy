@@ -148,7 +148,7 @@ export function createRuleManagementScreen(
 				text:
 					options.store.mode === "mock"
 						? "現在のサンプルルールを読み込みました。"
-					: "保存済みの設定を読み込みました。",
+						: "保存済みの設定を読み込みました。",
 			};
 		} catch (error) {
 			message = { kind: "error", text: errorMessage(error) };
@@ -177,7 +177,7 @@ export function createRuleManagementScreen(
 				text:
 					options.store.mode === "mock"
 						? "サンプルのグローバルルールへ反映しました。"
-					: "基本の保存設定を保存しました。",
+						: "基本の保存設定を保存しました。",
 			};
 		} catch (error) {
 			message = { kind: "error", text: errorMessage(error) };

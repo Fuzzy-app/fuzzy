@@ -9,7 +9,7 @@ import { ensureRuleIntegrityPanelStyle } from "./ruleIntegrityPanelStyle";
 import { element } from "./rulesScreenElements";
 
 const VIOLATION_ERROR_MESSAGE =
-	"保存場所が設定と異なる資料を取得できませんでした。時間をおいて、もう一度読み込んでください。";
+	"保存場所や名前が保存ルールと異なる資料を取得できませんでした。時間をおいて、もう一度読み込んでください。";
 const DUPLICATE_ERROR_MESSAGE =
 	"同じ可能性がある資料を取得できませんでした。時間をおいて、もう一度読み込んでください。";
 
@@ -40,7 +40,7 @@ export function createRuleIntegrityPanel(controller: RuleIntegrityController): R
 			element(
 				"p",
 				"fuzzy-integrity-copy",
-				"保存場所が設定と異なる資料や、同じ可能性がある資料を確認できます。自動で移動・削除することはありません。",
+				"保存場所や名前が保存ルールと異なる資料や、同じ可能性がある資料を確認できます。自動で移動・削除することはありません。",
 			),
 		);
 		const refreshButton = element(
@@ -87,7 +87,7 @@ function buildSummary(state: Readonly<RuleIntegrityState>): HTMLElement {
 	wrap.setAttribute("aria-label", "整理が必要な資料の集計");
 	wrap.append(
 		buildMetric(
-			"設定と異なる資料",
+			"保存ルールと異なる資料",
 			metricValue(state.violations.status, summary.violationCount, state.violations.data.length),
 		),
 		buildMetric(
@@ -138,7 +138,7 @@ function buildViolationSection(
 	onRetry: () => void,
 ): HTMLElement {
 	const section = buildSection(
-		"保存場所が設定と異なる資料",
+		"保存場所や名前が保存ルールと異なる資料",
 		"fuzzy-integrity-violations-title",
 	);
 	section.setAttribute("aria-busy", String(state.violations.status === "loading"));
@@ -149,7 +149,7 @@ function buildViolationSection(
 		state.violations.data.length,
 		VIOLATION_ERROR_MESSAGE,
 		onRetry,
-		"保存場所が設定と異なる資料は見つかりませんでした。",
+		"保存場所や名前が保存ルールと異なる資料は見つかりませんでした。",
 	);
 	if (state.violations.data.length > 0) {
 		const list = element("ul", "fuzzy-integrity-list");
@@ -239,7 +239,7 @@ function buildSection(title: string, titleId: string): HTMLElement {
 
 function buildPath(relativePath: string): HTMLElement {
 	const row = element("p", "fuzzy-integrity-path");
-	row.append(element("span", "", "Fuzzyフォルダ › "), element("code", "", relativePath));
+	row.append(element("span", "", "保存ルート › "), element("code", "", relativePath));
 	return row;
 }
 

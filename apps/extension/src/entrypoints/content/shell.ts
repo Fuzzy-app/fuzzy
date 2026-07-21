@@ -19,6 +19,11 @@ import {
 } from "@fuzzy/shared";
 import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
 import { createRuleManagementStore } from "../../lib/rules/state";
+import {
+	DEADLINE_REVIEW_HELP_TEXT,
+	FUZZY_SCREEN_LABELS,
+	type FuzzyScreenId,
+} from "../../lib/ui/screenCopy";
 import { createCalendarPanelController } from "./calendarPanel";
 import { type RuleManagementScreen, createRuleManagementScreen } from "./rulesScreen";
 
@@ -31,7 +36,7 @@ const STASH_ID = "fuzzy-shell-stash";
 const BRAND_ICON_PATH = "/icon/fuzzy.svg";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "rules";
+type ScreenId = FuzzyScreenId;
 // 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
 // import 時の衝突・混同を避けるため View 用として別名にしている。
 type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -45,12 +50,16 @@ interface MenuItem {
 const menuItems: readonly MenuItem[] = [
 	{
 		id: "dashboard",
-		label: "ダッシュボード",
+		label: FUZZY_SCREEN_LABELS.dashboard,
 		description: "資料と締切の概要",
 	},
-	{ id: "search", label: "資料を検索", description: "保存した資料を検索" },
-	{ id: "deadlines", label: "課題・締切", description: "課題と締切を確認" },
-	{ id: "rules", label: "保存・整理設定", description: "保存方法と整理が必要な資料を確認" },
+	{ id: "search", label: FUZZY_SCREEN_LABELS.search, description: "保存した資料を検索" },
+	{ id: "deadlines", label: FUZZY_SCREEN_LABELS.deadlines, description: "課題と締切を確認" },
+	{
+		id: "rules",
+		label: FUZZY_SCREEN_LABELS.rules,
+		description: "保存方法と整理が必要な資料を確認",
+	},
 ];
 
 interface SearchState {
@@ -959,14 +968,7 @@ export function mountFuzzyShell(): void {
 			});
 			filterRow.append(button);
 		}
-		toolbar.append(
-			filterRow,
-			el(
-				"p",
-				"fuzzy-toolbar-copy",
-				"提出済みにすると一覧へすぐ反映されます。「締切日を確認」は正しい期限を取得できなかった課題です。",
-			),
-		);
+		toolbar.append(filterRow, el("p", "fuzzy-toolbar-copy", DEADLINE_REVIEW_HELP_TEXT));
 
 		const listHost = el("section", "fuzzy-deadline-list");
 		const visible = sortAssignments(filterAssignments());
@@ -1447,7 +1449,7 @@ function ensureStyle(): void {
 			min-height: 0;
 			overflow: hidden;
 			background:
-				radial-gradient(circle at top left, rgba(108, 60, 255, 0.12), transparent 22%),
+				radial-gradient(circle at top left, var(--fuzzy-color-primary-overlay), transparent 22%),
 				linear-gradient(180deg, #eef1ff 0%, var(--fuzzy-color-page) 100%);
 			color: var(--fuzzy-color-text-strong);
 			font-family: var(--fuzzy-font-family);
@@ -1562,7 +1564,7 @@ function ensureStyle(): void {
 
 		.fuzzy-top-status[data-mode="native"] {
 			background: var(--fuzzy-color-success-soft);
-			color: var(--fuzzy-color-success);
+			color: var(--fuzzy-color-success-strong);
 		}
 
 		.fuzzy-close-button {
@@ -1833,7 +1835,7 @@ function ensureStyle(): void {
 
 		.fuzzy-search-note {
 			background:
-				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
+				linear-gradient(145deg, var(--fuzzy-color-primary-overlay), transparent 48%),
 				var(--fuzzy-color-surface);
 		}
 
@@ -2011,7 +2013,7 @@ function ensureStyle(): void {
 			padding: 16px;
 			border-radius: 14px;
 			background:
-				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
+				linear-gradient(145deg, var(--fuzzy-color-primary-overlay), transparent 48%),
 				var(--fuzzy-color-surface);
 			box-shadow: var(--fuzzy-shadow-card);
 		}
@@ -2381,6 +2383,10 @@ function ensureStyle(): void {
 		.fuzzy-search-input-wrap:focus-within {
 			outline: 3px solid var(--fuzzy-focus-ring);
 			outline-offset: 2px;
+		}
+
+		.fuzzy-side-link:focus {
+			outline-color: var(--fuzzy-focus-ring-inverse);
 		}
 
 		@media (max-width: 1080px) {

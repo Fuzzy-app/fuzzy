@@ -118,7 +118,7 @@ describe("整理が必要な資料パネル", () => {
 		await root.panel.activate();
 
 		expect(root.element.textContent).toContain(
-			"保存場所が設定と異なる資料は見つかりませんでした",
+			"保存場所や名前が保存ルールと異なる資料は見つかりませんでした",
 		);
 		expect(root.element.textContent).toContain("同じ・よく似た資料は見つかりませんでした");
 		root.element.querySelector<HTMLButtonElement>(".fuzzy-integrity-button.is-primary")?.click();
@@ -149,7 +149,29 @@ describe("整理が必要な資料パネル", () => {
 		expect(root.element.textContent).not.toContain("C:\\Users");
 	});
 
-	test("重複候補だけ失敗しても設定と異なる資料を残し、失敗側だけ再読込できる", async () => {
+	test("命名だけの違反も案内し、保存ルート名を固定しない", async () => {
+		const root = setupPanel({
+			getRuleViolations: async () => [
+				{
+					...primaryViolation,
+					fileName: "講義資料.pdf",
+					relativePath: "情報アーキテクチャ\\講義資料.pdf",
+					reason: "保存場所は正しいですが、ファイル名が命名ルールと異なります",
+				},
+			],
+			getDuplicateGroups: async () => [],
+		});
+		await root.panel.activate();
+
+		expect(root.element.textContent).toContain("保存場所や名前が保存ルールと異なる資料");
+		expect(root.element.textContent).toContain(
+			"保存場所は正しいですが、ファイル名が命名ルールと異なります",
+		);
+		expect(root.element.textContent).toContain("保存ルート › 情報アーキテクチャ\\講義資料.pdf");
+		expect(root.element.textContent).not.toContain("Fuzzyフォルダ");
+	});
+
+	test("重複候補だけ失敗しても保存ルールと異なる資料を残し、失敗側だけ再読込できる", async () => {
 		const warning = spyOn(console, "warn").mockImplementation(() => undefined);
 		let duplicateCalls = 0;
 		const root = setupPanel({
@@ -187,7 +209,7 @@ describe("整理が必要な資料パネル", () => {
 		await root.panel.activate();
 
 		expect(root.element.textContent).toContain(
-			"保存場所が設定と異なる資料を取得できませんでした",
+			"保存場所や名前が保存ルールと異なる資料を取得できませんでした",
 		);
 		expect(root.element.textContent).not.toContain("raw backend failure");
 		expect(root.element.textContent).toContain("候補の組み合わせ 1");
@@ -234,7 +256,7 @@ describe("整理が必要な資料パネル", () => {
 		await root.panel.activate();
 
 		expect(root.element.textContent).toContain(
-			"保存場所が設定と異なる資料を取得できませんでした",
+			"保存場所や名前が保存ルールと異なる資料を取得できませんでした",
 		);
 		expect(root.element.textContent).not.toContain("C:\\Users\\secret");
 		expect(root.element.textContent).toContain("候補の組み合わせ 1");

@@ -22,11 +22,7 @@ export function buildGlobalRulePanel(options: GlobalRulePanelOptions): HTMLEleme
 	title.append(
 		element("p", "fuzzy-section-label", "すべての授業に適用"),
 		element("h2", "", "基本の保存設定"),
-		element(
-			"p",
-			"fuzzy-rules-panel-copy",
-			"授業ごとの設定がない場合は、この保存方法を使います。",
-		),
+		element("p", "fuzzy-rules-panel-copy", "授業ごとの設定がない場合は、この保存方法を使います。"),
 	);
 	const reloadButton = element("button", "fuzzy-rules-secondary-button", "保存値を再読み込み");
 	reloadButton.type = "button";

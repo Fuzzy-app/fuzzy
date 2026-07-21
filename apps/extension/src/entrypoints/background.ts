@@ -18,6 +18,7 @@ import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
 } from "../lib/rules/backgroundApi";
+import { buildSyncResultNotificationMessage } from "../lib/ui/screenCopy";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
@@ -47,8 +48,7 @@ async function notifyWhenSyncEventIsNew(client: FuzzyApiClient): Promise<void> {
 		type: "basic",
 		iconUrl: browser.runtime.getURL("/icon/128.png"),
 		title: "Fuzzy: Moodleデータを取得しました",
-		message:
-			total > 0 ? `変更が${total}件あります。締切ハブで確認できます。` : "変更はありません。",
+		message: buildSyncResultNotificationMessage(total),
 	});
 	await browser.storage.local.set({ [storageKey]: event.id });
 }
