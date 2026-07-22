@@ -12,8 +12,8 @@ use crate::types::{RuleContext, RuleFileEntry, RuleSet, RuleViolation};
 mod template;
 
 use template::{
-	join_relative_path, pattern_tokens, relative_components, validate_base_folder,
-	validate_file_name, validate_pattern, ExpectedRelativePath,
+	course_root_pattern, join_relative_path, pattern_tokens, relative_components,
+	validate_base_folder, validate_file_name, validate_pattern, ExpectedRelativePath,
 };
 
 /// 保存ルールの照合・違反検出を担うトレイト。
@@ -87,7 +87,8 @@ impl RuleEngine for DefaultRuleEngine {
 		validate_file_name(file_name)?;
 		let rule = effective_rule(rules, context.course_id);
 		let context = context_with_file_assignment(context, file_name);
-		let expected = ExpectedRelativePath::new(rule.pattern, &context)?;
+		let pattern = pattern_for_context(rule.pattern, &context)?;
+		let expected = ExpectedRelativePath::new(&pattern, &context)?;
 		expected.render_complete()
 	}
 }
@@ -195,7 +196,20 @@ fn check_file_with_valid_rules(
 		));
 	}
 	let context = context_with_file_assignment(&entry.context, &entry.file_name);
-	let expected = match ExpectedRelativePath::new(rule.pattern, &context) {
+	let pattern = match pattern_for_context(rule.pattern, &context) {
+		Ok(pattern) => pattern,
+		Err(error) => {
+			return Some(violation(
+				entry,
+				format!(
+					"{}との照合に必要な情報が不正です: {error}",
+					rule.source.label()
+				),
+				None,
+			));
+		}
+	};
+	let expected = match ExpectedRelativePath::new(&pattern, &context) {
 		Ok(expected) => expected,
 		Err(error) => {
 			return Some(violation(
@@ -255,6 +269,17 @@ fn check_file_with_valid_rules(
 	}
 
 	None
+}
+
+fn pattern_for_context(pattern: &str, context: &RuleContext) -> EngineResult<String> {
+	if context.section.is_none()
+		&& pattern_tokens(pattern)?
+			.iter()
+			.any(|token| token == "section")
+	{
+		return course_root_pattern(pattern);
+	}
+	Ok(pattern.to_string())
 }
 
 fn context_with_file_assignment(context: &RuleContext, file_name: &str) -> RuleContext {
@@ -339,6 +364,19 @@ mod tests {
 	}
 
 	#[test]
+	fn suggests_the_course_root_when_section_metadata_is_missing() {
+		let suggestion = DefaultRuleEngine
+			.suggest_save_path(
+				"正規化_メモ.docx",
+				&context(2, "データベース", None),
+				&rules(),
+			)
+			.unwrap();
+
+		assert_eq!(suggestion, "2026前期\\データベース");
+	}
+
+	#[test]
 	fn uses_the_file_stem_for_a_missing_assignment_value() {
 		let assignment_rules = RuleSet {
 			global_pattern_template: "{term}/{course}/{assignment}".to_string(),
@@ -395,10 +433,10 @@ mod tests {
 	}
 
 	#[test]
-	fn reports_missing_metadata_even_when_the_structure_looks_valid() {
+	fn accepts_the_course_root_when_section_metadata_is_missing() {
 		let file = entry(
 			3,
-			r"C:\Users\sample\Documents\大学\2026前期\データベース\第4回\第4回_正規化.pdf",
+			r"C:\Users\sample\Documents\大学\2026前期\データベース\第4回_正規化.pdf",
 			context(2, "データベース", None),
 		);
 		let violations = DefaultRuleEngine
@@ -409,8 +447,7 @@ mod tests {
 			)
 			.unwrap();
 
-		assert_eq!(violations.len(), 1);
-		assert!(violations[0].reason.contains("セクション"));
+		assert!(violations.is_empty());
 	}
 
 	#[test]

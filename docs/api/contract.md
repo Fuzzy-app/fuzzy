@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-20
+最終更新: 2026-07-22
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はnative-hostのAPI DTOを正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期のRust DTOは `apps/native-host/src/api_types.rs`、暫定TS型は `packages/shared/src/types.ts` に定義する。`crates/engine-core` の絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -40,6 +40,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `getRules`                 | グローバル／コース別ルール取得         | `{}` → `RuleSet`                                    |
 | `updateGlobalRule`         | グローバルルール更新              | `{ patternTemplate }` → `{ ok }`                    |
 | `updateCourseRuleOverride` | コース別例外ルール更新             | `{ courseId, override: { splitBySection, patternTemplate, note } }` → `{ ok }` |
+| `updateCourseFolderName`   | 保存用コースフォルダ名の編集・自動提案への復帰 | `{ courseId, folderName: string \| null }` → `{ ok: true, courseFolder: CourseFolderNameResolution }` |
 | `getRuleViolations`        | ルール違反ファイル一覧             | `{}` → `RuleViolationListItem[]`                    |
 | `getDuplicateGroups`       | 重複ファイル一覧                | `{}` → `DuplicateGroupListItem[]`                   |
 | `getNotificationRules`     | 通知タイミング設定取得             | `{}` → `NotificationRule[]`                         |
@@ -49,7 +50,41 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 
-`SaveSuggestion` は `{ path, relativePath, confidence, similarMatches? }` とする。`path` はnative-hostが保存に使う、`app_settings.base_folder_path`を含む絶対パス、`relativePath`はUI表示・手動編集に使う保存ルート以下の相対パスである。`suggestSavePath`はSQLiteに保存されたグローバルルールとコース別例外を適用する。コース名・セクション名の半角／全角の補足括弧と絵文字は推薦フォルダ名から除外するが、簡略化後に同名となるコースはMoodleの安定コースIDで区別する。クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
+`suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。backendは`moodleCourseId`でSQLiteのコースを解決し、省略時は同名候補が一意な場合だけ既存コースへ結び付ける。曖昧な場合は`RULE_CONFLICT`を返し、同じフォルダへの混在を許可しない。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
+
+`SaveSuggestion`とコース保存名の型は次のとおりとする。
+
+```ts
+type CourseFolderNameWarningCode = "name_conflict" | "name_shortened";
+
+interface CourseFolderNameWarning {
+	code: CourseFolderNameWarningCode;
+	message: string;
+	suggestedFolderName: string;
+}
+
+interface CourseFolderNameResolution {
+	courseId: number | null;
+	folderName: string;
+	warnings: CourseFolderNameWarning[];
+}
+
+interface SaveSuggestion {
+	path: string;
+	relativePath: string;
+	confidence: number;
+	similarMatches?: SimilarFileMatch[];
+	courseFolder: CourseFolderNameResolution;
+}
+```
+
+`path`はnative-hostが保存に使う、`app_settings.base_folder_path`を含む絶対パス、`relativePath`はUI表示・手動編集に使う保存ルート以下の相対パスである。`suggestSavePath`はSQLiteに保存されたグローバルルールとコース別例外を適用する。適用パターンに`{section}`があってセクション情報を取得できない場合は、そのコース直下までのパターンへ縮退し、エラーにしない。
+
+コース保存名の生成・検証はbackendだけが担当する。生の名前をNFKCへ揃え、補足括弧・絵文字・Windows禁止文字を処理し、UTF-16で80コード単位を超える場合は単語境界、次に書記素境界で短縮して決定的サフィックスを付ける。簡略化後の衝突では、除去された補足の識別語、Moodle安定コースIDの順で一意な別名を生成し、`name_conflict`を返す。短縮時は`name_shortened`を返す。警告の`message`と`suggestedFolderName`はUIに表示し、ユーザーが編集できるようにする。
+
+`updateCourseFolderName.folderName`はユーザーが選んだ単一フォルダ名、`null`は自動提案へ戻す操作を表す。backendはNFKC後にWindows名と80 UTF-16コード単位の上限を検証し、全コースをトランザクション内で再解決する。別コースが現在使用中の実効名と同じ編集名、および再解決後に異なるコースの実効名が大文字・小文字を区別しない比較で同一になる更新は`RULE_CONFLICT`としてロールバックする。編集によって別コースの現在の保存名を暗黙に変更しない。
+
+クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
 
 #### 1.2.1 ルール違反・重複一覧の型と安全境界
 

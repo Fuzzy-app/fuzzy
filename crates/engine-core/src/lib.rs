@@ -27,6 +27,8 @@ pub mod scan;
 pub mod section;
 pub mod types;
 
+mod windows_names;
+
 pub use database::{resolve_db_path, Database};
 pub use error::{EngineError, EngineResult};
 pub use extension_runtime::{

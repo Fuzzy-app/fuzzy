@@ -20,6 +20,8 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseFolderNameRequest,
+	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
 	UpdateGlobalRuleRequest,
 } from "../types";
@@ -59,6 +61,10 @@ export interface FuzzyApiClient {
 	updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult>;
 
 	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult>;
+
+	updateCourseFolderName(
+		request: UpdateCourseFolderNameRequest,
+	): Promise<UpdateCourseFolderNameResult>;
 
 	getRuleViolations(): Promise<RuleViolationListItem[]>;
 

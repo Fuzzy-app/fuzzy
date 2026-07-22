@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{EngineError, EngineResult};
 use crate::types::RuleContext;
+use crate::windows_names::validate_windows_component;
 
 const ALLOWED_TOKENS: [&str; 5] = ["year", "term", "course", "assignment", "section"];
 
@@ -242,53 +243,34 @@ pub(super) fn validate_file_name(file_name: &str) -> EngineResult<()> {
 	validate_windows_component("file_name", file_name)
 }
 
-fn validate_windows_component(field: &str, value: &str) -> EngineResult<()> {
-	if value.is_empty() {
-		return Err(EngineError::InvalidInput {
-			field: field.to_string(),
-			reason: "空の名前は使用できません".to_string(),
-		});
-	}
-	if value == "." || value == ".." {
-		return Err(EngineError::InvalidInput {
-			field: field.to_string(),
-			reason: ". や .. は使用できません".to_string(),
-		});
-	}
-	if value.ends_with(['.', ' ']) {
-		return Err(EngineError::InvalidInput {
-			field: field.to_string(),
-			reason: "末尾にピリオドや空白は使用できません".to_string(),
-		});
-	}
-	if value
-		.chars()
-		.any(|character| character.is_control() || r#"<>:"/\|?*"#.contains(character))
-	{
-		return Err(EngineError::InvalidInput {
-			field: field.to_string(),
-			reason: "Windowsの名前に使用できない文字が含まれています".to_string(),
-		});
-	}
-	let stem = value.split('.').next().unwrap_or(value);
-	if is_windows_reserved_name(stem) {
-		return Err(EngineError::InvalidInput {
-			field: field.to_string(),
-			reason: format!("Windowsの予約名 {stem} は使用できません"),
-		});
-	}
-	Ok(())
-}
+/// セクション情報が無い場合に、テンプレートをコース直下までへ縮退させる。
+///
+/// 通常の `{term}/{course}/第{section}回` は `{term}/{course}` になる。
+/// `{course}` と `{section}` が同一セグメントにある場合も、コース直下を明示するため
+/// そのセグメントを `{course}` のみに置き換える。
+pub(super) fn course_root_pattern(pattern: &str) -> EngineResult<String> {
+	let segments = pattern
+		.trim()
+		.split(['/', '\\'])
+		.map(str::trim)
+		.collect::<Vec<_>>();
+	let course_index = segments
+		.iter()
+		.position(|segment| {
+			pattern_tokens(segment).is_ok_and(|tokens| tokens.iter().any(|token| token == "course"))
+		})
+		.ok_or_else(|| EngineError::RuleConflict {
+			reason: "セクション欠落時の保存先を決定するには {course} が必要です".to_string(),
+		})?;
 
-fn is_windows_reserved_name(value: &str) -> bool {
-	let value = value.to_ascii_lowercase();
-	matches!(value.as_str(), "con" | "prn" | "aux" | "nul")
-		|| value
-			.strip_prefix("com")
-			.or_else(|| value.strip_prefix("lpt"))
-			.is_some_and(|number| {
-				matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-			})
+	let mut root = segments[..=course_index].to_vec();
+	if pattern_tokens(root[course_index])?
+		.iter()
+		.any(|token| token == "section")
+	{
+		root[course_index] = "{course}";
+	}
+	Ok(root.join("/"))
 }
 
 fn invalid_pattern(reason: &str) -> EngineError {

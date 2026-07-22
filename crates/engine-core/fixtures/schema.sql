@@ -22,12 +22,15 @@ CREATE INDEX idx_extension_runtime_last_seen
 	ON extension_runtime_observations(last_seen_at);
 
 CREATE TABLE courses (
-	id               INTEGER PRIMARY KEY AUTOINCREMENT,
-	moodle_course_id TEXT NOT NULL UNIQUE,
-	name             TEXT NOT NULL,
-	term             TEXT,
-	created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-	updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+	id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+	moodle_course_id     TEXT NOT NULL UNIQUE,
+	name                 TEXT NOT NULL,
+	academic_year        INTEGER CHECK (academic_year BETWEEN 1900 AND 9999),
+	term                 TEXT,
+	-- NULLならbackendがraw nameから正規化・衝突回避した名前を使用する。ユーザー変更時だけ保存する
+	folder_name_override TEXT,
+	created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+	updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE global_rule (
@@ -134,4 +137,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

@@ -100,11 +100,13 @@ describe("資料別の保存計画", () => {
 					path: `${ROOT}\\2026前期\\データベース`,
 					relativePath: "..\\別の場所",
 					confidence: 1,
+					courseFolder: courseFolder(),
 				},
 				{
 					path: `${ROOT}\\2026前期\\データベース`,
 					relativePath: "2026前期\\離散数学",
 					confidence: 1,
+					courseFolder: courseFolder(),
 				},
 			]),
 		).toEqual([createSuggestion("2026前期\\データベース")]);
@@ -112,7 +114,16 @@ describe("資料別の保存計画", () => {
 });
 
 function createSuggestion(relativePath: string, confidence = 0.9): SaveSuggestion {
-	return { path: `${ROOT}\\${relativePath}`, relativePath, confidence };
+	return {
+		path: `${ROOT}\\${relativePath}`,
+		relativePath,
+		confidence,
+		courseFolder: courseFolder(),
+	};
+}
+
+function courseFolder(): SaveSuggestion["courseFolder"] {
+	return { courseId: 2, folderName: "データベース", warnings: [] };
 }
 
 function createFile(title: string, sectionTitle: string, id: string): MoodleFileLink {

@@ -4,7 +4,83 @@
 //! 保存ルートからの相対パスだけを公開する。`packages/shared/src/types.ts` と
 //! `docs/api/contract.md` が定めるcamelCaseのwire形式に対応する。
 
-use serde::Serialize;
+use engine_core::folder_names::{
+	CourseFolderNameResolution as EngineCourseFolderNameResolution,
+	CourseFolderNameWarning as EngineCourseFolderNameWarning,
+	CourseFolderNameWarningCode as EngineCourseFolderNameWarningCode,
+};
+use serde::{Deserialize, Serialize};
+
+/// 保存用コースフォルダ名の編集要求。`None`は自動提案へ戻す。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCourseFolderNameRequest {
+	pub course_id: i64,
+	pub folder_name: Option<String>,
+}
+
+/// コースフォルダ名について利用者確認が必要な理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CourseFolderNameWarningCode {
+	NameConflict,
+	NameShortened,
+}
+
+/// backendの別名・短縮名を利用者へ提示する警告。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CourseFolderNameWarning {
+	pub code: CourseFolderNameWarningCode,
+	pub message: String,
+	pub suggested_folder_name: String,
+}
+
+/// 一意性を確認済みの保存用コースフォルダ名。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CourseFolderNameResolution {
+	pub course_id: i64,
+	pub folder_name: String,
+	pub warnings: Vec<CourseFolderNameWarning>,
+}
+
+/// 保存用コースフォルダ名の更新結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCourseFolderNameResult {
+	pub ok: bool,
+	pub course_folder: CourseFolderNameResolution,
+}
+
+impl From<EngineCourseFolderNameWarningCode> for CourseFolderNameWarningCode {
+	fn from(value: EngineCourseFolderNameWarningCode) -> Self {
+		match value {
+			EngineCourseFolderNameWarningCode::NameConflict => Self::NameConflict,
+			EngineCourseFolderNameWarningCode::NameShortened => Self::NameShortened,
+		}
+	}
+}
+
+impl From<EngineCourseFolderNameWarning> for CourseFolderNameWarning {
+	fn from(value: EngineCourseFolderNameWarning) -> Self {
+		Self {
+			code: value.code.into(),
+			message: value.message,
+			suggested_folder_name: value.suggested_folder_name,
+		}
+	}
+}
+
+impl From<EngineCourseFolderNameResolution> for CourseFolderNameResolution {
+	fn from(value: EngineCourseFolderNameResolution) -> Self {
+		Self {
+			course_id: value.course_id,
+			folder_name: value.folder_name,
+			warnings: value.warnings.into_iter().map(Into::into).collect(),
+		}
+	}
+}
 
 /// ルール違反一覧に表示する1件。
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -54,6 +130,20 @@ mod tests {
 
 	#[test]
 	fn dto_is_serialized_with_contract_field_names() {
+		let course_folder = CourseFolderNameResolution {
+			course_id: 2,
+			folder_name: "英語_A".to_string(),
+			warnings: vec![CourseFolderNameWarning {
+				code: CourseFolderNameWarningCode::NameConflict,
+				message: "同名になるため別名を提案しました".to_string(),
+				suggested_folder_name: "英語_A".to_string(),
+			}],
+		};
+		let value = serde_json::to_value(course_folder).unwrap();
+		assert_eq!(value["courseId"], 2);
+		assert_eq!(value["warnings"][0]["code"], "name_conflict");
+		assert_eq!(value["warnings"][0]["suggestedFolderName"], "英語_A");
+
 		let item = RuleViolationListItem {
 			file_id: 4,
 			file_name: "正規化_メモ.docx".to_string(),

@@ -6,7 +6,10 @@ use std::path::PathBuf;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use super::{db_err, Database};
-use crate::folder_names::{course_folder_name, CourseFolderIdentity};
+use crate::folder_names::{
+	course_folder_names_equal, normalize_course_folder_override, resolve_course_folder_names,
+	CourseFolderIdentity, CourseFolderNameResolution,
+};
 use crate::rule::RuleEngine;
 use crate::types::{
 	CourseRuleOverride, RuleComplianceSummary, RuleContext, RuleFileEntry, RuleSet,
@@ -27,6 +30,64 @@ impl Database {
 	/// ルール照合に必要な保存済みファイルとコース文脈を読み込む。
 	pub fn load_rule_files(&self) -> EngineResult<Vec<RuleFileEntry>> {
 		load_rule_files(&self.conn)
+	}
+
+	/// 全コースの、衝突しない保存用フォルダ名と利用者向け警告を読み込む。
+	pub fn load_course_folder_resolutions(&self) -> EngineResult<Vec<CourseFolderNameResolution>> {
+		load_course_folder_resolutions(&self.conn)
+	}
+
+	/// 利用者が編集したコースフォルダ名を保存し、全コース間の一意性を検証する。
+	///
+	/// `None` は上書き解除を表す。同名になる場合はトランザクションをロールバックする。
+	pub fn update_course_folder_name(
+		&mut self,
+		course_id: i64,
+		folder_name: Option<&str>,
+	) -> EngineResult<CourseFolderNameResolution> {
+		let normalized = folder_name
+			.map(normalize_course_folder_override)
+			.transpose()?;
+		let transaction = self
+			.conn
+			.transaction_with_behavior(TransactionBehavior::Immediate)
+			.map_err(db_err)?;
+		if let Some(folder_name) = &normalized {
+			let conflicts_with_existing = load_course_folder_resolutions(&transaction)?
+				.into_iter()
+				.any(|resolution| {
+					resolution.course_id != course_id
+						&& course_folder_names_equal(&resolution.folder_name, folder_name)
+				});
+			if conflicts_with_existing {
+				return Err(EngineError::RuleConflict {
+					reason: "別のコースが使用中のフォルダ名は指定できません".to_string(),
+				});
+			}
+		}
+		let updated = transaction
+			.execute(
+				"UPDATE courses
+				 SET folder_name_override = ?1, updated_at = datetime('now')
+				 WHERE id = ?2",
+				params![normalized, course_id],
+			)
+			.map_err(db_err)?;
+		if updated != 1 {
+			return Err(EngineError::NotFound {
+				entity: "コース".to_string(),
+				id: course_id.to_string(),
+			});
+		}
+
+		let resolution = load_course_folder_resolutions(&transaction)?
+			.into_iter()
+			.find(|resolution| resolution.course_id == course_id)
+			.ok_or_else(|| EngineError::Internal {
+				message: format!("コースID {course_id} の保存名を解決できませんでした"),
+			})?;
+		transaction.commit().map_err(db_err)?;
+		Ok(resolution)
 	}
 
 	/// 全保存済みファイルのルール適合状況を再計算し、`files`へ注釈する。
@@ -147,7 +208,10 @@ fn load_rule_set(conn: &Connection) -> EngineResult<RuleSet> {
 }
 
 fn load_rule_files(conn: &Connection) -> EngineResult<Vec<RuleFileEntry>> {
-	let course_folder_names = load_course_folder_names(conn)?;
+	let course_folder_names = load_course_folder_resolutions(conn)?
+		.into_iter()
+		.map(|resolution| (resolution.course_id, resolution.folder_name))
+		.collect::<BTreeMap<_, _>>();
 	let mut statement = conn
 		.prepare(
 			"SELECT
@@ -155,6 +219,7 @@ fn load_rule_files(conn: &Connection) -> EngineResult<Vec<RuleFileEntry>> {
 				f.saved_path,
 				f.original_name,
 				f.course_id,
+				c.academic_year,
 				c.term,
 				f.section_no
 			 FROM files f
@@ -166,7 +231,8 @@ fn load_rule_files(conn: &Connection) -> EngineResult<Vec<RuleFileEntry>> {
 		.query_map([], |row| {
 			let file_name: String = row.get(2)?;
 			let course_id: Option<i64> = row.get(3)?;
-			let term: Option<String> = row.get(4)?;
+			let academic_year: Option<i64> = row.get(4)?;
+			let term: Option<String> = row.get(5)?;
 			Ok(RuleFileEntry {
 				file_id: Some(row.get(0)?),
 				saved_path: PathBuf::from(row.get::<_, String>(1)?),
@@ -175,10 +241,10 @@ fn load_rule_files(conn: &Connection) -> EngineResult<Vec<RuleFileEntry>> {
 					course_id,
 					course_name: course_id
 						.and_then(|course_id| course_folder_names.get(&course_id).cloned()),
-					year: term.as_deref().and_then(year_from_term),
+					year: academic_year.map(|year| year.to_string()),
 					term,
 					assignment: None,
-					section: row.get::<_, Option<i64>>(5)?.map(|value| value.to_string()),
+					section: row.get::<_, Option<i64>>(6)?.map(|value| value.to_string()),
 				},
 			})
 		})
@@ -188,16 +254,19 @@ fn load_rule_files(conn: &Connection) -> EngineResult<Vec<RuleFileEntry>> {
 	Ok(files)
 }
 
-fn load_course_folder_names(conn: &Connection) -> EngineResult<BTreeMap<i64, String>> {
+fn load_course_folder_resolutions(
+	conn: &Connection,
+) -> EngineResult<Vec<CourseFolderNameResolution>> {
 	#[derive(Debug)]
 	struct CourseRow {
 		id: i64,
 		name: String,
 		stable_id: String,
+		folder_name_override: Option<String>,
 	}
 
 	let mut statement = conn
-		.prepare("SELECT id, name, moodle_course_id FROM courses ORDER BY id")
+		.prepare("SELECT id, name, moodle_course_id, folder_name_override FROM courses ORDER BY id")
 		.map_err(db_err)?;
 	let courses = statement
 		.query_map([], |row| {
@@ -205,6 +274,7 @@ fn load_course_folder_names(conn: &Connection) -> EngineResult<BTreeMap<i64, Str
 				id: row.get(0)?,
 				name: row.get(1)?,
 				stable_id: row.get(2)?,
+				folder_name_override: row.get(3)?,
 			})
 		})
 		.map_err(db_err)?
@@ -213,24 +283,13 @@ fn load_course_folder_names(conn: &Connection) -> EngineResult<BTreeMap<i64, Str
 	let identities = courses
 		.iter()
 		.map(|course| CourseFolderIdentity {
+			course_id: course.id,
 			name: &course.name,
 			stable_id: &course.stable_id,
+			folder_name_override: course.folder_name_override.as_deref(),
 		})
 		.collect::<Vec<_>>();
-	Ok(courses
-		.iter()
-		.map(|course| {
-			(
-				course.id,
-				course_folder_name(&course.name, &identities, Some(&course.stable_id)),
-			)
-		})
-		.collect())
-}
-
-fn year_from_term(term: &str) -> Option<String> {
-	let year = term.chars().take(4).collect::<String>();
-	(year.len() == 4 && year.chars().all(|character| character.is_ascii_digit())).then_some(year)
+	resolve_course_folder_names(&identities)
 }
 
 #[cfg(test)]
@@ -359,18 +418,18 @@ mod tests {
 		database
 			.conn()
 			.execute_batch(
-				"INSERT INTO courses (id, moodle_course_id, name, term) VALUES
-					(7, 'course-english-a', '英語（A）', '2026前期'),
-					(8, 'course-english-b', '英語［B］', '2026前期');
+				"INSERT INTO courses (id, moodle_course_id, name, academic_year, term) VALUES
+					(7, 'course-english-a', '英語（A）', 2026, '2026前期'),
+					(8, 'course-english-b', '英語［B］', 2026, '2026前期');
 				 INSERT INTO files (
 					id, course_id, section_no, original_name, saved_path,
 					size_bytes, hash_blake3
 				 ) VALUES
 					(10, 7, 1, '資料A.pdf',
-					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語_course-english-a\\第1回\\資料A.pdf',
+					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語_A\\第1回\\資料A.pdf',
 					 1, 'b3:course-a'),
 					(11, 8, 1, '資料B.pdf',
-					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語_course-english-b\\第1回\\資料B.pdf',
+					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語_B\\第1回\\資料B.pdf',
 					 1, 'b3:course-b');",
 			)
 			.unwrap();
@@ -382,9 +441,57 @@ mod tests {
 			.map(|file| file.context.course_name.as_deref().unwrap())
 			.collect::<Vec<_>>();
 
-		assert_eq!(
-			course_names,
-			vec!["英語_course-english-a", "英語_course-english-b"]
-		);
+		assert_eq!(course_names, vec!["英語_A", "英語_B"]);
+		assert!(database
+			.load_course_folder_resolutions()
+			.unwrap()
+			.into_iter()
+			.filter(|resolution| matches!(resolution.course_id, 7 | 8))
+			.all(|resolution| !resolution.warnings.is_empty()));
+	}
+
+	#[test]
+	fn course_folder_override_is_unique_and_rolls_back_on_conflict() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+
+		let updated = database
+			.update_course_folder_name(1, Some("共通ゼミ"))
+			.unwrap();
+		assert_eq!(updated.folder_name, "共通ゼミ");
+		assert!(matches!(
+			database.update_course_folder_name(2, Some("共通ゼミ")),
+			Err(EngineError::RuleConflict { .. })
+		));
+
+		let second_override: Option<String> = database
+			.conn()
+			.query_row(
+				"SELECT folder_name_override FROM courses WHERE id = 2",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(second_override, None);
+	}
+
+	#[test]
+	fn course_folder_override_cannot_take_an_existing_effective_name() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+
+		assert!(matches!(
+			database.update_course_folder_name(1, Some("データベース")),
+			Err(EngineError::RuleConflict { .. })
+		));
+		let first_override: Option<String> = database
+			.conn()
+			.query_row(
+				"SELECT folder_name_override FROM courses WHERE id = 1",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(first_override, None);
 	}
 }

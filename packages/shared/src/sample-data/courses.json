@@ -2,37 +2,49 @@
 	{
 		"id": 1,
 		"moodleCourseId": "course-350",
+		"academicYear": 2026,
 		"name": "情報アーキテクチャ",
-		"term": "2026前期"
+		"term": "2026前期",
+		"folderName": "情報アーキテクチャ"
 	},
 	{
 		"id": 2,
 		"moodleCourseId": "course-412",
+		"academicYear": 2026,
 		"name": "データベース",
-		"term": "2026前期"
+		"term": "2026前期",
+		"folderName": "データベース"
 	},
 	{
 		"id": 3,
 		"moodleCourseId": "course-318",
+		"academicYear": 2026,
 		"name": "離散数学",
-		"term": "2026前期"
+		"term": "2026前期",
+		"folderName": "離散数学"
 	},
 	{
 		"id": 4,
 		"moodleCourseId": "course-350-app",
+		"academicYear": 2026,
 		"name": "アプリ演習",
-		"term": "2026前期"
+		"term": "2026前期",
+		"folderName": "アプリ演習"
 	},
 	{
 		"id": 5,
 		"moodleCourseId": "course-274",
+		"academicYear": 2026,
 		"name": "認知科学概論",
-		"term": "2026前期"
+		"term": "2026前期",
+		"folderName": "認知科学概論"
 	},
 	{
 		"id": 6,
 		"moodleCourseId": "course-501",
+		"academicYear": 2026,
 		"name": "英語IIB",
-		"term": "2026前期"
+		"term": "2026前期",
+		"folderName": "英語IIB"
 	}
 ]

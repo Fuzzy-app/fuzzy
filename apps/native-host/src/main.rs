@@ -12,6 +12,9 @@ mod protocol;
 
 use std::io::{stdin, stdout};
 
+use api_types::{
+	CourseFolderNameResolution, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
+};
 use engine_core::{Database, EngineError, ExtensionRuntimeReport};
 use protocol::{Request, Response};
 
@@ -19,7 +22,7 @@ fn main() -> std::io::Result<()> {
 	// 起動時にSQLiteへ接続する（必要ならスキーマ適用・FK有効化）。
 	// 接続できなければホストとして機能しないため、stderrへ記録して異常終了する
 	// （拡張機能側は ping タイムアウトでサンプルデータのモック動作へフォールバックする）。
-	let database = Database::open_default().map_err(|e| {
+	let mut database = Database::open_default().map_err(|e| {
 		eprintln!("DB接続に失敗しました: {e}");
 		std::io::Error::other(e)
 	})?;
@@ -31,7 +34,7 @@ fn main() -> std::io::Result<()> {
 	// EOF（ブラウザ側のポート切断）で正常終了する。
 	while let Some(body) = protocol::read_message(&mut input)? {
 		let response = match serde_json::from_slice::<Request>(&body) {
-			Ok(request) => dispatch(&database, request),
+			Ok(request) => dispatch(&mut database, request),
 			// envelope自体が壊れておりidも取れないため、id: null で返す。
 			Err(e) => Response::err(None, "INTERNAL", format!("リクエストを解釈できません: {e}")),
 		};
@@ -42,17 +45,50 @@ fn main() -> std::io::Result<()> {
 
 /// コマンド名に応じて処理を振り分ける。
 ///
-/// 実装済みコマンドは issue #37 の `ping` のみ。未実装コマンドは `INTERNAL` を返す。
+/// 実装済みコマンド以外は `INTERNAL` を返す。
 /// 以降の issue でここに分岐を追加し、`db` を通じてSQLiteへアクセスする。
-fn dispatch(database: &Database, request: Request) -> Response {
+fn dispatch(database: &mut Database, request: Request) -> Response {
 	match request.command.as_str() {
 		"ping" => ping(request.id),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
+		"updateCourseFolderName" => update_course_folder_name(database, request),
 		_ => Response::err(
 			Some(request.id),
 			"INTERNAL",
 			format!("コマンド '{}' は未実装です", request.command),
 		),
+	}
+}
+
+/// 利用者が編集した保存用コースフォルダ名をSQLiteへ保存する。
+fn update_course_folder_name(database: &mut Database, request: Request) -> Response {
+	let update = match serde_json::from_value::<UpdateCourseFolderNameRequest>(request.payload) {
+		Ok(update) => update,
+		Err(error) => {
+			return Response::err(
+				Some(request.id),
+				"INVALID_REQUEST",
+				format!("コースフォルダ名の更新内容を解釈できません: {error}"),
+			);
+		}
+	};
+
+	match database.update_course_folder_name(update.course_id, update.folder_name.as_deref()) {
+		Ok(course_folder) => {
+			let result = UpdateCourseFolderNameResult {
+				ok: true,
+				course_folder: CourseFolderNameResolution::from(course_folder),
+			};
+			match serde_json::to_value(result) {
+				Ok(data) => Response::ok(request.id, data),
+				Err(error) => Response::err(
+					Some(request.id),
+					"INTERNAL",
+					format!("応答を生成できません: {error}"),
+				),
+			}
+		}
+		Err(error) => engine_error_response(request.id, error),
 	}
 }
 
@@ -85,7 +121,9 @@ fn report_extension_runtime(database: &Database, request: Request) -> Response {
 fn engine_error_response(id: String, error: EngineError) -> Response {
 	let code = match error {
 		EngineError::InvalidInput { .. } => "INVALID_REQUEST",
+		EngineError::NotFound { .. } => "NOT_FOUND",
 		EngineError::Database { .. } => "DB_ERROR",
+		EngineError::RuleConflict { .. } => "RULE_CONFLICT",
 		_ => "INTERNAL",
 	};
 	Response::err(Some(id), code, error.to_string())
@@ -108,13 +146,13 @@ mod tests {
 	/// 未知コマンドには `INTERNAL` エラーを返すこと。
 	#[test]
 	fn unknown_cmd_internal_err() {
-		let db = Database::open_in_memory().unwrap();
+		let mut db = Database::open_in_memory().unwrap();
 		let request = Request {
 			id: "req-1".to_string(),
 			command: "unknownCommand".to_string(),
 			payload: serde_json::Value::Null,
 		};
-		let response = dispatch(&db, request);
+		let response = dispatch(&mut db, request);
 		assert_eq!(response.id.as_deref(), Some("req-1"));
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "INTERNAL");
@@ -123,13 +161,13 @@ mod tests {
 	/// `ping` は ok レスポンスで version を返すこと。
 	#[test]
 	fn ping_returns_version() {
-		let db = Database::open_in_memory().unwrap();
+		let mut db = Database::open_in_memory().unwrap();
 		let request = Request {
 			id: "req-ping".to_string(),
 			command: "ping".to_string(),
 			payload: serde_json::json!({}),
 		};
-		let response = dispatch(&db, request);
+		let response = dispatch(&mut db, request);
 		assert_eq!(response.id.as_deref(), Some("req-ping"));
 		assert!(response.ok);
 		let data = response.data.expect("data があること");
@@ -138,7 +176,7 @@ mod tests {
 
 	#[test]
 	fn report_extension_runtime_persists_observation() {
-		let database = Database::open_in_memory().unwrap();
+		let mut database = Database::open_in_memory().unwrap();
 		let request = Request {
 			id: "req-runtime".to_string(),
 			command: "reportExtensionRuntime".to_string(),
@@ -149,7 +187,7 @@ mod tests {
 			}),
 		};
 
-		let response = dispatch(&database, request);
+		let response = dispatch(&mut database, request);
 		assert!(response.ok);
 		assert_eq!(
 			response.data.unwrap()["extensionVersion"],
@@ -166,7 +204,7 @@ mod tests {
 
 	#[test]
 	fn report_extension_runtime_rejects_invalid_payload() {
-		let database = Database::open_in_memory().unwrap();
+		let mut database = Database::open_in_memory().unwrap();
 		let request = Request {
 			id: "req-invalid-runtime".to_string(),
 			command: "reportExtensionRuntime".to_string(),
@@ -177,8 +215,25 @@ mod tests {
 			}),
 		};
 
-		let response = dispatch(&database, request);
+		let response = dispatch(&mut database, request);
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+	}
+
+	#[test]
+	fn update_course_folder_name_rejects_unknown_course() {
+		let mut database = Database::open_in_memory().unwrap();
+		let request = Request {
+			id: "req-course-folder".to_string(),
+			command: "updateCourseFolderName".to_string(),
+			payload: serde_json::json!({
+				"courseId": 999,
+				"folderName": "別名"
+			}),
+		};
+
+		let response = dispatch(&mut database, request);
+		assert!(!response.ok);
+		assert_eq!(response.error.unwrap().code, "NOT_FOUND");
 	}
 }

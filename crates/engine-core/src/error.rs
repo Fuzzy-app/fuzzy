@@ -13,6 +13,8 @@ pub type EngineResult<T> = Result<T, EngineError>;
 pub enum EngineError {
 	/// API入力の形式・値が契約を満たさない。
 	InvalidInput { field: String, reason: String },
+	/// 指定されたエンティティが存在しない。
+	NotFound { entity: String, id: String },
 	/// 指定パスが存在しない、アクセスできない、またはフォルダではない。
 	InvalidPath { path: String, reason: String },
 	/// ファイルI/Oエラー。
@@ -38,6 +40,7 @@ impl fmt::Display for EngineError {
 			Self::InvalidInput { field, reason } => {
 				write!(f, "入力値 '{field}' が不正です: {reason}")
 			}
+			Self::NotFound { entity, id } => write!(f, "{entity} '{id}' が見つかりません"),
 			Self::InvalidPath { path, reason } => {
 				write!(f, "無効なパス '{path}': {reason}")
 			}
