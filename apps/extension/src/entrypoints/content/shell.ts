@@ -21,11 +21,36 @@ import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboa
 import { createRuleManagementStore } from "../../lib/rules/state";
 import {
 	DEADLINE_REVIEW_HELP_TEXT,
-	FUZZY_SCREEN_LABELS,
+	FUZZY_SCREENS,
+	FUZZY_SCREEN_ORDER,
 	type FuzzyScreenId,
 } from "../../lib/ui/screenCopy";
 import { createCalendarPanelController } from "./calendarPanel";
 import { type RuleManagementScreen, createRuleManagementScreen } from "./rulesScreen";
+import {
+	buildShellScreenHeader,
+	createBrandIcon,
+	shellElement as el,
+	fileKindClass,
+	fileKindLabel,
+} from "./shellElements";
+import {
+	type DeadlineViewFilter,
+	assignmentChangeFieldLabel,
+	assignmentChangeValueLabel,
+	deadlineFilterLabel,
+	formatCacheDate,
+	formatDate,
+	formatSyncDate,
+	isNeedsReview,
+	isOverdue,
+	isUpcoming,
+	parseDueAt,
+	sourceLabel,
+	submissionLabel,
+	syncChangeTotal,
+	syncTriggerLabel,
+} from "./shellPresentation";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -33,34 +58,15 @@ const BUTTON_ID = "fuzzy-shell-nav-button";
 const DRAWER_BUTTON_ID = "fuzzy-shell-drawer-button";
 const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
-const BRAND_ICON_PATH = "/icon/fuzzy.svg";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
 type ScreenId = FuzzyScreenId;
-// 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
-// import 時の衝突・混同を避けるため View 用として別名にしている。
-type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
 
-interface MenuItem {
-	id: ScreenId;
-	label: string;
-	description: string;
-}
-
-const menuItems: readonly MenuItem[] = [
-	{
-		id: "dashboard",
-		label: FUZZY_SCREEN_LABELS.dashboard,
-		description: "資料と締切の概要",
-	},
-	{ id: "search", label: FUZZY_SCREEN_LABELS.search, description: "保存した資料を検索" },
-	{ id: "deadlines", label: FUZZY_SCREEN_LABELS.deadlines, description: "課題と締切を確認" },
-	{
-		id: "rules",
-		label: FUZZY_SCREEN_LABELS.rules,
-		description: "保存方法と整理が必要な資料を確認",
-	},
-];
+const menuItems = FUZZY_SCREEN_ORDER.map((id) => ({
+	id,
+	label: FUZZY_SCREENS[id].navigationLabel,
+	description: FUZZY_SCREENS[id].description,
+}));
 
 interface SearchState {
 	/** 入力欄の現在値（inputイベントで随時同期） */
@@ -80,178 +86,6 @@ interface SearchScreen {
 	countLabel: HTMLElement;
 	resultsHost: HTMLElement;
 	noteHost: HTMLElement;
-}
-
-function getNow(): number {
-	return Date.now();
-}
-
-function parseDueAt(dueAt: string | null): number | null {
-	if (!dueAt) return null;
-	const time = Date.parse(dueAt);
-	return Number.isNaN(time) ? null : time;
-}
-
-// 和歌山大学のセメスター区分。締切ハブではクオーター単位ではなくセメスター単位で扱う。
-// 夏季集中などの特別授業も前期側に取り込めるよう、前期=4〜9月（[4,10)）／
-// 後期=10〜3月（[10,4)）と年間を隙間なく二分する。壊れた日付の締切は具体的な日付を
-// 出せないため、この区分を「おおよその所属セメスター」の目安として表示に使う。
-type Semester = "first" | "second";
-
-function semesterOf(time: number): Semester {
-	const month = new Date(time).getMonth() + 1; // 1〜12
-	return month >= 4 && month < 10 ? "first" : "second";
-}
-
-function semesterLabel(semester: Semester): string {
-	return semester === "first" ? "前期" : "後期";
-}
-
-function isNeedsReview(assignment: Assignment): boolean {
-	return (
-		assignment.dueAtStatus === "needs_review" ||
-		(assignment.dueAt !== null && parseDueAt(assignment.dueAt) === null)
-	);
-}
-
-function isOverdue(assignment: Assignment): boolean {
-	const dueTime = parseDueAt(assignment.dueAt);
-	return Boolean(dueTime !== null && !assignment.submitted && dueTime < getNow());
-}
-
-function isUpcoming(assignment: Assignment): boolean {
-	const dueTime = parseDueAt(assignment.dueAt);
-	return (
-		!assignment.submitted &&
-		(assignment.dueAt === null || dueTime !== null) &&
-		(dueTime === null || dueTime >= getNow()) &&
-		!isNeedsReview(assignment)
-	);
-}
-
-// フォーマッタ生成はコストが高いため、締切カードごとに作り直さずモジュールスコープで使い回す。
-const dueAtFormatter = new Intl.DateTimeFormat("ja-JP", {
-	month: "numeric",
-	day: "numeric",
-	hour: "2-digit",
-	minute: "2-digit",
-});
-
-const cacheDateFormatter = new Intl.DateTimeFormat("ja-JP", {
-	month: "numeric",
-	day: "numeric",
-	hour: "2-digit",
-	minute: "2-digit",
-});
-
-function formatCacheDate(cachedAt: string): string {
-	const time = Date.parse(cachedAt);
-	return Number.isNaN(time) ? "日時不明" : cacheDateFormatter.format(new Date(time));
-}
-
-function formatDate(dueAt: string | null): string {
-	if (!dueAt) return "期限未設定";
-	const time = parseDueAt(dueAt);
-	// 日付が壊れていて具体的な期限を出せない場合は、現在の和歌山大学のセメスターを
-	// 目安として示す（例: 前期中に開くと「前期中・日付要確認」）。
-	if (time === null) return `${semesterLabel(semesterOf(getNow()))}中・締切日を確認`;
-	return dueAtFormatter.format(new Date(time));
-}
-
-function submissionLabel(assignment: Assignment): string {
-	switch (assignment.submissionMode) {
-		case "moodle_auto":
-			return "Moodle提出";
-		case "manual":
-			return "手動提出";
-		case "notify_only":
-			return "通知のみ";
-		default:
-			return "確認中";
-	}
-}
-
-function sourceLabel(assignment: Assignment): string {
-	switch (assignment.source) {
-		case "moodle_dashboard":
-			return "Moodleダッシュボード";
-		case "moodle_text":
-			return "Moodle本文";
-		case "file_content":
-			return "資料本文";
-	}
-}
-
-function deadlineFilterLabel(filter: DeadlineViewFilter): string {
-	switch (filter) {
-		case "upcoming":
-			return "今後";
-		case "overdue":
-			return "期限切れ";
-		case "review":
-			return "締切日を確認";
-		default:
-			return "すべて";
-	}
-}
-
-const syncDateFormatter = new Intl.DateTimeFormat("ja-JP", {
-	month: "numeric",
-	day: "numeric",
-	hour: "2-digit",
-	minute: "2-digit",
-});
-
-function formatSyncDate(syncedAt: string): string {
-	const time = Date.parse(syncedAt);
-	if (Number.isNaN(time)) return "取得日時を確認してください";
-	return syncDateFormatter.format(new Date(time));
-}
-
-function syncTriggerLabel(trigger: DataSyncEvent["trigger"]): string {
-	return trigger === "manual" ? "手動取得" : "自動取得";
-}
-
-function assignmentChangeFieldLabel(field: AssignmentChange["field"]): string {
-	switch (field) {
-		case "dueAt":
-			return "期限";
-		case "title":
-			return "課題名";
-		case "submissionMode":
-			return "提出方法";
-		case "dueAtStatus":
-			return "期限判定";
-		case "submitted":
-			return "提出状況";
-	}
-}
-
-function assignmentChangeValueLabel(
-	field: AssignmentChange["field"],
-	value: string | null,
-): string {
-	if (value === null || value === "") return "未設定";
-	if (field === "dueAt") return formatDate(value);
-	if (field === "dueAtStatus") return value === "needs_review" ? "締切日を確認" : "通常";
-	if (field === "submitted") return value === "true" ? "提出済み" : "未提出";
-	if (field === "submissionMode") {
-		switch (value) {
-			case "moodle_auto":
-				return "Moodle提出";
-			case "manual":
-				return "手動提出";
-			case "notify_only":
-				return "通知のみ";
-			default:
-				return "確認中";
-		}
-	}
-	return value;
-}
-
-function syncChangeTotal(event: DataSyncEvent): number {
-	return event.newAssignmentCount + event.changedAssignmentCount + event.removedAssignmentCount;
 }
 
 export function mountFuzzyShell(): void {
@@ -550,7 +384,7 @@ export function mountFuzzyShell(): void {
 
 	const buildSearchScreen = (): SearchScreen => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("資料検索", "どのファイルに載っているか"));
+		screen.append(buildShellScreenHeader("search"));
 
 		const panel = el("section", "fuzzy-search-panel");
 
@@ -891,7 +725,7 @@ export function mountFuzzyShell(): void {
 
 	const buildDeadlineScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("課題・締切", "課題と提出状況をまとめて確認"));
+		screen.append(buildShellScreenHeader("deadlines"));
 
 		if (deadlineError) {
 			const errorPanel = el("section", "fuzzy-error-panel");
@@ -989,7 +823,7 @@ export function mountFuzzyShell(): void {
 
 	const buildDashboardScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("ダッシュボード", "学習状況をひと目で確認"));
+		screen.append(buildShellScreenHeader("dashboard"));
 
 		if (dashboardError) {
 			const errorPanel = el("section", "fuzzy-error-panel");
@@ -1227,55 +1061,6 @@ export function mountFuzzyShell(): void {
 		if (!otherNavItem || otherNavItem === navButton) return;
 		closeShell();
 	});
-}
-
-/**
- * createElement の薄いラッパー。動的な文字列は textContent 経由でのみDOMへ入れる
- * （HTML文字列の組み立てを避けることで、エスケープ漏れによるXSSを構造的に防ぐ）。
- */
-function el<K extends keyof HTMLElementTagNameMap>(
-	tag: K,
-	className = "",
-	textContent = "",
-): HTMLElementTagNameMap[K] {
-	const node = document.createElement(tag);
-	if (className) node.className = className;
-	if (textContent) node.textContent = textContent;
-	return node;
-}
-
-function createBrandIcon(className: string): HTMLImageElement {
-	const icon = el("img", className);
-	icon.src = browser.runtime.getURL(BRAND_ICON_PATH);
-	icon.alt = "";
-	icon.loading = "eager";
-	icon.decoding = "async";
-	icon.setAttribute("aria-hidden", "true");
-	return icon;
-}
-
-function buildScreenHeader(kicker: string, title: string): HTMLElement {
-	const header = el("header", "fuzzy-screen-header");
-	const wrap = el("div");
-	wrap.append(el("p", "fuzzy-screen-kicker", kicker), el("h1", "", title));
-	header.append(wrap);
-	return header;
-}
-
-function fileKindLabel(fileName: string): string {
-	const lower = fileName.toLowerCase();
-	if (lower.endsWith(".pdf")) return "PDF";
-	if (lower.endsWith(".ppt") || lower.endsWith(".pptx")) return "PPTX";
-	if (lower.endsWith(".doc") || lower.endsWith(".docx")) return "DOCX";
-	return "FILE";
-}
-
-function fileKindClass(fileName: string): string {
-	const lower = fileName.toLowerCase();
-	if (lower.endsWith(".pdf")) return "is-pdf";
-	if (lower.endsWith(".ppt") || lower.endsWith(".pptx")) return "is-ppt";
-	if (lower.endsWith(".doc") || lower.endsWith(".docx")) return "is-doc";
-	return "";
 }
 
 function findNavHost(): HTMLElement | null {
@@ -2146,7 +1931,7 @@ function ensureStyle(): void {
 
 		.fuzzy-change-value.is-new {
 			background: var(--fuzzy-color-success-soft);
-			color: var(--fuzzy-color-success);
+			color: var(--fuzzy-color-success-strong);
 		}
 
 		.fuzzy-change-arrow {

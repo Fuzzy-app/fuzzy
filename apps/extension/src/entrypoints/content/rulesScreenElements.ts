@@ -1,9 +1,12 @@
+import { FUZZY_SCREENS } from "../../lib/ui/screenCopy";
+
 export function buildRulesHeader(): HTMLElement {
+	const definition = FUZZY_SCREENS.rules;
 	const header = element("header", "fuzzy-screen-header");
 	const wrap = element("div");
 	wrap.append(
-		element("p", "fuzzy-screen-kicker", "保存・整理設定"),
-		element("h1", "", "資料の保存方法を設定"),
+		element("p", "fuzzy-screen-kicker", definition.kicker),
+		element("h1", "", definition.title),
 		element(
 			"p",
 			"fuzzy-rules-panel-copy",

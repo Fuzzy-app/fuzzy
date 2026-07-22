@@ -30,13 +30,18 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe("共通テーマのコントラスト", () => {
-	test("successの通常文字がsoft背景で4.5:1以上になる", () => {
-		expect(
-			contrastRatio(
-				cssColor("--fuzzy-color-success-strong"),
-				cssColor("--fuzzy-color-success-soft"),
-			),
-		).toBeGreaterThanOrEqual(4.5);
+	test("semantic色の通常文字がsoft背景で4.5:1以上になる", () => {
+		const semanticPairs = [
+			["--fuzzy-color-primary-strong", "--fuzzy-color-primary-soft"],
+			["--fuzzy-color-success-strong", "--fuzzy-color-success-soft"],
+			["--fuzzy-color-info", "--fuzzy-color-info-soft"],
+			["--fuzzy-color-warning", "--fuzzy-color-warning-soft"],
+			["--fuzzy-color-danger", "--fuzzy-color-danger-soft"],
+		] as const;
+
+		for (const [foreground, background] of semanticPairs) {
+			expect(contrastRatio(cssColor(foreground), cssColor(background))).toBeGreaterThanOrEqual(4.5);
+		}
 	});
 
 	test("フォーカスリングが明背景と暗いサイドバーで3:1以上になる", () => {
