@@ -161,3 +161,64 @@ pub struct DuplicateMatch {
 	/// 類似度（0.0〜1.0。`exact == true` なら 1.0）。
 	pub similarity: f64,
 }
+
+/// 1ファイルの重複検出用フィンガープリント。
+///
+/// `simhash` はSQLiteの符号付き`INTEGER`へ保存する際にビット列を保ったまま`i64`へ
+/// キャストし、読み込み時に`u64`へ戻す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFingerprint {
+	/// `b3:<64桁の小文字16進数>`形式のBLAKE3ハッシュ。
+	pub hash_blake3: String,
+	/// ファイル内容から計算した64 bit SimHash。
+	pub simhash: u64,
+}
+
+/// SQLiteへ登録済みのファイルとフィンガープリント。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredFileFingerprint {
+	/// SQLite上のファイルID。
+	pub file_id: i64,
+	/// BLAKE3ハッシュ。過去データとの比較のためDB上の文字列をそのまま保持する。
+	pub hash_blake3: String,
+	/// 64 bit SimHash。未計算の既存行は`None`。
+	pub simhash: Option<u64>,
+}
+
+/// 重複グループの検出方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DuplicateMethod {
+	/// BLAKE3が完全一致するファイル。
+	Exact,
+	/// SimHashのハミング距離が閾値以内のファイル。
+	Similar,
+}
+
+/// 検出した重複グループに属する1ファイル。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetectedDuplicateMember {
+	/// SQLite上のファイルID。
+	pub file_id: i64,
+	/// 0.0〜1.0の類似度。完全一致グループでは常に1.0。
+	pub similarity: f64,
+}
+
+/// SQLiteへ登録する前の重複グループ。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetectedDuplicateGroup {
+	/// 完全一致または類似検出。
+	pub method: DuplicateMethod,
+	/// 2件以上のメンバー。ファイルID順で保持する。
+	pub members: Vec<DetectedDuplicateMember>,
+}
+
+/// 重複グループの再計算・再登録結果。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DuplicateRefreshSummary {
+	/// BLAKE3完全一致グループ数。
+	pub exact_group_count: usize,
+	/// SimHash類似グループ数。
+	pub similar_group_count: usize,
+	/// 全グループの延べメンバー数。
+	pub member_count: usize,
+}

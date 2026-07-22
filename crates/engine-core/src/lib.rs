@@ -9,7 +9,7 @@
 //! - [`index::IndexEngine`] — Tantivy を用いた全文索引の構築・検索
 //! - [`duplicate::DuplicateDetector`] — blake3 / simhash による重複・類似ファイル検出
 //!
-//! Phase1 の #38 でScanEngine、#39 でRuleEngineを実装済み。DuplicateDetector（#40）と
+//! Phase1 の #38 でScanEngine、#39 でRuleEngine、#40 でDuplicateDetectorを実装済み。
 //! IndexEngine（#41）は後続issueで実装する。
 //!
 //! 【重要な設計制約】このクレートはファイルの自動移動・自動削除を一切行わない。

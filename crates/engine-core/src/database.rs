@@ -12,12 +12,15 @@ use crate::{
 	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION, SCHEMA_SQL,
 };
 
+mod duplicates;
 mod rules;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
 const EXTENSION_RUNTIME_MIGRATION_SQL: &str =
 	include_str!("../fixtures/migrations/0001_extension_runtime_observations.sql");
+const DUPLICATE_SIMILARITY_MIGRATION_SQL: &str =
+	include_str!("../fixtures/migrations/0001_duplicate_members_similarity.sql");
 const COURSE_FOLDER_NAMES_MIGRATION_SQL: &str =
 	include_str!("../fixtures/migrations/0002_course_folder_names.sql");
 
@@ -63,6 +66,9 @@ impl Database {
 		// schema.sql適用済みの既存DBにも新しいテーブルを追加する。
 		conn.execute_batch(EXTENSION_RUNTIME_MIGRATION_SQL)
 			.map_err(db_err)?;
+		if table_exists(&conn, "duplicate_members")? && schema_version(&conn)? < 1 {
+			apply_schema(&mut conn, DUPLICATE_SIMILARITY_MIGRATION_SQL)?;
+		}
 		if table_exists(&conn, "courses")? && schema_version(&conn)? < 2 {
 			apply_schema(&mut conn, COURSE_FOLDER_NAMES_MIGRATION_SQL)?;
 		}
@@ -348,6 +354,76 @@ mod tests {
 
 		assert_eq!(values, (Some(2026), None));
 		assert_eq!(schema_version(database.conn()).unwrap(), 2);
+	}
+
+	#[test]
+	fn migration_rebuilds_duplicate_members_with_similarity_constraint() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"PRAGMA foreign_keys = ON;
+			 CREATE TABLE files (id INTEGER PRIMARY KEY);
+			 CREATE TABLE duplicate_groups (id INTEGER PRIMARY KEY);
+			 CREATE TABLE duplicate_members (
+				group_id INTEGER NOT NULL REFERENCES duplicate_groups(id),
+				file_id INTEGER NOT NULL REFERENCES files(id),
+				similarity REAL NOT NULL DEFAULT 1.0,
+				PRIMARY KEY (group_id, file_id)
+			 );
+			 INSERT INTO files (id) VALUES (1);
+			 INSERT INTO duplicate_groups (id) VALUES (1);
+			 INSERT INTO duplicate_members (group_id, file_id, similarity)
+			 VALUES (1, 1, 0.75);",
+		)
+		.unwrap();
+
+		apply_schema(&mut conn, DUPLICATE_SIMILARITY_MIGRATION_SQL).unwrap();
+
+		assert_eq!(schema_version(&conn).unwrap(), 1);
+		assert!(conn
+			.execute(
+				"UPDATE duplicate_members SET similarity = 1.1 WHERE file_id = 1",
+				[],
+			)
+			.is_err());
+		let similarity: f64 = conn
+			.query_row(
+				"SELECT similarity FROM duplicate_members WHERE file_id = 1",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(similarity, 0.75);
+	}
+
+	#[test]
+	fn invalid_duplicate_similarity_aborts_migration_without_losing_rows() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"PRAGMA foreign_keys = ON;
+			 CREATE TABLE files (id INTEGER PRIMARY KEY);
+			 CREATE TABLE duplicate_groups (id INTEGER PRIMARY KEY);
+			 CREATE TABLE duplicate_members (
+				group_id INTEGER NOT NULL REFERENCES duplicate_groups(id),
+				file_id INTEGER NOT NULL REFERENCES files(id),
+				similarity REAL NOT NULL,
+				PRIMARY KEY (group_id, file_id)
+			 );
+			 INSERT INTO files (id) VALUES (1);
+			 INSERT INTO duplicate_groups (id) VALUES (1);
+			 INSERT INTO duplicate_members (group_id, file_id, similarity)
+			 VALUES (1, 1, 1.5);",
+		)
+		.unwrap();
+
+		assert!(apply_schema(&mut conn, DUPLICATE_SIMILARITY_MIGRATION_SQL).is_err());
+
+		let count: i64 = conn
+			.query_row("SELECT count(*) FROM duplicate_members", [], |row| {
+				row.get(0)
+			})
+			.unwrap();
+		assert_eq!(count, 1);
+		assert_eq!(schema_version(&conn).unwrap(), 0);
 	}
 
 	#[test]
