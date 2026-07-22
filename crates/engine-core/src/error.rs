@@ -1,7 +1,7 @@
 //! エンジン共通のエラー型。
 //!
-//! docs/api/contract.md のエラーコード（INVALID_PATH / DB_ERROR / INDEX_ERROR / INTERNAL 等）へ
-//! 変換しやすい粒度で定義する。Phase0 では最小限とし、実装が進むにつれ追加する。
+//! docs/api/contract.md のエラーコード（INVALID_REQUEST / DB_ERROR / IO_ERROR /
+//! RULE_CONFLICT / INTERNAL 等）へ変換しやすい粒度で定義する。
 
 use std::fmt;
 
@@ -24,6 +24,8 @@ pub enum EngineError {
 	},
 	/// SQLite等の永続化層のエラー。
 	Database { message: String },
+	/// グローバルルールとコース別例外ルールの定義が矛盾している。
+	RuleConflict { reason: String },
 	/// Tantivy索引の構築・検索エラー。
 	Index { message: String },
 	/// その他の内部エラー。
@@ -44,6 +46,7 @@ impl fmt::Display for EngineError {
 				write!(f, "パス '{path}' のI/Oエラー: {source}")
 			}
 			Self::Database { message } => write!(f, "DBエラー: {message}"),
+			Self::RuleConflict { reason } => write!(f, "ルール定義が矛盾しています: {reason}"),
 			Self::Index { message } => write!(f, "索引エラー: {message}"),
 			Self::Internal { message } => write!(f, "内部エラー: {message}"),
 		}

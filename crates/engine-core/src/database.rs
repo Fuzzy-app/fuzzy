@@ -12,6 +12,8 @@ use crate::{
 	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION, SCHEMA_SQL,
 };
 
+mod rules;
+
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
 const EXTENSION_RUNTIME_MIGRATION_SQL: &str =
