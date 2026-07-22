@@ -6,6 +6,109 @@
 
 use std::path::PathBuf;
 
+/// SQLiteに保存された課題の取得条件。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeadlineFilter {
+	pub course_id: Option<i64>,
+	pub include_past: bool,
+	pub needs_review_only: bool,
+}
+
+/// Moodle由来の課題・締切情報。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignmentRecord {
+	pub id: i64,
+	pub course_id: i64,
+	pub course_name: String,
+	pub title: String,
+	pub source: String,
+	pub due_at: Option<String>,
+	pub due_at_status: String,
+	pub submission_mode: String,
+	pub submitted: bool,
+}
+
+/// ダッシュボードに表示する1コース分の集計。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CourseDashboardRecord {
+	pub course_id: i64,
+	pub course_name: String,
+	pub file_count: i64,
+	pub violation_count: i64,
+	pub next_due_at: Option<String>,
+}
+
+/// SQLiteから算出したダッシュボード全体の集計。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardRecord {
+	pub courses: Vec<CourseDashboardRecord>,
+	pub total_files: i64,
+	pub total_violations: i64,
+	pub upcoming_deadline_count: i64,
+}
+
+/// コース名を結合済みの、画面表示用コース別ルール。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CourseRuleOverrideRecord {
+	pub course_id: i64,
+	pub course_name: String,
+	pub split_by_section: bool,
+	pub pattern_template: Option<String>,
+	pub note: Option<String>,
+}
+
+/// 画面表示用のルール一式。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSetRecord {
+	pub global_pattern_template: String,
+	pub course_overrides: Vec<CourseRuleOverrideRecord>,
+}
+
+/// SQLite上のルール違反。絶対パスはNative Messaging境界で相対化する。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleViolationRecord {
+	pub file_id: i64,
+	pub file_name: String,
+	pub course_id: Option<i64>,
+	pub course_name: Option<String>,
+	pub saved_path: PathBuf,
+	pub reason: String,
+}
+
+/// SQLite上の重複グループに属するファイル。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateFileRecord {
+	pub file_id: i64,
+	pub file_name: String,
+	pub saved_path: PathBuf,
+	pub similarity: f64,
+}
+
+/// SQLite上の重複グループ。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateGroupRecord {
+	pub group_id: i64,
+	pub method: String,
+	pub members: Vec<DuplicateFileRecord>,
+}
+
+/// 締切からの相対時間で表す通知ルール。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationRuleRecord {
+	pub id: i64,
+	pub offset_minutes: i64,
+	pub label: String,
+	pub enabled: bool,
+}
+
+/// 通知ルール一括更新の入力。`id = None`は新規追加を表す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationRuleInput {
+	pub id: Option<i64>,
+	pub offset_minutes: i64,
+	pub enabled: bool,
+}
+
 /// 再帰走査で発見された1ファイルのメタ情報。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileEntry {
