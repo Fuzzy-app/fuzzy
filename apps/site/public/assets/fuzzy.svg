@@ -1,0 +1,115 @@
+<svg
+	xmlns="http://www.w3.org/2000/svg"
+	viewBox="0 0 1024 1024"
+	role="img"
+	aria-labelledby="title description"
+>
+	<title id="title">Fuzzy icon</title>
+	<desc id="description">
+		A white letter F formed from colorful particles on a violet, blue, mint, and orange gradient.
+	</desc>
+	<defs>
+		<linearGradient id="base" x1="96" y1="80" x2="944" y2="936" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#6c3cff" />
+			<stop offset="0.45" stop-color="#238ee8" />
+			<stop offset="1" stop-color="#25d3a6" />
+		</linearGradient>
+		<radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientTransform="translate(150 170) rotate(42) scale(520 520)" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#9b47ee" stop-opacity="0.92" />
+			<stop offset="1" stop-color="#9b47ee" stop-opacity="0" />
+		</radialGradient>
+		<radialGradient id="cyanGlow" cx="0" cy="0" r="1" gradientTransform="translate(888 194) rotate(132) scale(560 560)" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#08b9e8" stop-opacity="0.92" />
+			<stop offset="1" stop-color="#08b9e8" stop-opacity="0" />
+		</radialGradient>
+		<radialGradient id="orangeGlow" cx="0" cy="0" r="1" gradientTransform="translate(150 870) rotate(-38) scale(570 540)" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#ff8a22" />
+			<stop offset="0.62" stop-color="#ff9d2b" stop-opacity="0.72" />
+			<stop offset="1" stop-color="#ff9d2b" stop-opacity="0" />
+		</radialGradient>
+		<radialGradient id="mintGlow" cx="0" cy="0" r="1" gradientTransform="translate(874 848) rotate(-140) scale(580 540)" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#2fd6ad" />
+			<stop offset="0.66" stop-color="#35d49e" stop-opacity="0.74" />
+			<stop offset="1" stop-color="#35d49e" stop-opacity="0" />
+		</radialGradient>
+		<filter id="softGlow" x="-15%" y="-15%" width="130%" height="130%">
+			<feGaussianBlur stdDeviation="12" />
+		</filter>
+		<mask id="fMask" maskUnits="userSpaceOnUse" x="320" y="205" width="520" height="620">
+			<rect width="1024" height="1024" fill="black" />
+			<rect x="412" y="238" width="148" height="566" rx="67" fill="white" />
+			<rect x="412" y="238" width="405" height="143" rx="70" fill="white" />
+			<rect x="412" y="460" width="350" height="132" rx="64" fill="white" />
+			<circle cx="415" cy="280" r="13" fill="black" />
+			<circle cx="420" cy="320" r="16" fill="black" />
+			<circle cx="410" cy="365" r="12" fill="black" />
+			<circle cx="421" cy="407" r="17" fill="black" />
+			<circle cx="410" cy="449" r="11" fill="black" />
+			<circle cx="419" cy="490" r="15" fill="black" />
+			<circle cx="407" cy="535" r="13" fill="black" />
+			<circle cx="421" cy="578" r="17" fill="black" />
+			<circle cx="410" cy="620" r="12" fill="black" />
+			<circle cx="421" cy="666" r="15" fill="black" />
+			<circle cx="408" cy="712" r="12" fill="black" />
+			<circle cx="420" cy="755" r="17" fill="black" />
+		</mask>
+		<clipPath id="iconClip">
+			<rect x="16" y="16" width="992" height="992" rx="184" />
+		</clipPath>
+	</defs>
+	<g clip-path="url(#iconClip)">
+		<rect x="16" y="16" width="992" height="992" fill="url(#base)" />
+		<rect x="16" y="16" width="992" height="992" fill="url(#violetGlow)" />
+		<rect x="16" y="16" width="992" height="992" fill="url(#cyanGlow)" />
+		<rect x="16" y="16" width="992" height="992" fill="url(#orangeGlow)" />
+		<rect x="16" y="16" width="992" height="992" fill="url(#mintGlow)" />
+		<g opacity="0.18" filter="url(#softGlow)">
+			<circle cx="160" cy="285" r="58" fill="#d65cff" />
+			<circle cx="198" cy="725" r="72" fill="#ff9a24" />
+			<circle cx="370" cy="562" r="65" fill="#4ee7c3" />
+		</g>
+		<g>
+			<circle cx="150" cy="300" r="16" fill="#c458f0" />
+			<circle cx="202" cy="360" r="15" fill="#aa72ed" />
+			<circle cx="250" cy="313" r="14" fill="#b987ee" />
+			<circle cx="298" cy="260" r="13" fill="#c5a1f4" />
+			<circle cx="276" cy="407" r="16" fill="#61d6f1" />
+			<circle cx="225" cy="450" r="15" fill="#48cef0" />
+			<circle cx="160" cy="478" r="16" fill="#13c5ed" />
+			<circle cx="292" cy="465" r="14" fill="#20c9ed" />
+			<circle cx="248" cy="535" r="16" fill="#17c7e8" />
+			<circle cx="212" cy="580" r="15" fill="#28d0a9" />
+			<circle cx="282" cy="577" r="14" fill="#2dd2a6" />
+			<circle cx="318" cy="622" r="14" fill="#35d7a8" />
+			<circle cx="240" cy="668" r="15" fill="#36d2a2" />
+			<circle cx="180" cy="706" r="16" fill="#ff9b24" />
+			<circle cx="245" cy="746" r="15" fill="#ffad31" />
+			<circle cx="300" cy="704" r="14" fill="#ffc04f" />
+			<circle cx="322" cy="780" r="14" fill="#ffbe4b" />
+			<circle cx="332" cy="300" r="13" fill="#fff" />
+			<circle cx="366" cy="348" r="14" fill="#fff" />
+			<circle cx="342" cy="407" r="12" fill="#fff" />
+			<circle cx="375" cy="453" r="14" fill="#fff" />
+			<circle cx="348" cy="515" r="13" fill="#fff" />
+			<circle cx="376" cy="568" r="12" fill="#fff" />
+			<circle cx="346" cy="624" r="13" fill="#fff" />
+			<circle cx="375" cy="680" r="14" fill="#fff" />
+			<circle cx="350" cy="742" r="13" fill="#fff" />
+		</g>
+		<g fill="#fff">
+			<rect x="372" y="270" width="75" height="25" rx="12.5" />
+			<rect x="384" y="310" width="65" height="27" rx="13.5" />
+			<rect x="366" y="352" width="84" height="26" rx="13" />
+			<rect x="382" y="397" width="67" height="28" rx="14" />
+			<rect x="364" y="439" width="88" height="27" rx="13.5" />
+			<rect x="380" y="484" width="69" height="29" rx="14.5" />
+			<rect x="363" y="526" width="89" height="27" rx="13.5" />
+			<rect x="382" y="572" width="68" height="29" rx="14.5" />
+			<rect x="365" y="615" width="87" height="27" rx="13.5" />
+			<rect x="383" y="660" width="68" height="29" rx="14.5" />
+			<rect x="367" y="706" width="84" height="27" rx="13.5" />
+			<rect x="385" y="749" width="65" height="29" rx="14.5" />
+		</g>
+		<rect x="320" y="205" width="520" height="620" fill="#fff" mask="url(#fMask)" />
+	</g>
+</svg>
