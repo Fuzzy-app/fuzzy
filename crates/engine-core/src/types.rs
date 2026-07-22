@@ -76,6 +76,43 @@ pub struct CourseRuleOverride {
 	pub note: Option<String>,
 }
 
+/// ルールテンプレートの展開に使う、1ファイル分のコース文脈。
+///
+/// SQLite由来の値だけでなく、保存前のMoodle資料にも同じ照合処理を使えるよう、
+/// すべての値を任意としている。テンプレートが必要とする値が無い場合、既存ファイルの
+/// 照合では警告を返し、保存先の提案では入力エラーを返す。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RuleContext {
+	/// SQLite上のコースID。コース別例外ルールの選択に使う。
+	pub course_id: Option<i64>,
+	/// 括弧内補足・絵文字・同名衝突を処理した、保存フォルダ用のコース名。
+	pub course_name: Option<String>,
+	/// 年度（例: `2026`）。
+	pub year: Option<String>,
+	/// 学期（例: `2026前期`）。
+	pub term: Option<String>,
+	/// 課題名。未指定時はファイル名から拡張子を除いた値を使用する。
+	pub assignment: Option<String>,
+	/// 回・週等のセクション値（例: `4`）。
+	pub section: Option<String>,
+}
+
+/// 保存済みファイルをルールと照合するための入力。
+///
+/// ファイルシステム走査用の [`FileEntry`] へDB固有の情報を混在させず、ルール照合に
+/// 必要なメタデータだけを独立して保持する。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleFileEntry {
+	/// SQLite上のファイルID（DB登録前のファイルは `None`）。
+	pub file_id: Option<i64>,
+	/// 現在の保存先パス。
+	pub saved_path: PathBuf,
+	/// ルール上のファイル名（拡張子込み）。
+	pub file_name: String,
+	/// テンプレート展開とコース別例外ルールの選択に使う文脈。
+	pub context: RuleContext,
+}
+
 /// ルールエンジン内部の違反検出結果。
 ///
 /// 絶対パスを含むためNative Messagingへ直接シリアライズせず、native-host側で
@@ -90,6 +127,15 @@ pub struct RuleViolation {
 	pub reason: String,
 	/// ルールに従った場合の推奨パス（提示のみ。自動移動はしない）。
 	pub suggested_path: Option<PathBuf>,
+}
+
+/// SQLite上のルール適合注釈を再計算した結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleComplianceSummary {
+	/// 照合したファイル数。
+	pub checked_count: usize,
+	/// 違反と判定したファイル数。
+	pub violation_count: usize,
 }
 
 /// 全文検索のヒット1件。

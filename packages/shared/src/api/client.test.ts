@@ -67,10 +67,13 @@ describe("MockApiClient（サンプルデータ）", () => {
 		expect(syllabusResult[0]?.relativePath).not.toContain("授業計画");
 	});
 
-	test("suggestSavePath: コース名の補足・角括弧・絵文字を保存先から除外する", async () => {
+	test("suggestSavePath: 生のコース名をクライアントで加工せずbackendの解決名を使う", async () => {
 		const result = await client.suggestSavePath({
 			course: {
-				name: "情報科学📚［2026年度・前期］",
+				moodleCourseId: "course-412",
+				name: "データベース📚［2026年度・前期］",
+				academicYear: 2026,
+				term: "2026前期",
 				sectionTitle: "第4回🔬[配布資料]",
 				breadcrumbs: ["2026前期"],
 			},
@@ -82,8 +85,25 @@ describe("MockApiClient（サンプルデータ）", () => {
 				mimeHint: "pdf",
 			},
 		});
-		expect(result[0]?.relativePath).toBe("2026前期\\情報科学\\第4回");
+		expect(result[0]?.relativePath).toBe("2026前期\\データベース\\第4回");
 		expect(result[0]?.relativePath).not.toMatch(/[()[\]（）［］\p{Extended_Pictographic}]/u);
+		expect(result[0]?.courseFolder).toEqual({
+			courseId: 2,
+			folderName: "データベース",
+			warnings: [],
+		});
+	});
+
+	test("updateCourseFolderName: NFKC後の一意な編集名を保存し、同名を拒否する", async () => {
+		const freshClient = new MockApiClient();
+		const result = await freshClient.updateCourseFolderName({
+			courseId: 1,
+			folderName: "情報　アーキテクチャ",
+		});
+		expect(result.courseFolder.folderName).toBe("情報 アーキテクチャ");
+		await expect(
+			freshClient.updateCourseFolderName({ courseId: 2, folderName: "情報 アーキテクチャ" }),
+		).rejects.toMatchObject({ code: "RULE_CONFLICT" });
 	});
 
 	test("suggestSavePath: 更新済みルールとコース別例外をその場で反映する", async () => {

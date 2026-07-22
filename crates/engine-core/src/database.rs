@@ -12,10 +12,14 @@ use crate::{
 	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION, SCHEMA_SQL,
 };
 
+mod rules;
+
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
 const EXTENSION_RUNTIME_MIGRATION_SQL: &str =
 	include_str!("../fixtures/migrations/0001_extension_runtime_observations.sql");
+const COURSE_FOLDER_NAMES_MIGRATION_SQL: &str =
+	include_str!("../fixtures/migrations/0002_course_folder_names.sql");
 
 /// SQLite接続。接続時にFK有効化、スキーマ適用、マイグレーションを保証する。
 pub struct Database {
@@ -59,6 +63,9 @@ impl Database {
 		// schema.sql適用済みの既存DBにも新しいテーブルを追加する。
 		conn.execute_batch(EXTENSION_RUNTIME_MIGRATION_SQL)
 			.map_err(db_err)?;
+		if table_exists(&conn, "courses")? && schema_version(&conn)? < 2 {
+			apply_schema(&mut conn, COURSE_FOLDER_NAMES_MIGRATION_SQL)?;
+		}
 
 		Ok(Self { conn })
 	}
@@ -184,14 +191,23 @@ fn observation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtensionRu
 }
 
 fn schema_applied(conn: &Connection) -> EngineResult<bool> {
+	table_exists(conn, "app_settings")
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> EngineResult<bool> {
 	let count: i64 = conn
 		.query_row(
-			"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'",
-			[],
+			"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+			[table_name],
 			|row| row.get(0),
 		)
 		.map_err(db_err)?;
 	Ok(count > 0)
+}
+
+fn schema_version(conn: &Connection) -> EngineResult<i64> {
+	conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+		.map_err(db_err)
 }
 
 fn apply_schema(conn: &mut Connection, schema_sql: &str) -> EngineResult<()> {
@@ -301,6 +317,37 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(count, 1);
+	}
+
+	#[test]
+	fn migration_adds_course_folder_fields_and_backfills_academic_year() {
+		let conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			 CREATE TABLE courses (
+				id INTEGER PRIMARY KEY,
+				moodle_course_id TEXT NOT NULL UNIQUE,
+				name TEXT NOT NULL,
+				term TEXT
+			 );
+			 INSERT INTO courses (id, moodle_course_id, name, term)
+			 VALUES (1, 'course-db', 'データベース', '2026前期');
+			 PRAGMA user_version = 1;",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn).unwrap();
+		let values: (Option<i64>, Option<String>) = database
+			.conn()
+			.query_row(
+				"SELECT academic_year, folder_name_override FROM courses WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+
+		assert_eq!(values, (Some(2026), None));
+		assert_eq!(schema_version(database.conn()).unwrap(), 2);
 	}
 
 	#[test]

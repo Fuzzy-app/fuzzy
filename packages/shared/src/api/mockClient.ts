@@ -1,4 +1,3 @@
-import { type CourseFolderIdentity, courseFolderName } from "../folderNames";
 import { isValidNotificationOffsetMinutes, notificationRuleLabel } from "../notificationRules";
 import {
 	createRulePreviewValues,
@@ -17,12 +16,13 @@ import ruleViolations from "../sample-data/rule-violations.json" with { type: "j
 import sampleRules from "../sample-data/rules.json" with { type: "json" };
 import searchResults from "../sample-data/search-results.json" with { type: "json" };
 import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
-import { normalizeWindowsPath } from "../savePaths";
+import { normalizeRelativeSavePath, normalizeWindowsPath } from "../savePaths";
 import type {
 	Assignment,
 	AssignmentChange,
 	CheckSimilarFilesRequest,
 	Course,
+	CourseFolderNameResolution,
 	CourseRuleOverride,
 	CourseRuleOverrideInput,
 	DashboardSummary,
@@ -43,6 +43,8 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseFolderNameRequest,
+	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
 	UpdateGlobalRuleRequest,
 } from "../types";
@@ -72,6 +74,7 @@ export class MockApiClient implements FuzzyApiClient {
 	private nextNotificationRuleId =
 		this.notificationRules.reduce((max, rule) => Math.max(max, rule.id), 0) + 1;
 	private rules: RuleSet = cloneRuleSet(sampleRules as RuleSet);
+	private courses: Course[] = (courses as Course[]).map((course) => ({ ...course }));
 	private ruleMutationQueue: Promise<void> = Promise.resolve();
 
 	async ping(): Promise<boolean> {
@@ -110,25 +113,32 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
-		const knownCourses = courses as Course[];
+		const knownCourses = this.courses;
 		const requestedCourseName = request.course.name ?? "不明なコース";
-		const knownCourse = knownCourses.find((course) => course.name === requestedCourseName);
-		const courseIdentities: CourseFolderIdentity[] = knownCourses.map((course) => ({
-			name: course.name,
-			stableId: course.moodleCourseId,
-		}));
-		const courseLabel = courseFolderName(
-			knownCourse?.name ?? requestedCourseName,
-			courseIdentities,
-			knownCourse?.moodleCourseId,
-		);
+		const knownCourse =
+			knownCourses.find(
+				(course) =>
+					request.course.moodleCourseId !== undefined &&
+					request.course.moodleCourseId !== null &&
+					course.moodleCourseId === request.course.moodleCourseId,
+			) ?? knownCourses.find((course) => course.name === requestedCourseName);
+		const courseFolder: CourseFolderNameResolution = {
+			courseId: knownCourse?.id ?? null,
+			folderName: knownCourse?.folderName ?? "不明なコース",
+			warnings: [],
+		};
 		const sectionLabel = request.fileMeta?.sectionTitle ?? request.course.sectionTitle;
 		const section = extractSectionNumber(sectionLabel);
 		const fallbackValues = createRulePreviewValues();
 		const term =
 			knownCourse?.term ??
+			request.course.term ??
 			request.course.breadcrumbs.find((item) => /^\d{4}(?:前期|後期|通年)$/.test(item)) ??
 			fallbackValues.term;
+		const academicYear =
+			knownCourse?.academicYear ??
+			request.course.academicYear ??
+			Number.parseInt(fallbackValues.year, 10);
 		const override = knownCourse
 			? this.rules.courseOverrides.find((candidate) => candidate.courseId === knownCourse.id)
 			: undefined;
@@ -139,20 +149,22 @@ export class MockApiClient implements FuzzyApiClient {
 
 		const values = {
 			...fallbackValues,
-			year: term.match(/^\d{4}/)?.[0] ?? fallbackValues.year,
+			year: String(academicYear),
 			term,
-			course: courseLabel,
+			course: courseFolder.folderName,
 			assignment: request.fileMeta?.title.replace(/\.[a-z0-9]{1,10}$/i, "") ?? "資料",
 			section: section ?? fallbackValues.section,
 		};
 		const primaryRelativePath = resolveRulePattern(patternTemplate, values);
-		const suggestions: SaveSuggestion[] = [createSaveSuggestion(primaryRelativePath, 0.92)];
+		const suggestions: SaveSuggestion[] = [
+			createSaveSuggestion(primaryRelativePath, 0.92, courseFolder),
+		];
 
 		// 回ごとの候補が最有力の場合も、ユーザーが科目直下へまとめられるよう補助候補を返す。
 		if (section && patternTemplate.includes("{section}")) {
 			const courseRelativePath = resolveRulePattern(removeSectionSegment(patternTemplate), values);
 			if (courseRelativePath !== primaryRelativePath) {
-				suggestions.push(createSaveSuggestion(courseRelativePath, 0.6));
+				suggestions.push(createSaveSuggestion(courseRelativePath, 0.6, courseFolder));
 			}
 		}
 
@@ -258,6 +270,45 @@ export class MockApiClient implements FuzzyApiClient {
 		});
 	}
 
+	async updateCourseFolderName(
+		request: UpdateCourseFolderNameRequest,
+	): Promise<UpdateCourseFolderNameResult> {
+		if (!request || !Number.isInteger(request.courseId) || request.courseId <= 0) {
+			throw new ApiError("NOT_FOUND", "コースを選択してください。");
+		}
+		const course = this.courses.find((candidate) => candidate.id === request.courseId);
+		if (!course) throw new ApiError("NOT_FOUND", "対象のコースが見つかりません。");
+
+		const sampleCourse = (courses as Course[]).find(
+			(candidate) => candidate.id === request.courseId,
+		);
+		const requestedName =
+			request.folderName?.normalize("NFKC").replace(/\s+/gu, " ").trim() ?? null;
+		const normalized =
+			requestedName === null ? sampleCourse?.folderName : normalizeRelativeSavePath(requestedName);
+		if (!normalized || normalized.includes("\\") || normalized.length > 80) {
+			throw new ApiError(
+				"INVALID_REQUEST",
+				"コースフォルダ名は80文字以内のWindowsフォルダ名で指定してください。",
+			);
+		}
+		if (
+			this.courses.some(
+				(candidate) =>
+					candidate.id !== request.courseId &&
+					candidate.folderName.toLocaleLowerCase("en-US") === normalized.toLocaleLowerCase("en-US"),
+			)
+		) {
+			throw new ApiError("RULE_CONFLICT", "同じコースフォルダ名は使用できません。");
+		}
+
+		course.folderName = normalized;
+		return delay({
+			ok: true,
+			courseFolder: { courseId: course.id, folderName: normalized, warnings: [] },
+		});
+	}
+
 	async getRuleViolations(): Promise<RuleViolationListItem[]> {
 		return delay(ruleViolations as RuleViolationListItem[]);
 	}
@@ -359,12 +410,17 @@ function cloneRuleSet(rules: RuleSet): RuleSet {
 	};
 }
 
-function createSaveSuggestion(relativePath: string, confidence: number): SaveSuggestion {
+function createSaveSuggestion(
+	relativePath: string,
+	confidence: number,
+	courseFolder: CourseFolderNameResolution,
+): SaveSuggestion {
 	const normalizedRelativePath = normalizeWindowsPath(relativePath);
 	return {
 		path: `${MOCK_SAVE_ROOT}\\${normalizedRelativePath}`,
 		relativePath: normalizedRelativePath,
 		confidence,
+		courseFolder,
 	};
 }
 
