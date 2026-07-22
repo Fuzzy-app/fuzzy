@@ -1,7 +1,8 @@
 :root {
-	--fuzzy-color-primary: #6c63ff;
-	--fuzzy-color-primary-strong: #5d5ce2;
-	--fuzzy-color-primary-soft: #f0efff;
+	--fuzzy-color-primary: #6c3cff;
+	--fuzzy-color-primary-strong: #5426d9;
+	--fuzzy-color-primary-soft: #f0ebff;
+	--fuzzy-color-primary-overlay: rgba(108, 60, 255, 0.12);
 	--fuzzy-color-surface: #ffffff;
 	--fuzzy-color-surface-muted: #eef0fb;
 	--fuzzy-color-page: #f7f8ff;
@@ -16,6 +17,7 @@
 	--fuzzy-color-border-soft: #eef1f6;
 	--fuzzy-color-accent: #ffd54f;
 	--fuzzy-color-success: #14935b;
+	--fuzzy-color-success-strong: #0f7546;
 	--fuzzy-color-success-soft: #dcf9e8;
 	--fuzzy-color-info: #3159a6;
 	--fuzzy-color-info-soft: #edf1ff;
@@ -24,6 +26,11 @@
 	--fuzzy-color-danger: #b43d24;
 	--fuzzy-color-danger-soft: #fff0ec;
 	--fuzzy-color-disabled: #a9afc7;
+	--fuzzy-color-sidebar: #20243a;
+	--fuzzy-color-sidebar-active: #353b67;
+	--fuzzy-color-sidebar-text: #c6c9de;
+	--fuzzy-color-sidebar-icon: #6d7295;
+	--fuzzy-color-warning-border: #e6b437;
 	--fuzzy-color-file-pdf: #dc2626;
 	--fuzzy-color-file-document: #3b82f6;
 	--fuzzy-color-file-spreadsheet: #16a34a;
@@ -31,7 +38,8 @@
 	--fuzzy-color-file-archive: #64748b;
 	--fuzzy-shadow-card: 0 10px 28px rgba(58, 69, 120, 0.08);
 	--fuzzy-shadow-floating: 0 18px 48px rgba(58, 69, 120, 0.16);
-	--fuzzy-focus-ring: rgba(108, 99, 255, 0.28);
+	--fuzzy-focus-ring: #6c3cff;
+	--fuzzy-focus-ring-inverse: #cfc3ff;
 	--fuzzy-font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, sans-serif;
 	--fuzzy-font-size-caption: 0.82rem;
 	--fuzzy-font-size-small: 0.9rem;

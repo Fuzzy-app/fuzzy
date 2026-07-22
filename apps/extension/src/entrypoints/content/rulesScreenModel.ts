@@ -68,9 +68,7 @@ export function previewPattern(
 }
 
 export function patternLabel(patternTemplate: string): string {
-	return (
-		RULE_PRESETS.find((preset) => preset.template === patternTemplate)?.name ?? "カスタムルール"
-	);
+	return RULE_PRESETS.find((preset) => preset.template === patternTemplate)?.name ?? "自由入力";
 }
 
 export function getAvailableCourses(

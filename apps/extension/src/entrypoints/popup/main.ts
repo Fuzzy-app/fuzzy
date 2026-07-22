@@ -1,4 +1,5 @@
 import "@fuzzy/shared/theme.css";
+import { POPUP_NAVIGATION_GUIDE } from "../../lib/ui/screenCopy";
 import "./app.css";
 
 const target = document.getElementById("app");
@@ -16,7 +17,7 @@ target.innerHTML = `
 		<ol class="fuzzy-popup-steps">
 			<li>Moodleを開く</li>
 			<li>資料の保存は、授業ページ右側の保存パネルから行う</li>
-			<li>横断検索・締切ハブは、上部ナビの「Fuzzy」タブから開く</li>
+			<li>${POPUP_NAVIGATION_GUIDE}</li>
 		</ol>
 	</main>
 `;

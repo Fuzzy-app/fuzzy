@@ -1,13 +1,16 @@
+import { FUZZY_SCREENS } from "../../lib/ui/screenCopy";
+
 export function buildRulesHeader(): HTMLElement {
+	const definition = FUZZY_SCREENS.rules;
 	const header = element("header", "fuzzy-screen-header");
 	const wrap = element("div");
 	wrap.append(
-		element("p", "fuzzy-screen-kicker", "整理ルール"),
-		element("h1", "", "保存ルールを管理"),
+		element("p", "fuzzy-screen-kicker", definition.kicker),
+		element("h1", "", definition.title),
 		element(
 			"p",
 			"fuzzy-rules-panel-copy",
-			"変更は保存先の提案と警告判定に使います。保存済みファイルの自動移動・自動削除は行いません。",
+			"ここで決めた保存方法は、保存先の提案と整理が必要な資料の確認に使います。保存済みの資料を自動で移動・削除することはありません。",
 		),
 	);
 	header.append(wrap);

@@ -253,7 +253,7 @@ export const SAVE_PANEL_STYLE = `
 
 		.fuzzy-note-result {
 			background: var(--fuzzy-color-success-soft);
-			color: var(--fuzzy-color-success);
+			color: var(--fuzzy-color-success-strong);
 		}
 
 		.fuzzy-section-heading {

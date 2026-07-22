@@ -148,7 +148,7 @@ export function createRuleManagementScreen(
 				text:
 					options.store.mode === "mock"
 						? "現在のサンプルルールを読み込みました。"
-						: "SQLiteに保存されたルールを読み込みました。",
+						: "保存済みの設定を読み込みました。",
 			};
 		} catch (error) {
 			message = { kind: "error", text: errorMessage(error) };
@@ -177,7 +177,7 @@ export function createRuleManagementScreen(
 				text:
 					options.store.mode === "mock"
 						? "サンプルのグローバルルールへ反映しました。"
-						: "グローバルルールをSQLiteへ保存しました。",
+						: "基本の保存設定を保存しました。",
 			};
 		} catch (error) {
 			message = { kind: "error", text: errorMessage(error) };
@@ -217,7 +217,7 @@ export function createRuleManagementScreen(
 				text:
 					options.store.mode === "mock"
 						? `${draft.courseName}のサンプル例外へ反映しました。`
-						: `${draft.courseName}の例外ルールをSQLiteへ保存しました。`,
+						: `${draft.courseName}の保存設定を保存しました。`,
 			};
 		} catch (error) {
 			message = { kind: "error", text: errorMessage(error) };
@@ -267,7 +267,7 @@ export function createRuleManagementScreen(
 				text:
 					options.store.mode === "mock"
 						? `${course.courseName}をサンプル例外へ追加しました。`
-						: `${course.courseName}をSQLiteの例外ルールへ追加しました。`,
+						: `${course.courseName}を授業ごとの保存設定へ追加しました。`,
 			};
 		} catch (error) {
 			message = { kind: "error", text: errorMessage(error) };
@@ -287,12 +287,12 @@ export function createRuleManagementScreen(
 
 	const buildTabs = (): HTMLElement => {
 		const tabs = element("nav", "fuzzy-rules-tabs");
-		tabs.setAttribute("aria-label", "整理ルールの表示内容");
+		tabs.setAttribute("aria-label", "保存と整理の表示内容");
 		tabs.setAttribute("role", "tablist");
 		const ruleTab = element(
 			"button",
 			activeView === "rules" ? "fuzzy-rules-tab is-active" : "fuzzy-rules-tab",
-			"ルール設定",
+			"保存先の設定",
 		);
 		ruleTab.type = "button";
 		ruleTab.id = "fuzzy-rule-settings-tab";
@@ -303,7 +303,7 @@ export function createRuleManagementScreen(
 		const warningTab = element(
 			"button",
 			activeView === "integrity" ? "fuzzy-rules-tab is-active" : "fuzzy-rules-tab",
-			"警告・未整理ファイル",
+			"整理が必要な資料",
 		);
 		warningTab.type = "button";
 		warningTab.id = "fuzzy-rule-integrity-tab";
@@ -341,20 +341,20 @@ export function createRuleManagementScreen(
 		const overview = element("section", "fuzzy-rules-overview");
 		overview.append(
 			buildSummaryCard(
-				"現在のグローバルルール",
+				"現在の基本設定",
 				patternLabel(rules.globalPatternTemplate),
 				rules.globalPatternTemplate,
 				"is-accent",
 			),
 			buildSummaryCard(
-				"コース別例外",
+				"授業ごとの設定",
 				`${rules.courseOverrides.length}件`,
-				"グローバルと違う保存方法だけを保持します。",
+				"基本設定と異なる授業だけを表示します。",
 			),
 			buildSummaryCard(
-				"整合性チェック",
-				"警告タブで確認",
-				"この保存状態を違反・未整理ファイルの判定基準にします。",
+				"整理状態の確認",
+				"整理が必要な資料を確認",
+				"保存設定と異なる資料や、同じ可能性がある資料を確認します。",
 				"is-future",
 			),
 		);

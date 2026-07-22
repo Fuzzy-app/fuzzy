@@ -19,8 +19,38 @@ import {
 } from "@fuzzy/shared";
 import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
 import { createRuleManagementStore } from "../../lib/rules/state";
+import {
+	DEADLINE_REVIEW_HELP_TEXT,
+	FUZZY_SCREENS,
+	FUZZY_SCREEN_ORDER,
+	type FuzzyScreenId,
+} from "../../lib/ui/screenCopy";
 import { createCalendarPanelController } from "./calendarPanel";
 import { type RuleManagementScreen, createRuleManagementScreen } from "./rulesScreen";
+import {
+	buildShellScreenHeader,
+	createBrandIcon,
+	shellElement as el,
+	fileKindClass,
+	fileKindLabel,
+} from "./shellElements";
+import {
+	type DeadlineViewFilter,
+	assignmentChangeFieldLabel,
+	assignmentChangeValueLabel,
+	deadlineFilterLabel,
+	formatCacheDate,
+	formatDate,
+	formatSyncDate,
+	isNeedsReview,
+	isOverdue,
+	isUpcoming,
+	parseDueAt,
+	sourceLabel,
+	submissionLabel,
+	syncChangeTotal,
+	syncTriggerLabel,
+} from "./shellPresentation";
 
 const ROOT_ID = "fuzzy-shell-root";
 const STYLE_ID = "fuzzy-shell-style";
@@ -30,41 +60,13 @@ const PAGE_ID = "fuzzy-shell-page";
 const STASH_ID = "fuzzy-shell-stash";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
-type ScreenId = "dashboard" | "search" | "deadlines" | "courses" | "rules";
-// 画面上のフィルタ種別。@fuzzy/shared のAPI取得フィルタ `DeadlineFilter` とは別物なので、
-// import 時の衝突・混同を避けるため View 用として別名にしている。
-type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
+type ScreenId = FuzzyScreenId;
 
-interface MenuItem {
-	id: ScreenId;
-	label: string;
-	enabled: boolean;
-	description: string;
-}
-
-const menuItems: readonly MenuItem[] = [
-	{
-		id: "dashboard",
-		label: "ダッシュボード",
-		enabled: true,
-		description: "資料と締切の概要",
-	},
-	{ id: "search", label: "横断検索", enabled: true, description: "保存資料を横断検索" },
-	{ id: "deadlines", label: "締切ハブ", enabled: true, description: "課題と締切を確認" },
-	{ id: "courses", label: "コース一覧", enabled: false, description: "今後の画面" },
-	{ id: "rules", label: "整理ルール", enabled: true, description: "保存ルールと警告を確認" },
-];
-
-const placeholderCopy: Record<
-	Exclude<ScreenId, "search" | "dashboard" | "rules">,
-	{ title: string; copy: string }
-> = {
-	deadlines: {
-		title: "締切ハブ",
-		copy: "課題一覧と提出状況を、この画面でまとめて確認できます。",
-	},
-	courses: { title: "コース一覧", copy: "今後の画面としてここへ統合していきます。" },
-};
+const menuItems = FUZZY_SCREEN_ORDER.map((id) => ({
+	id,
+	label: FUZZY_SCREENS[id].navigationLabel,
+	description: FUZZY_SCREENS[id].description,
+}));
 
 interface SearchState {
 	/** 入力欄の現在値（inputイベントで随時同期） */
@@ -86,178 +88,6 @@ interface SearchScreen {
 	noteHost: HTMLElement;
 }
 
-function getNow(): number {
-	return Date.now();
-}
-
-function parseDueAt(dueAt: string | null): number | null {
-	if (!dueAt) return null;
-	const time = Date.parse(dueAt);
-	return Number.isNaN(time) ? null : time;
-}
-
-// 和歌山大学のセメスター区分。締切ハブではクオーター単位ではなくセメスター単位で扱う。
-// 夏季集中などの特別授業も前期側に取り込めるよう、前期=4〜9月（[4,10)）／
-// 後期=10〜3月（[10,4)）と年間を隙間なく二分する。壊れた日付の締切は具体的な日付を
-// 出せないため、この区分を「おおよその所属セメスター」の目安として表示に使う。
-type Semester = "first" | "second";
-
-function semesterOf(time: number): Semester {
-	const month = new Date(time).getMonth() + 1; // 1〜12
-	return month >= 4 && month < 10 ? "first" : "second";
-}
-
-function semesterLabel(semester: Semester): string {
-	return semester === "first" ? "前期" : "後期";
-}
-
-function isNeedsReview(assignment: Assignment): boolean {
-	return (
-		assignment.dueAtStatus === "needs_review" ||
-		(assignment.dueAt !== null && parseDueAt(assignment.dueAt) === null)
-	);
-}
-
-function isOverdue(assignment: Assignment): boolean {
-	const dueTime = parseDueAt(assignment.dueAt);
-	return Boolean(dueTime !== null && !assignment.submitted && dueTime < getNow());
-}
-
-function isUpcoming(assignment: Assignment): boolean {
-	const dueTime = parseDueAt(assignment.dueAt);
-	return (
-		!assignment.submitted &&
-		(assignment.dueAt === null || dueTime !== null) &&
-		(dueTime === null || dueTime >= getNow()) &&
-		!isNeedsReview(assignment)
-	);
-}
-
-// フォーマッタ生成はコストが高いため、締切カードごとに作り直さずモジュールスコープで使い回す。
-const dueAtFormatter = new Intl.DateTimeFormat("ja-JP", {
-	month: "numeric",
-	day: "numeric",
-	hour: "2-digit",
-	minute: "2-digit",
-});
-
-const cacheDateFormatter = new Intl.DateTimeFormat("ja-JP", {
-	month: "numeric",
-	day: "numeric",
-	hour: "2-digit",
-	minute: "2-digit",
-});
-
-function formatCacheDate(cachedAt: string): string {
-	const time = Date.parse(cachedAt);
-	return Number.isNaN(time) ? "日時不明" : cacheDateFormatter.format(new Date(time));
-}
-
-function formatDate(dueAt: string | null): string {
-	if (!dueAt) return "期限未設定";
-	const time = parseDueAt(dueAt);
-	// 日付が壊れていて具体的な期限を出せない場合は、現在の和歌山大学のセメスターを
-	// 目安として示す（例: 前期中に開くと「前期中・日付要確認」）。
-	if (time === null) return `${semesterLabel(semesterOf(getNow()))}中・日付要確認`;
-	return dueAtFormatter.format(new Date(time));
-}
-
-function submissionLabel(assignment: Assignment): string {
-	switch (assignment.submissionMode) {
-		case "moodle_auto":
-			return "Moodle提出";
-		case "manual":
-			return "手動提出";
-		case "notify_only":
-			return "通知のみ";
-		default:
-			return "確認中";
-	}
-}
-
-function sourceLabel(assignment: Assignment): string {
-	switch (assignment.source) {
-		case "moodle_dashboard":
-			return "Moodleダッシュボード";
-		case "moodle_text":
-			return "Moodle本文";
-		case "file_content":
-			return "資料本文";
-	}
-}
-
-function deadlineFilterLabel(filter: DeadlineViewFilter): string {
-	switch (filter) {
-		case "upcoming":
-			return "今後";
-		case "overdue":
-			return "期限切れ";
-		case "review":
-			return "要確認";
-		default:
-			return "すべて";
-	}
-}
-
-const syncDateFormatter = new Intl.DateTimeFormat("ja-JP", {
-	month: "numeric",
-	day: "numeric",
-	hour: "2-digit",
-	minute: "2-digit",
-});
-
-function formatSyncDate(syncedAt: string): string {
-	const time = Date.parse(syncedAt);
-	if (Number.isNaN(time)) return "取得日時を確認してください";
-	return syncDateFormatter.format(new Date(time));
-}
-
-function syncTriggerLabel(trigger: DataSyncEvent["trigger"]): string {
-	return trigger === "manual" ? "手動取得" : "自動取得";
-}
-
-function assignmentChangeFieldLabel(field: AssignmentChange["field"]): string {
-	switch (field) {
-		case "dueAt":
-			return "期限";
-		case "title":
-			return "課題名";
-		case "submissionMode":
-			return "提出方法";
-		case "dueAtStatus":
-			return "期限判定";
-		case "submitted":
-			return "提出状況";
-	}
-}
-
-function assignmentChangeValueLabel(
-	field: AssignmentChange["field"],
-	value: string | null,
-): string {
-	if (value === null || value === "") return "未設定";
-	if (field === "dueAt") return formatDate(value);
-	if (field === "dueAtStatus") return value === "needs_review" ? "要確認" : "通常";
-	if (field === "submitted") return value === "true" ? "提出済み" : "未提出";
-	if (field === "submissionMode") {
-		switch (value) {
-			case "moodle_auto":
-				return "Moodle提出";
-			case "manual":
-				return "手動提出";
-			case "notify_only":
-				return "通知のみ";
-			default:
-				return "確認中";
-		}
-	}
-	return value;
-}
-
-function syncChangeTotal(event: DataSyncEvent): number {
-	return event.newAssignmentCount + event.changedAssignmentCount + event.removedAssignmentCount;
-}
-
 export function mountFuzzyShell(): void {
 	if (document.getElementById(ROOT_ID)) return;
 
@@ -275,7 +105,7 @@ export function mountFuzzyShell(): void {
 	navButton.id = BUTTON_ID;
 	navButton.href = "#";
 	navButton.setAttribute("aria-pressed", "false");
-	navButton.append(el("span", "fuzzy-nav-mark", "F"), el("span", "", "Fuzzy"));
+	navButton.append(createBrandIcon("fuzzy-nav-mark"), el("span", "", "Fuzzy"));
 
 	const root = el(
 		navHost.tagName === "UL" ? "li" : "div",
@@ -415,7 +245,7 @@ export function mountFuzzyShell(): void {
 				el(
 					"p",
 					"fuzzy-note-copy",
-					"スニペットは検索語の前後だけを短く抜き出した本文です。まずは「正規化」で確認できます。",
+					"該当部分には、検索した言葉の前後を短く抜き出して表示します。まずは「正規化」で確認できます。",
 				),
 			);
 			return;
@@ -429,10 +259,10 @@ export function mountFuzzyShell(): void {
 		};
 		addNoteRow("授業", selected.courseName ?? "未設定");
 		addNoteRow("ページ", selected.page === null ? "ページ情報なし" : `${selected.page}ページ`);
-		addNoteRow("一致度", `${Math.round(selected.score * 100)}%`);
+		addNoteRow("関連度", `${Math.round(selected.score * 100)}%`);
 
 		note.replaceChildren(
-			el("p", "fuzzy-section-label", "選択中の候補"),
+			el("p", "fuzzy-section-label", "選択中の資料"),
 			el("h2", "", selected.fileName),
 			el(
 				"p",
@@ -466,7 +296,7 @@ export function mountFuzzyShell(): void {
 		const side = el("div", "fuzzy-result-side");
 		side.append(
 			el("p", "", result.page === null ? "—" : `p.${result.page}`),
-			el("span", "", "候補を見る"),
+			el("span", "", "詳細を見る"),
 		);
 
 		row.append(kind, main, el("p", "fuzzy-result-snippet", result.snippet), side);
@@ -554,17 +384,9 @@ export function mountFuzzyShell(): void {
 
 	const buildSearchScreen = (): SearchScreen => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("横断検索", "どのファイルに載っているか"));
+		screen.append(buildShellScreenHeader("search"));
 
 		const panel = el("section", "fuzzy-search-panel");
-
-		const tabs = el("div", "fuzzy-search-tabs");
-		const keywordTab = el("button", "fuzzy-chip is-active", "キーワード");
-		keywordTab.type = "button";
-		const courseTab = el("button", "fuzzy-chip", "講義で検索");
-		courseTab.type = "button";
-		courseTab.disabled = true;
-		tabs.append(keywordTab, courseTab);
 
 		const form = el("form", "fuzzy-search-form");
 		const inputWrap = el("div", "fuzzy-search-input-wrap");
@@ -580,18 +402,9 @@ export function mountFuzzyShell(): void {
 
 		const meta = el("div", "fuzzy-search-meta");
 		const countLabel = el("p", "", "キーワードを入力してください");
-		const toggle = el("label", "fuzzy-toggle");
-		const toggleInput = el("input");
-		toggleInput.type = "checkbox";
-		toggleInput.disabled = true;
-		toggle.append(
-			el("span", "", "AIで要約（任意・実験的）"),
-			toggleInput,
-			el("span", "fuzzy-toggle-ui"),
-		);
-		meta.append(countLabel, toggle);
+		meta.append(countLabel);
 
-		panel.append(tabs, form, meta);
+		panel.append(form, meta);
 
 		const layout = el("section", "fuzzy-search-layout");
 		const resultsHost = el("div", "fuzzy-search-results");
@@ -747,7 +560,9 @@ export function mountFuzzyShell(): void {
 
 		const badges = el("div", "fuzzy-deadline-badges");
 		badges.append(el("span", "fuzzy-badge", submissionLabel(assignment)));
-		if (isNeedsReview(assignment)) badges.append(el("span", "fuzzy-badge is-review", "要確認"));
+		if (isNeedsReview(assignment)) {
+			badges.append(el("span", "fuzzy-badge is-review", "締切日を確認"));
+		}
 		if (isOverdue(assignment)) badges.append(el("span", "fuzzy-badge is-overdue", "期限切れ"));
 		badges.append(
 			el(
@@ -804,9 +619,12 @@ export function mountFuzzyShell(): void {
 		const panel = el("section", "fuzzy-sync-panel");
 		const head = el("div", "fuzzy-sync-head");
 		const titleWrap = el("div");
-		titleWrap.append(el("p", "fuzzy-section-label", "データ取得通知"), el("h2", "", "取得結果"));
+		titleWrap.append(
+			el("p", "fuzzy-section-label", "Moodleの更新情報"),
+			el("h2", "", "新しく取得した内容"),
+		);
 
-		const reloadButton = el("button", "fuzzy-sync-action", "表示を更新");
+		const reloadButton = el("button", "fuzzy-sync-action", "最新情報を読み込む");
 		reloadButton.type = "button";
 		reloadButton.disabled = loadingSyncSummary;
 		reloadButton.addEventListener("click", () => {
@@ -819,14 +637,14 @@ export function mountFuzzyShell(): void {
 		panel.append(head);
 
 		if (loadingSyncSummary && !syncSummaryLoaded) {
-			panel.append(el("p", "fuzzy-toolbar-copy", "Moodleからのデータ取得結果を確認しています…"));
+			panel.append(el("p", "fuzzy-toolbar-copy", "Moodleの更新情報を確認しています…"));
 			return panel;
 		}
 
 		if (syncSummaryError) {
 			const errorRow = el("div", "fuzzy-sync-error");
 			errorRow.append(
-				el("p", "", `データ取得結果の確認に失敗しました: ${syncSummaryError}`),
+				el("p", "", `Moodleの更新情報を確認できませんでした: ${syncSummaryError}`),
 				el("p", "", "締切一覧は表示できます。変更点だけ後でもう一度確認してください。"),
 			);
 			panel.append(errorRow);
@@ -907,7 +725,7 @@ export function mountFuzzyShell(): void {
 
 	const buildDeadlineScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("締切ハブ", "課題と提出状況をまとめて確認"));
+		screen.append(buildShellScreenHeader("deadlines"));
 
 		if (deadlineError) {
 			const errorPanel = el("section", "fuzzy-error-panel");
@@ -947,7 +765,11 @@ export function mountFuzzyShell(): void {
 		const metricGrid = el("section", "fuzzy-metric-grid");
 		const metrics: Array<{ label: string; value: number; className?: string }> = [
 			{ label: "未提出", value: assignments.filter((item) => !item.submitted).length },
-			{ label: "要確認", value: assignments.filter(isNeedsReview).length, className: "is-warn" },
+			{
+				label: "締切日を確認",
+				value: assignments.filter(isNeedsReview).length,
+				className: "is-warn",
+			},
 			{ label: "期限切れ", value: assignments.filter(isOverdue).length, className: "is-soft" },
 		];
 		for (const metric of metrics) {
@@ -980,14 +802,7 @@ export function mountFuzzyShell(): void {
 			});
 			filterRow.append(button);
 		}
-		toolbar.append(
-			filterRow,
-			el(
-				"p",
-				"fuzzy-toolbar-copy",
-				"提出済みにすると一覧へ即反映されます。要確認は期限の再確認が必要な課題です。",
-			),
-		);
+		toolbar.append(filterRow, el("p", "fuzzy-toolbar-copy", DEADLINE_REVIEW_HELP_TEXT));
 
 		const listHost = el("section", "fuzzy-deadline-list");
 		const visible = sortAssignments(filterAssignments());
@@ -1008,7 +823,7 @@ export function mountFuzzyShell(): void {
 
 	const buildDashboardScreen = (): HTMLElement => {
 		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("ダッシュボード", "学習状況をひと目で確認"));
+		screen.append(buildShellScreenHeader("dashboard"));
 
 		if (dashboardError) {
 			const errorPanel = el("section", "fuzzy-error-panel");
@@ -1034,7 +849,7 @@ export function mountFuzzyShell(): void {
 		if (!dashboard) return screen;
 
 		const actions = el("div", "fuzzy-dashboard-actions");
-		const reloadButton = el("button", "fuzzy-primary-button", "表示を更新");
+		const reloadButton = el("button", "fuzzy-primary-button", "最新情報を読み込む");
 		reloadButton.type = "button";
 		reloadButton.disabled = loadingDashboard;
 		reloadButton.addEventListener("click", () => {
@@ -1048,7 +863,7 @@ export function mountFuzzyShell(): void {
 				el(
 					"p",
 					"fuzzy-dashboard-cache-note",
-					`オフラインキャッシュを表示中（${formatCacheDate(dashboardCachedAt ?? "")}に保存）`,
+					`前回保存した情報を表示中（最終更新: ${formatCacheDate(dashboardCachedAt ?? "")}）`,
 				),
 			);
 		} else {
@@ -1106,18 +921,6 @@ export function mountFuzzyShell(): void {
 		return screen;
 	};
 
-	const buildPlaceholderScreen = (
-		screenId: Exclude<ScreenId, "search" | "dashboard" | "rules">,
-	): HTMLElement => {
-		const { title, copy } = placeholderCopy[screenId];
-		const screen = el("div", "fuzzy-screen");
-		screen.append(buildScreenHeader("準備中", title));
-		const section = el("section", "fuzzy-placeholder");
-		section.append(el("p", "", copy));
-		screen.append(section);
-		return screen;
-	};
-
 	const renderScreen = () => {
 		for (const link of sideLinks) {
 			const isActive = link.dataset.screen === activeScreen;
@@ -1160,8 +963,6 @@ export function mountFuzzyShell(): void {
 			mainEl.replaceChildren(buildDeadlineScreen());
 		} else if (activeScreen === "rules") {
 			mainEl.replaceChildren(getRuleScreen().root);
-		} else {
-			mainEl.replaceChildren(buildPlaceholderScreen(activeScreen));
 		}
 	};
 
@@ -1183,17 +984,16 @@ export function mountFuzzyShell(): void {
 
 		const sidebar = el("div", "fuzzy-sidebar");
 		const brand = el("div", "fuzzy-brand");
-		brand.append(el("span", "fuzzy-brand-mark", "F"), el("span", "", "Fuzzy"));
+		brand.append(createBrandIcon("fuzzy-brand-mark"), el("span", "", "Fuzzy"));
 
 		const nav = el("nav", "fuzzy-side-nav");
 		nav.setAttribute("aria-label", "Fuzzy menu");
 		for (const item of menuItems) {
-			const link = el("button", item.enabled ? "fuzzy-side-link" : "fuzzy-side-link is-disabled");
+			const link = el("button", "fuzzy-side-link");
 			link.type = "button";
 			link.dataset.screen = item.id;
-			link.disabled = !item.enabled;
 			link.title = item.description;
-			link.append(el("span", "fuzzy-side-dot"), el("span", "", item.label));
+			link.append(el("span", "fuzzy-side-dot"), el("span", "fuzzy-side-label", item.label));
 			link.addEventListener("click", () => {
 				activeScreen = item.id;
 				renderScreen();
@@ -1261,45 +1061,6 @@ export function mountFuzzyShell(): void {
 		if (!otherNavItem || otherNavItem === navButton) return;
 		closeShell();
 	});
-}
-
-/**
- * createElement の薄いラッパー。動的な文字列は textContent 経由でのみDOMへ入れる
- * （HTML文字列の組み立てを避けることで、エスケープ漏れによるXSSを構造的に防ぐ）。
- */
-function el<K extends keyof HTMLElementTagNameMap>(
-	tag: K,
-	className = "",
-	textContent = "",
-): HTMLElementTagNameMap[K] {
-	const node = document.createElement(tag);
-	if (className) node.className = className;
-	if (textContent) node.textContent = textContent;
-	return node;
-}
-
-function buildScreenHeader(kicker: string, title: string): HTMLElement {
-	const header = el("header", "fuzzy-screen-header");
-	const wrap = el("div");
-	wrap.append(el("p", "fuzzy-screen-kicker", kicker), el("h1", "", title));
-	header.append(wrap);
-	return header;
-}
-
-function fileKindLabel(fileName: string): string {
-	const lower = fileName.toLowerCase();
-	if (lower.endsWith(".pdf")) return "PDF";
-	if (lower.endsWith(".ppt") || lower.endsWith(".pptx")) return "PPTX";
-	if (lower.endsWith(".doc") || lower.endsWith(".docx")) return "DOCX";
-	return "FILE";
-}
-
-function fileKindClass(fileName: string): string {
-	const lower = fileName.toLowerCase();
-	if (lower.endsWith(".pdf")) return "is-pdf";
-	if (lower.endsWith(".ppt") || lower.endsWith(".pptx")) return "is-ppt";
-	if (lower.endsWith(".doc") || lower.endsWith(".docx")) return "is-doc";
-	return "";
 }
 
 function findNavHost(): HTMLElement | null {
@@ -1454,15 +1215,12 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-nav-mark {
-			display: inline-grid;
-			place-items: center;
+			display: block;
+			flex: 0 0 auto;
 			width: 28px;
 			height: 28px;
 			border-radius: 10px;
-			background: var(--fuzzy-color-primary);
-			color: var(--fuzzy-color-surface);
-			font-weight: 900;
-			line-height: 1;
+			object-fit: cover;
 		}
 
 		#${PAGE_ID} {
@@ -1476,7 +1234,7 @@ function ensureStyle(): void {
 			min-height: 0;
 			overflow: hidden;
 			background:
-				radial-gradient(circle at top left, rgba(108, 99, 255, 0.12), transparent 22%),
+				radial-gradient(circle at top left, var(--fuzzy-color-primary-overlay), transparent 22%),
 				linear-gradient(180deg, #eef1ff 0%, var(--fuzzy-color-page) 100%);
 			color: var(--fuzzy-color-text-strong);
 			font-family: var(--fuzzy-font-family);
@@ -1487,7 +1245,7 @@ function ensureStyle(): void {
 			grid-template-rows: auto 1fr auto;
 			gap: 24px;
 			padding: 18px 12px;
-			background: var(--fuzzy-color-text);
+			background: var(--fuzzy-color-sidebar);
 			color: #f4f6ff;
 		}
 
@@ -1500,14 +1258,12 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-brand-mark {
-			display: inline-grid;
-			place-items: center;
-			width: 24px;
-			height: 24px;
+			display: block;
+			flex: 0 0 auto;
+			width: 28px;
+			height: 28px;
 			border-radius: 8px;
-			background: #5c5cff;
-			font-size: 0.85rem;
-			font-weight: 900;
+			object-fit: cover;
 		}
 
 		.fuzzy-side-nav {
@@ -1524,7 +1280,7 @@ function ensureStyle(): void {
 			border-radius: 10px;
 			padding: 12px 10px;
 			background: transparent;
-			color: #c6c9de;
+			color: var(--fuzzy-color-sidebar-text);
 			font: inherit;
 			font-size: var(--fuzzy-font-size-small);
 			font-weight: 700;
@@ -1533,24 +1289,24 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-side-link.is-active {
-			background: #353b67;
+			background: var(--fuzzy-color-sidebar-active);
 			color: var(--fuzzy-color-surface);
 		}
 
-		.fuzzy-side-link.is-disabled {
-			cursor: not-allowed;
-			opacity: 0.65;
+		.fuzzy-side-label {
+			min-width: 0;
+			flex: 1 1 auto;
 		}
 
 		.fuzzy-side-dot {
 			width: 12px;
 			height: 12px;
 			border-radius: 4px;
-			background: #6d7295;
+			background: var(--fuzzy-color-sidebar-icon);
 		}
 
 		.fuzzy-side-link.is-active .fuzzy-side-dot {
-			background: #756cff;
+			background: var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-content {
@@ -1575,20 +1331,25 @@ function ensureStyle(): void {
 			margin: 0;
 			border-radius: 999px;
 			padding: 6px 12px;
-			background: var(--fuzzy-color-success-soft);
-			color: var(--fuzzy-color-success);
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-muted);
 			font-size: var(--fuzzy-font-size-caption);
 			font-weight: 800;
 		}
 
 		.fuzzy-top-status[data-mode="checking"] {
-			background: #f0f1f8;
-			color: #656b88;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-muted);
+		}
+
+		.fuzzy-top-status[data-mode="mock"] {
+			background: var(--fuzzy-color-info-soft);
+			color: var(--fuzzy-color-info);
 		}
 
 		.fuzzy-top-status[data-mode="native"] {
-			background: #d8f6ff;
-			color: #00759a;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success-strong);
 		}
 
 		.fuzzy-close-button {
@@ -1859,7 +1620,7 @@ function ensureStyle(): void {
 
 		.fuzzy-search-note {
 			background:
-				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
+				linear-gradient(145deg, var(--fuzzy-color-primary-overlay), transparent 48%),
 				var(--fuzzy-color-surface);
 		}
 
@@ -1908,14 +1669,25 @@ function ensureStyle(): void {
 
 		.fuzzy-metric-card {
 			padding: 16px;
+			border-radius: 14px;
+			background: var(--fuzzy-color-surface);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-metric-card.is-warn {
-			background: var(--fuzzy-color-warning-soft);
+			background: linear-gradient(90deg, var(--fuzzy-color-warning-soft), var(--fuzzy-color-surface) 56%);
+			box-shadow:
+				inset 4px 0 0 var(--fuzzy-color-warning-border),
+				var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-metric-card.is-soft {
-			background: var(--fuzzy-color-background);
+			background: var(--fuzzy-color-surface);
+		}
+
+		.fuzzy-metric-card.is-warn .fuzzy-metric-label,
+		.fuzzy-metric-card.is-warn .fuzzy-metric-value {
+			color: var(--fuzzy-color-warning);
 		}
 
 		.fuzzy-metric-label {
@@ -1969,7 +1741,7 @@ function ensureStyle(): void {
 
 		.fuzzy-dashboard-course.is-warn {
 			box-shadow:
-				inset 4px 0 0 #f2bd41,
+				inset 4px 0 0 var(--fuzzy-color-warning-border),
 				var(--fuzzy-shadow-card);
 		}
 
@@ -2026,7 +1798,7 @@ function ensureStyle(): void {
 			padding: 16px;
 			border-radius: 14px;
 			background:
-				linear-gradient(145deg, rgba(108, 99, 255, 0.12), transparent 48%),
+				linear-gradient(145deg, var(--fuzzy-color-primary-overlay), transparent 48%),
 				var(--fuzzy-color-surface);
 			box-shadow: var(--fuzzy-shadow-card);
 		}
@@ -2159,7 +1931,7 @@ function ensureStyle(): void {
 
 		.fuzzy-change-value.is-new {
 			background: var(--fuzzy-color-success-soft);
-			color: var(--fuzzy-color-success);
+			color: var(--fuzzy-color-success-strong);
 		}
 
 		.fuzzy-change-arrow {
@@ -2398,6 +2170,10 @@ function ensureStyle(): void {
 			outline-offset: 2px;
 		}
 
+		.fuzzy-side-link:focus {
+			outline-color: var(--fuzzy-focus-ring-inverse);
+		}
+
 		@media (max-width: 1080px) {
 			#${PAGE_ID} {
 				grid-template-columns: 92px minmax(0, 1fr);
@@ -2423,7 +2199,9 @@ function ensureStyle(): void {
 				line-height: 1.25;
 				text-align: center;
 			}
-
+			.fuzzy-side-label {
+				flex: none;
+			}
 			.fuzzy-brand {
 				justify-content: center;
 			}

@@ -154,7 +154,7 @@ export function createCalendarPanelController(
 		const exportable = exportableAssignments(assignments);
 		if (exportable.length === 0) return;
 		download(buildDeadlineIcs(exportable), deadlineIcsFileName(new Date(now())));
-		exportMessage = `${exportable.length}件の締切をICSファイルに書き出しました。`;
+		exportMessage = `${exportable.length}件の締切をカレンダー用ファイルに保存しました。`;
 		options.onChange();
 	};
 
@@ -173,10 +173,10 @@ export function createCalendarPanelController(
 			element(
 				"p",
 				"fuzzy-calendar-copy",
-				"期限が確認できる課題を、提出済み・期限切れも含めてICSファイルにまとめます。",
+				"期限が確認できる課題を、Googleカレンダーなどへ読み込めるファイル（.ics）にまとめます。提出済み・期限切れの課題も含まれます。",
 			),
 		);
-		const button = element("button", "fuzzy-calendar-button", "ICSを書き出す");
+		const button = element("button", "fuzzy-calendar-button", "カレンダー用ファイルを保存");
 		button.type = "button";
 		button.disabled = exportableCount === 0;
 		button.addEventListener("click", () => exportAssignments(assignments));
