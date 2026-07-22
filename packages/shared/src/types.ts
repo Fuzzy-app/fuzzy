@@ -6,8 +6,12 @@
 export interface Course {
 	id: number;
 	moodleCourseId: string;
+	/** backendがMoodle文脈から確定した年度。term文字列からクライアント側で推測しない。 */
+	academicYear: number | null;
 	name: string;
 	term: string | null;
+	/** backendがNFKC正規化・衝突回避・ユーザー上書きを適用した保存用フォルダ名。 */
+	folderName: string;
 }
 
 export interface SimilarFileMatch {
@@ -23,10 +27,34 @@ export interface SaveSuggestion {
 	relativePath: string;
 	confidence: number; // 0.0〜1.0、確からしさ順の表示に使う
 	similarMatches?: SimilarFileMatch[];
+	/** 保存先に使用したコースフォルダ名と、確認が必要な警告。 */
+	courseFolder: CourseFolderNameResolution;
+}
+
+export type CourseFolderNameWarningCode = "name_conflict" | "name_shortened";
+
+export interface CourseFolderNameWarning {
+	code: CourseFolderNameWarningCode;
+	message: string;
+	/** backendが衝突回避・短縮後に提案した編集可能なフォルダ名。 */
+	suggestedFolderName: string;
+}
+
+export interface CourseFolderNameResolution {
+	/** SQLiteへ登録済みの場合のコースID。未登録のMoodleコースではnull。 */
+	courseId: number | null;
+	folderName: string;
+	warnings: CourseFolderNameWarning[];
 }
 
 export interface MoodleCourseContext {
+	/** Moodleの安定コースID。フロント移行完了までは省略可能。 */
+	moodleCourseId?: string | null;
 	name: string | null;
+	/** Moodle文脈から抽出した年度。term文字列へ埋め込まず独立して渡す。 */
+	academicYear?: number | null;
+	/** Moodle文脈から抽出した学期表記。 */
+	term?: string | null;
 	sectionTitle: string | null;
 	breadcrumbs: string[];
 }
@@ -135,6 +163,17 @@ export interface UpdateCourseRuleOverrideRequest {
 	override: CourseRuleOverrideInput;
 }
 
+/** backendが保持するコースフォルダ名を変更する。nullは自動提案へ戻す。 */
+export interface UpdateCourseFolderNameRequest {
+	courseId: number;
+	folderName: string | null;
+}
+
+export interface UpdateCourseFolderNameResult {
+	ok: true;
+	courseFolder: CourseFolderNameResolution;
+}
+
 export interface RuleUpdateResult {
 	ok: true;
 }
@@ -215,4 +254,28 @@ export interface AssignmentChange {
 	oldValue: string | null;
 	newValue: string | null;
 	detectedAt: string; // ISO8601
+}
+
+/** 現在の拡張機能実応答APIの通信仕様バージョン。 */
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 1 as const;
+
+/** 拡張機能がnative-hostへ報告する、ブラウザ名に依存しない実行情報。 */
+export interface ExtensionRuntimeReport {
+	installationId: string;
+	extensionVersion: string;
+	protocolVersion: number;
+}
+
+/** SQLiteに保存された、インストール・バージョン単位の初回／最終応答。 */
+export interface ExtensionRuntimeObservation extends ExtensionRuntimeReport {
+	firstSeenAt: string;
+	lastSeenAt: string;
+}
+
+export type ExtensionSetupState = "waiting" | "ready" | "incompatible";
+
+/** 初期セットアップ画面がSQLiteから読み取る拡張機能の応答状態。 */
+export interface ExtensionSetupStatus {
+	state: ExtensionSetupState;
+	observation: ExtensionRuntimeObservation | null;
 }

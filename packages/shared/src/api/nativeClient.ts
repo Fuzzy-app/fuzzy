@@ -6,6 +6,8 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroupListItem,
+	ExtensionRuntimeObservation,
+	ExtensionRuntimeReport,
 	ExtractZipRequest,
 	ExtractZipResult,
 	NotificationRule,
@@ -20,6 +22,8 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseFolderNameRequest,
+	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
 	UpdateGlobalRuleRequest,
 } from "../types";
@@ -87,6 +91,15 @@ export class NativeApiClient implements FuzzyApiClient {
 		}
 	}
 
+	/**
+	 * 拡張機能自身の起動情報をSQLiteへ記録する。
+	 *
+	 * FuzzyApiClientの通常データAPIには含めず、拡張機能backgroundからだけ呼び出す。
+	 */
+	reportExtensionRuntime(report: ExtensionRuntimeReport): Promise<ExtensionRuntimeObservation> {
+		return this.send("reportExtensionRuntime", report);
+	}
+
 	getDashboard(): Promise<DashboardSummary> {
 		return this.send("getDashboard", {});
 	}
@@ -129,6 +142,12 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult> {
 		return this.send("updateCourseRuleOverride", request);
+	}
+
+	updateCourseFolderName(
+		request: UpdateCourseFolderNameRequest,
+	): Promise<UpdateCourseFolderNameResult> {
+		return this.send("updateCourseFolderName", request);
 	}
 
 	getRuleViolations(): Promise<RuleViolationListItem[]> {

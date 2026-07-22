@@ -12,19 +12,22 @@
 		scanExistingStructureClient,
 	} from "$lib/setup/api";
 	import { createCourseOverrides } from "$lib/setup/course-overrides";
+	import ExtensionInstallStep from "$lib/setup/ExtensionInstallStep.svelte";
 	import type {
 		InitialRuleOption,
 		SetupDraft,
 		SetupStatus,
 	} from "$lib/setup/types";
 
-	const steps = [
-		{ label: "保存先", state: "done" },
-		{ label: "推定結果", state: "done" },
-		{ label: "初期ルール", state: "current" },
-	] as const;
+	type SetupStepState = "done" | "current" | "pending";
 
-	const sidebarItems = ["保存先フォルダ", "保存パターン推定", "初期ルール選択"];
+	const stepLabels = ["保存先", "推定結果", "初期ルール", "拡張機能"] as const;
+	const sidebarItems = [
+		"保存先フォルダ",
+		"保存パターン推定",
+		"初期ルール選択",
+		"ブラウザ拡張機能",
+	];
 
 	const rulePreviewExamples = [
 		{ course: "情報アーキテクチャ", assignment: "第03回レポート" },
@@ -52,15 +55,21 @@
 	};
 
 	let setupStatus: SetupStatus = { done: false };
+	let currentStepIndex = 2;
 	let isPickingFolder = false;
 	let isScanning = false;
 	let isSaving = false;
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
 	const minimumScanLoadingMs = 450;
+	const extensionVerificationStartedAt = new Date().toISOString();
 
 	onMount(async () => {
 		setupStatus = await getSetupStatusClient();
+
+		if (setupStatus.done) {
+			currentStepIndex = 3;
+		}
 	});
 
 	function formatScannedAt(value: string | null): string {
@@ -192,7 +201,8 @@
 			});
 
 			setupStatus = await getSetupStatusClient();
-			successMessage = "初期セットアップを保存しました。";
+			successMessage = "保存先と初期ルールを保存しました。";
+			currentStepIndex = 3;
 		} catch {
 			errorMessage = "初期セットアップの保存に失敗しました。";
 		} finally {
@@ -215,12 +225,20 @@
 	$: canSaveSetup = Boolean(
 		draft.baseFolderPath && selectedCandidate && selectedRule,
 	);
+	$: steps = stepLabels.map((label, index) => ({
+		label,
+		state: (index < currentStepIndex
+			? "done"
+			: index === currentStepIndex
+				? "current"
+				: "pending") as SetupStepState,
+	}));
 </script>
 
 <svelte:head>
 	<meta
 		name="description"
-		content="Fuzzy の初期セットアップ画面。保存パターン推定結果と初期ルールを選択できます。"
+		content="Fuzzy の初期セットアップ画面。保存パターン、初期ルール、ブラウザ拡張機能の導入を設定できます。"
 	/>
 </svelte:head>
 
@@ -243,12 +261,15 @@
 	<section class="workspace">
 		<aside class="sidebar">
 			<p class="sidebar-label">
-				Issue #47: 推定結果から初期ルールを選び、保存完了まで確認します。
+				保存先と初期ルールを設定した後、ブラウザ拡張機能の導入を案内します。
 			</p>
 			<nav aria-label="セットアップの流れ">
 				<ul class="side-list">
 					{#each sidebarItems as item, index}
-						<li class:active={index <= 2}>
+						<li
+							class:active={index <= currentStepIndex}
+							aria-current={index === currentStepIndex ? "step" : undefined}
+						>
 							<span class="side-index">{index + 1}</span>
 							<span>{item}</span>
 						</li>
@@ -260,7 +281,10 @@
 		<section class="content">
 			<div class="progress" aria-label="進捗">
 				{#each steps as item, index}
-					<div class="progress-item">
+					<div
+						class="progress-item"
+						aria-current={item.state === "current" ? "step" : undefined}
+					>
 						<div
 							class:current={item.state === "current"}
 							class:done={item.state === "done"}
@@ -277,10 +301,10 @@
 				{/each}
 			</div>
 
-			<section class="panel">
+			<section class="panel" hidden={currentStepIndex !== 2}>
 				<div class="panel-header">
 					<div>
-						<p class="chip">STEP 3 / 3</p>
+						<p class="chip">STEP 3 / 4</p>
 						<h1>保存パターンを確認して、初期ルールを選ぶ</h1>
 						<p class="intro">
 							スキャン結果に近い保存パターンを確認し、Fuzzy
@@ -334,7 +358,7 @@
 
 				{#if setupStatus.done}
 					<p class="success-banner" role="status">
-						初期セットアップは保存済みです。
+						保存先と初期ルールは保存済みです。
 						{#if setupStatus.savedAt}
 							<span>保存日時: {formatScannedAt(setupStatus.savedAt)}</span>
 						{/if}
@@ -505,6 +529,15 @@
 				</section>
 
 				<div class="action-row">
+					{#if setupStatus.done}
+						<button
+							class="ghost-button"
+							type="button"
+							on:click={() => (currentStepIndex = 3)}
+						>
+							拡張機能の導入へ進む
+						</button>
+					{/if}
 					<button
 						class="primary-button"
 						type="button"
@@ -519,6 +552,12 @@
 					</button>
 				</div>
 			</section>
+			{#if currentStepIndex === 3}
+				<ExtensionInstallStep
+					verificationStartedAt={extensionVerificationStartedAt}
+					onBack={() => (currentStepIndex = 2)}
+				/>
+			{/if}
 		</section>
 	</section>
 </main>
@@ -1060,6 +1099,7 @@
 	.action-row {
 		margin-top: 18px;
 		justify-content: flex-end;
+		gap: 10px;
 	}
 
 	.ghost-button,

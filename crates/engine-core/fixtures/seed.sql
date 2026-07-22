@@ -12,13 +12,13 @@ INSERT INTO app_settings (key, value) VALUES
 INSERT INTO global_rule (id, pattern_key, pattern_template) VALUES
 	(1, 'term_course_section', '{term}/{course}/第{section}回');
 
-INSERT INTO courses (id, moodle_course_id, name, term) VALUES
-	(1, 'course-350', '情報アーキテクチャ', '2026前期'),
-	(2, 'course-412', 'データベース', '2026前期'),
-	(3, 'course-318', '離散数学', '2026前期'),
-	(4, 'course-350-app', 'アプリ演習', '2026前期'),
-	(5, 'course-274', '認知科学概論', '2026前期'),
-	(6, 'course-501', '英語IIB', '2026前期');
+INSERT INTO courses (id, moodle_course_id, name, academic_year, term) VALUES
+	(1, 'course-350', '情報アーキテクチャ', 2026, '2026前期'),
+	(2, 'course-412', 'データベース', 2026, '2026前期'),
+	(3, 'course-318', '離散数学', 2026, '2026前期'),
+	(4, 'course-350-app', 'アプリ演習', 2026, '2026前期'),
+	(5, 'course-274', '認知科学概論', 2026, '2026前期'),
+	(6, 'course-501', '英語IIB', 2026, '2026前期');
 
 -- アプリ演習だけ「回ごとに分けない」例外ルール（仕様書の例に対応）
 INSERT INTO course_rule_overrides (course_id, split_by_section, pattern_template, note) VALUES
