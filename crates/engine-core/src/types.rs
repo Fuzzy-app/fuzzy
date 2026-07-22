@@ -11,6 +11,8 @@ use std::path::PathBuf;
 pub struct FileEntry {
 	/// 絶対パス。
 	pub path: PathBuf,
+	/// 走査起点からの相対パス。推定処理ではこの階層だけを根拠にする。
+	pub relative_path: PathBuf,
 	/// ファイル名（拡張子込み）。
 	pub file_name: String,
 	/// バイト単位のサイズ。
@@ -19,11 +21,33 @@ pub struct FileEntry {
 	pub modified_at: Option<i64>,
 }
 
-/// 既存フォルダ構成から推定した保存パターン。
+/// 走査中に読み取れなかったパス。走査可能な他のファイルは結果として返す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanWarning {
+	/// 読み取りに失敗した、走査起点からの相対パス。
+	pub path: PathBuf,
+	/// 内部情報を含まないユーザー確認用の説明。
+	pub message: String,
+}
+
+/// 走査起点、取得できたファイル、部分的な読み取り失敗をまとめた結果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanSnapshot {
+	/// 正規化済みの走査起点。
+	pub root: PathBuf,
+	/// 読み取りに成功したファイル。
+	pub entries: Vec<FileEntry>,
+	/// 読み取りを継続できた非致命的なエラー。
+	pub warnings: Vec<ScanWarning>,
+}
+
+/// 既存フォルダ構成・命名規則から推定した保存パターン。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavePatternGuess {
-	/// パターンテンプレート（例: `{course}/{section}/{filename}`）。
-	pub pattern_template: String,
+	/// DBの保存ルールへ使用できるディレクトリ用テンプレート。
+	pub directory_template: String,
+	/// 比較評価用に推定したファイル名テンプレート。命名規則を検出しない場合は`None`。
+	pub file_name_template: Option<String>,
 	/// 確からしさ（0.0〜1.0）。確からしさ順の提示に使う。
 	pub confidence: f64,
 	/// このパターンに合致した既存ファイル数。

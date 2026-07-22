@@ -23,17 +23,20 @@ fn recognizes_arabic_and_kanji_section_names() {
 }
 
 #[test]
-fn recognizes_section_markers_at_the_start_of_file_names() {
-	for (input, number) in [
-		("第十二回_講義資料.pdf", 12),
-		("十二_講義資料.pdf", 12),
-		("09_演習課題.docx", 9),
-		("０４-配布資料.pptx", 4),
-		("Week 4_lecture.pdf", 4),
-		("第十三回　補講資料.pdf", 13),
+fn recognizes_file_name_prefixes_without_scanning_the_middle() {
+	for (input, rule_id, number) in [
+		("第十二回_講義資料.pdf", "ja_ordinal", 12),
+		("Week 4 - reading.pdf", "en_week", 4),
+		("09_講義資料.pdf", "numeric_file_prefix", 9),
+		("十二_演習課題.docx", "numeric_file_prefix", 12),
 	] {
 		let matched = parse_section_file_prefix(input).expect("接頭辞を認識できる");
+		assert_eq!(matched.rule_id, rule_id, "入力: {input}");
 		assert_eq!(matched.number, Some(number), "入力: {input}");
+	}
+
+	for input in ["講義資料_第4回.pdf", "report2026.pdf", "v2_改訂版.pdf"] {
+		assert!(parse_section_file_prefix(input).is_none(), "入力: {input}");
 	}
 }
 
