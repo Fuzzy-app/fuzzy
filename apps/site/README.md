@@ -11,7 +11,16 @@ bun install
 bun run dev:site
 ```
 
-表示されたURL（通常は `http://127.0.0.1:5173/`）をChromeで開きます。
+表示されたURL（通常は `http://127.0.0.1:5173/`）をブラウザで開きます。
+
+## 配布ファイル名
+
+サイトのダウンロードボタンは、GitHub Releaseへ次の名前で添付されたファイルを直接取得します。
+
+- Windowsアプリ: `Fuzzy-Setup.exe`
+- ブラウザ拡張機能: `Fuzzy-Extension.zip`
+
+配布時はファイル名を変えずにReleaseへ添付します。利用者はGitHub Releasesの一覧画面を経由しません。
 
 ## 公開用ビルド
 

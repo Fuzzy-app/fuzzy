@@ -13,7 +13,22 @@ describe("Fuzzy GitHub Pages site", () => {
 
 		expect(html).toContain("Fuzzy for Windows");
 		expect(html).toContain("現在は開発・レビュー段階です");
-		expect(html).toContain("拡張機能の追加は、利用者自身が確認して行います");
+		expect(html).toContain("Windowsアプリとブラウザ拡張機能は別々に導入します");
+		expect(html).toContain("学習状況をひと目で確認");
+		expect(html).not.toContain("おかえりなさい");
+	});
+
+	test("アプリと拡張機能をGitHubの一覧画面を経由せず取得できる", async () => {
+		const html = await readFile(new URL("index.html", siteRoot), "utf8");
+
+		expect(html).toContain(
+			'href="https://github.com/Fuzzy-app/fuzzy/releases/latest/download/Fuzzy-Setup.exe"',
+		);
+		expect(html).toContain(
+			'href="https://github.com/Fuzzy-app/fuzzy/releases/latest/download/Fuzzy-Extension.zip"',
+		);
+		expect(html).toContain("Chrome以外も利用可能");
+		expect(html).toContain("Chrome限定ではありません");
 	});
 
 	test("公開リンクはHTTPSを使用する", async () => {
