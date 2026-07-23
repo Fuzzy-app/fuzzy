@@ -1,7 +1,7 @@
 //! Moodle由来のコース名をWindowsの保存フォルダ名へ正規化する。
 //!
 //! raw course nameはSQLiteへ保持し、保存用の名前はbackendだけが生成する。NFKC正規化、
-//! 補足・絵文字除去、Windows名の安全化、長さ制限、同名衝突の別名提案をここへ集約する。
+//! 明確な補足・絵文字除去、Windows名の安全化、長さ制限、同名衝突の別名提案をここへ集約する。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,6 +9,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::error::{EngineError, EngineResult};
+use crate::folder_name_notes::remove_supplemental_notes;
 use crate::windows_names::{is_windows_reserved_name, utf16_len, validate_windows_component};
 
 /// 保存用コースフォルダ名の上限。後続の学期・セクション・ファイル名の余地を残す。
@@ -57,12 +58,23 @@ struct FolderCandidate<'a> {
 	was_shortened: bool,
 }
 
-/// Moodle上の補足表記と絵文字を除き、Windowsで使用できるフォルダ名へ正規化する。
+/// Moodle上の明確な補足表記と絵文字を除き、分類情報を保ったフォルダ名へ正規化する。
 pub fn folder_segment(value: &str) -> String {
 	let normalized = normalize_folder_text(value);
-	let without_notes = remove_balanced_notes(&normalized);
+	let without_notes = remove_supplemental_notes(&normalized);
 	let normalized = normalize_folder_text(&without_notes);
 	sanitize_generated_component(&normalized)
+}
+
+/// ルールへ展開する動的な値を、単一のWindowsフォルダ要素へ正規化する。
+///
+/// テンプレート中の区切りとMoodle由来の値に含まれる区切りを混同しないよう、`/`と`\`は
+/// 可読な中黒へ変換する。不正文字だけで空になった値は、階層を黙って欠落させずエラーにする。
+pub(crate) fn normalize_dynamic_folder_component(token: &str, value: &str) -> EngineResult<String> {
+	let normalized = normalize_folder_text(value);
+	let sanitized = sanitize_normalized_component(&normalized, token);
+	validate_windows_component(token, &sanitized)?;
+	Ok(sanitized)
 }
 
 /// 全コースを同時に解決し、同じ保存用フォルダ名が二つ存在しないようにする。
@@ -325,16 +337,27 @@ fn truncate_to_utf16(value: &str, max_units: usize) -> String {
 }
 
 fn sanitize_generated_component(value: &str) -> String {
-	let sanitized = value
-		.chars()
-		.map(|character| {
-			if character.is_control() || r#"<>:"/\|?*"#.contains(character) {
-				' '
-			} else {
-				character
+	sanitize_normalized_component(value, "course")
+}
+
+fn sanitize_normalized_component(value: &str, reserved_prefix: &str) -> String {
+	let mut sanitized = String::new();
+	let mut previous_path_separator = false;
+	for character in value.chars() {
+		if matches!(character, '/' | '\\') {
+			if !previous_path_separator {
+				sanitized.push('・');
 			}
-		})
-		.collect::<String>();
+			previous_path_separator = true;
+			continue;
+		}
+		previous_path_separator = false;
+		if character.is_control() || r#"<>:"|?*"#.contains(character) {
+			sanitized.push(' ');
+		} else {
+			sanitized.push(character);
+		}
+	}
 	let sanitized = collapse_whitespace(&sanitized)
 		.trim_end_matches(['.', ' '])
 		.to_string();
@@ -343,7 +366,7 @@ fn sanitize_generated_component(value: &str) -> String {
 	}
 	let stem = sanitized.split('.').next().unwrap_or(&sanitized);
 	if is_windows_reserved_name(stem) {
-		format!("course-{sanitized}")
+		format!("{reserved_prefix}-{sanitized}")
 	} else {
 		sanitized
 	}
@@ -376,33 +399,6 @@ fn is_emoji_character(character: char) -> bool {
 			| '\u{2600}'..='\u{27bf}'
 			| '\u{1f000}'..='\u{1faff}'
 	)
-}
-
-fn remove_balanced_notes(value: &str) -> String {
-	let mut current = value.to_string();
-	loop {
-		let characters = current.char_indices().collect::<Vec<_>>();
-		let mut pair = None;
-		for (close_index, close) in &characters {
-			let open = match close {
-				')' => '(',
-				']' => '[',
-				_ => continue,
-			};
-			if let Some((open_index, _)) = characters
-				.iter()
-				.rev()
-				.find(|(index, character)| index < close_index && *character == open)
-			{
-				pair = Some((*open_index, *close_index + close.len_utf8()));
-				break;
-			}
-		}
-		let Some((start, end)) = pair else {
-			return current;
-		};
-		current.replace_range(start..end, " ");
-	}
 }
 
 fn normalize_stable_id(value: &str) -> String {
@@ -477,13 +473,48 @@ mod tests {
 	}
 
 	#[test]
-	fn normalizes_nfkc_notes_emoji_and_windows_characters() {
+	fn removes_only_clear_supplemental_notes() {
 		for (input, expected) in [
 			("情報科学📚（2026年度・前期）", "情報科学"),
 			("統計学 (担当: 山田)", "統計学"),
-			("英語［Aクラス］", "英語"),
+			("第4回[配布資料]🔬", "第4回"),
+			("情報科学（2026）", "情報科学"),
+			("情報科学（通年）", "情報科学"),
+		] {
+			assert_eq!(folder_segment(input), expected, "入力: {input}");
+		}
+	}
+
+	#[test]
+	fn preserves_important_ambiguous_and_nested_bracket_content() {
+		for (input, expected) in [
+			("総合科目（物理）", "総合科目(物理)"),
+			("総合科目（物理・前期）", "総合科目(物理・前期)"),
+			("英語［Aクラス］", "英語[Aクラス]"),
+			("情報科学（追加）", "情報科学(追加)"),
+			("プログラミング（演習［配布資料］）", "プログラミング(演習)"),
+		] {
+			assert_eq!(folder_segment(input), expected, "入力: {input}");
+		}
+	}
+
+	#[test]
+	fn preserves_unbalanced_or_crossed_brackets() {
+		for input in [
+			"情報科学（前期",
+			"情報科学（［前期）］",
+			"情報科学（補足［前期］",
+		] {
+			assert_eq!(folder_segment(input), input.nfkc().collect::<String>());
+		}
+	}
+
+	#[test]
+	fn sanitizes_path_separators_and_windows_names() {
+		for (input, expected) in [
 			("情報科学①", "情報科学1"),
-			("C/C++演習", "C C++演習"),
+			("C/C++演習", "C・C++演習"),
+			("情報応用2A\\2B", "情報応用2A・2B"),
 			("CON", "course-CON"),
 		] {
 			assert_eq!(folder_segment(input), expected, "入力: {input}");
@@ -491,15 +522,27 @@ mod tests {
 	}
 
 	#[test]
-	fn proposes_readable_aliases_for_simplified_name_collisions() {
+	fn keeps_important_bracket_content_as_distinct_names() {
 		let courses = [
 			identity(1, "英語（A）", "course-english-a", None),
 			identity(2, "英語［B］", "course-english-b", None),
 		];
 		let resolved = resolve_course_folder_names(&courses).unwrap();
 
-		assert_eq!(resolved[0].folder_name, "英語_A");
-		assert_eq!(resolved[1].folder_name, "英語_B");
+		assert_eq!(resolved[0].folder_name, "英語(A)");
+		assert_eq!(resolved[1].folder_name, "英語[B]");
+		assert!(resolved.iter().all(|course| course.warnings.is_empty()));
+	}
+
+	#[test]
+	fn disambiguates_names_after_supplemental_notes_are_removed() {
+		let courses = [
+			identity(1, "情報科学（2026年度・前期）", "course-info-2026", None),
+			identity(2, "情報科学（担当: 山田）", "course-info-yamada", None),
+		];
+		let resolved = resolve_course_folder_names(&courses).unwrap();
+
+		assert_ne!(resolved[0].folder_name, resolved[1].folder_name);
 		assert!(resolved
 			.iter()
 			.all(|course| course.warnings[0].code == CourseFolderNameWarningCode::NameConflict));
