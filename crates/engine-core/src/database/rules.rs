@@ -412,7 +412,7 @@ mod tests {
 	}
 
 	#[test]
-	fn normalizes_and_disambiguates_course_names_for_rule_matching() {
+	fn preserves_important_course_name_details_for_rule_matching() {
 		let database = Database::open_in_memory().unwrap();
 		database.conn().execute_batch(SEED_SQL).unwrap();
 		database
@@ -426,10 +426,10 @@ mod tests {
 					size_bytes, hash_blake3
 				 ) VALUES
 					(10, 7, 1, '資料A.pdf',
-					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語_A\\第1回\\資料A.pdf',
+					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語(A)\\第1回\\資料A.pdf',
 					 1, 'b3:course-a'),
 					(11, 8, 1, '資料B.pdf',
-					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語_B\\第1回\\資料B.pdf',
+					 'C:\\Users\\sample\\Documents\\大学\\2026前期\\英語[B]\\第1回\\資料B.pdf',
 					 1, 'b3:course-b');",
 			)
 			.unwrap();
@@ -441,13 +441,13 @@ mod tests {
 			.map(|file| file.context.course_name.as_deref().unwrap())
 			.collect::<Vec<_>>();
 
-		assert_eq!(course_names, vec!["英語_A", "英語_B"]);
+		assert_eq!(course_names, vec!["英語(A)", "英語[B]"]);
 		assert!(database
 			.load_course_folder_resolutions()
 			.unwrap()
 			.into_iter()
 			.filter(|resolution| matches!(resolution.course_id, 7 | 8))
-			.all(|resolution| !resolution.warnings.is_empty()));
+			.all(|resolution| resolution.warnings.is_empty()));
 	}
 
 	#[test]

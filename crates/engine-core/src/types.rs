@@ -85,7 +85,7 @@ pub struct CourseRuleOverride {
 pub struct RuleContext {
 	/// SQLite上のコースID。コース別例外ルールの選択に使う。
 	pub course_id: Option<i64>,
-	/// 括弧内補足・絵文字・同名衝突を処理した、保存フォルダ用のコース名。
+	/// 明確な括弧内補足・絵文字・同名衝突を処理した、保存フォルダ用のコース名。
 	pub course_name: Option<String>,
 	/// 年度（例: `2026`）。
 	pub year: Option<String>,

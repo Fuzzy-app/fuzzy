@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::error::{EngineError, EngineResult};
+use crate::folder_names::normalize_dynamic_folder_component;
 use crate::types::RuleContext;
 use crate::windows_names::validate_windows_component;
 
@@ -27,6 +28,11 @@ impl ExpectedRelativePath {
 			.split(['/', '\\'])
 			.map(|segment| expected_segment(segment.trim(), context))
 			.collect::<EngineResult<Vec<_>>>()?;
+		for segment in &segments {
+			if let Some(rendered) = render_literal_segment(segment) {
+				validate_windows_component("relative_path", &rendered)?;
+			}
+		}
 		Ok(Self { segments })
 	}
 
@@ -91,8 +97,9 @@ fn expected_segment(segment: &str, context: &RuleContext) -> EngineResult<Vec<Ma
 		let value = context_value(context, token);
 		match value {
 			Some(value) => {
-				validate_windows_component(token, value)?;
-				parts.push(MatchPart::Literal(value.to_string()));
+				parts.push(MatchPart::Literal(normalize_dynamic_folder_component(
+					token, value,
+				)?));
 			}
 			None => parts.push(MatchPart::MissingToken(token_label(token))),
 		}
@@ -102,6 +109,16 @@ fn expected_segment(segment: &str, context: &RuleContext) -> EngineResult<Vec<Ma
 		parts.push(MatchPart::Literal(rest.to_string()));
 	}
 	Ok(parts)
+}
+
+fn render_literal_segment(segment: &[MatchPart]) -> Option<String> {
+	segment
+		.iter()
+		.map(|part| match part {
+			MatchPart::Literal(value) => Some(value.as_str()),
+			MatchPart::MissingToken(_) => None,
+		})
+		.collect::<Option<String>>()
 }
 
 fn context_value<'a>(context: &'a RuleContext, token: &str) -> Option<&'a str> {
@@ -388,5 +405,59 @@ mod tests {
 		)
 		.unwrap();
 		assert!(expected.matches(&actual[..actual.len() - 1]));
+	}
+
+	#[test]
+	fn keeps_dynamic_path_separators_inside_each_template_segment() {
+		let context = RuleContext {
+			course_name: Some("情報応用2A/2B".to_string()),
+			term: Some("2026前期".to_string()),
+			assignment: Some("演習\\解答".to_string()),
+			..RuleContext::default()
+		};
+		let expected = ExpectedRelativePath::new("{term}/{course}/{assignment}", &context).unwrap();
+
+		assert_eq!(
+			expected.render_complete().unwrap(),
+			"2026前期\\情報応用2A・2B\\演習・解答"
+		);
+	}
+
+	#[test]
+	fn sanitizes_reserved_names_and_control_characters_in_dynamic_values() {
+		let context = RuleContext {
+			course_name: Some("CON".to_string()),
+			assignment: Some("資料\u{1}".to_string()),
+			..RuleContext::default()
+		};
+		let expected = ExpectedRelativePath::new("{course}/{assignment}", &context).unwrap();
+
+		assert_eq!(expected.render_complete().unwrap(), "course-CON\\資料");
+	}
+
+	#[test]
+	fn rejects_empty_or_oversized_dynamic_values() {
+		let empty = RuleContext {
+			course_name: Some("\u{1}".to_string()),
+			..RuleContext::default()
+		};
+		assert!(ExpectedRelativePath::new("{course}", &empty).is_err());
+
+		let oversized = RuleContext {
+			course_name: Some("あ".repeat(256)),
+			..RuleContext::default()
+		};
+		assert!(ExpectedRelativePath::new("{course}", &oversized).is_err());
+	}
+
+	#[test]
+	fn validates_the_rendered_segment_after_combining_tokens() {
+		let context = RuleContext {
+			course_name: Some("CO".to_string()),
+			section: Some("N".to_string()),
+			..RuleContext::default()
+		};
+
+		assert!(ExpectedRelativePath::new("{course}{section}", &context).is_err());
 	}
 }
