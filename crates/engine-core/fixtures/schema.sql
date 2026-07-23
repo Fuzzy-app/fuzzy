@@ -27,7 +27,7 @@ CREATE TABLE courses (
 	name                 TEXT NOT NULL,
 	academic_year        INTEGER CHECK (academic_year BETWEEN 1900 AND 9999),
 	term                 TEXT,
-	-- NULLならbackendがraw nameから正規化・衝突回避した名前を使用する。ユーザー変更時だけ保存する
+	-- NULLならbackendがraw nameを保守的に正規化・衝突回避した名前を使用する。ユーザー変更時だけ保存する
 	folder_name_override TEXT,
 	created_at           TEXT NOT NULL DEFAULT (datetime('now')),
 	updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
