@@ -139,4 +139,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 1;

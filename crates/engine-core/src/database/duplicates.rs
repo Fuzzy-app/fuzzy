@@ -178,9 +178,65 @@ mod tests {
 
 	use super::*;
 	use crate::duplicate::{DefaultDuplicateDetector, DEFAULT_SIMILARITY_THRESHOLD};
+	use crate::types::{DetectedDuplicateMember, DuplicateMatch};
 	use crate::SEED_SQL;
 
 	static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+	struct InvalidPersistenceDetector;
+
+	impl DuplicateDetector for InvalidPersistenceDetector {
+		fn fingerprint(&self, _path: &Path) -> EngineResult<FileFingerprint> {
+			unreachable!("このテストでは呼び出さない")
+		}
+
+		fn find_exact(&self, _path: &Path) -> EngineResult<Vec<DuplicateMatch>> {
+			unreachable!("このテストでは呼び出さない")
+		}
+
+		fn find_similar(&self, _path: &Path, _threshold: f64) -> EngineResult<Vec<DuplicateMatch>> {
+			unreachable!("このテストでは呼び出さない")
+		}
+
+		fn detect_groups(
+			&self,
+			_fingerprints: &[StoredFileFingerprint],
+			_threshold: f64,
+		) -> EngineResult<Vec<DetectedDuplicateGroup>> {
+			Ok(vec![DetectedDuplicateGroup {
+				method: DuplicateMethod::Exact,
+				members: vec![
+					DetectedDuplicateMember {
+						file_id: 3,
+						similarity: 1.0,
+					},
+					DetectedDuplicateMember {
+						file_id: i64::MAX,
+						similarity: 1.0,
+					},
+				],
+			}])
+		}
+	}
+
+	fn stored_duplicate_rows(database: &Database) -> Vec<(i64, String, i64, f64)> {
+		let mut statement = database
+			.conn()
+			.prepare(
+				"SELECT g.id, g.method, m.file_id, m.similarity
+				 FROM duplicate_groups g
+				 JOIN duplicate_members m ON m.group_id = g.id
+				 ORDER BY g.id, m.file_id",
+			)
+			.unwrap();
+		statement
+			.query_map([], |row| {
+				Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+			})
+			.unwrap()
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.unwrap()
+	}
 
 	#[test]
 	fn seed_exact_pair_is_detected_and_registered_again() {
@@ -236,6 +292,19 @@ mod tests {
 			})
 			.unwrap();
 		assert_eq!(groups, 1);
+	}
+
+	#[test]
+	fn failed_group_persistence_rolls_back_deleted_groups_and_members() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+		let before = stored_duplicate_rows(&database);
+
+		assert!(database
+			.refresh_duplicate_groups(&InvalidPersistenceDetector, DEFAULT_SIMILARITY_THRESHOLD,)
+			.is_err());
+
+		assert_eq!(stored_duplicate_rows(&database), before);
 	}
 
 	#[test]

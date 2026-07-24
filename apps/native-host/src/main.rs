@@ -36,7 +36,10 @@ fn main() -> std::io::Result<()> {
 		let response = match serde_json::from_slice::<Request>(&body) {
 			Ok(request) => dispatch(&mut database, request),
 			// envelope自体が壊れておりidも取れないため、id: null で返す。
-			Err(e) => Response::err(None, "INTERNAL", format!("リクエストを解釈できません: {e}")),
+			Err(error) => {
+				eprintln!("Native Messagingリクエストの解析に失敗しました: {error}");
+				Response::err(None, "INVALID_REQUEST", "リクエストの形式が不正です。")
+			}
 		};
 		protocol::write_message(&mut output, &response)?;
 	}
@@ -52,11 +55,17 @@ fn dispatch(database: &mut Database, request: Request) -> Response {
 		"ping" => ping(request.id),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
 		"updateCourseFolderName" => update_course_folder_name(database, request),
-		_ => Response::err(
-			Some(request.id),
-			"INTERNAL",
-			format!("コマンド '{}' は未実装です", request.command),
-		),
+		_ => {
+			eprintln!(
+				"未実装のNative Messagingコマンドを受信しました: {}",
+				request.command
+			);
+			Response::err(
+				Some(request.id),
+				"INTERNAL",
+				"指定されたコマンドは利用できません。",
+			)
+		}
 	}
 }
 
@@ -65,10 +74,11 @@ fn update_course_folder_name(database: &mut Database, request: Request) -> Respo
 	let update = match serde_json::from_value::<UpdateCourseFolderNameRequest>(request.payload) {
 		Ok(update) => update,
 		Err(error) => {
+			eprintln!("コースフォルダ名の更新内容を解析できませんでした: {error}");
 			return Response::err(
 				Some(request.id),
 				"INVALID_REQUEST",
-				format!("コースフォルダ名の更新内容を解釈できません: {error}"),
+				"コースフォルダ名の更新内容が不正です。",
 			);
 		}
 	};
@@ -81,11 +91,10 @@ fn update_course_folder_name(database: &mut Database, request: Request) -> Respo
 			};
 			match serde_json::to_value(result) {
 				Ok(data) => Response::ok(request.id, data),
-				Err(error) => Response::err(
-					Some(request.id),
-					"INTERNAL",
-					format!("応答を生成できません: {error}"),
-				),
+				Err(error) => {
+					eprintln!("コースフォルダ名の更新応答を生成できませんでした: {error}");
+					Response::err(Some(request.id), "INTERNAL", "応答の生成に失敗しました。")
+				}
 			}
 		}
 		Err(error) => engine_error_response(request.id, error),
@@ -97,10 +106,11 @@ fn report_extension_runtime(database: &Database, request: Request) -> Response {
 	let report = match serde_json::from_value::<ExtensionRuntimeReport>(request.payload) {
 		Ok(report) => report,
 		Err(error) => {
+			eprintln!("拡張機能の実行情報を解析できませんでした: {error}");
 			return Response::err(
 				Some(request.id),
 				"INVALID_REQUEST",
-				format!("拡張機能の実行情報を解釈できません: {error}"),
+				"拡張機能の実行情報が不正です。",
 			);
 		}
 	};
@@ -108,25 +118,26 @@ fn report_extension_runtime(database: &Database, request: Request) -> Response {
 	match database.record_extension_runtime(&report) {
 		Ok(observation) => match serde_json::to_value(observation) {
 			Ok(data) => Response::ok(request.id, data),
-			Err(error) => Response::err(
-				Some(request.id),
-				"INTERNAL",
-				format!("応答を生成できません: {error}"),
-			),
+			Err(error) => {
+				eprintln!("拡張機能の実行情報の応答を生成できませんでした: {error}");
+				Response::err(Some(request.id), "INTERNAL", "応答の生成に失敗しました。")
+			}
 		},
 		Err(error) => engine_error_response(request.id, error),
 	}
 }
 
 fn engine_error_response(id: String, error: EngineError) -> Response {
-	let code = match error {
-		EngineError::InvalidInput { .. } => "INVALID_REQUEST",
+	let code = match &error {
+		EngineError::InvalidInput { .. } | EngineError::InvalidPath { .. } => "INVALID_REQUEST",
 		EngineError::NotFound { .. } => "NOT_FOUND",
 		EngineError::Database { .. } => "DB_ERROR",
 		EngineError::RuleConflict { .. } => "RULE_CONFLICT",
+		EngineError::Io(_) | EngineError::PathIo { .. } => "IO_ERROR",
 		_ => "INTERNAL",
 	};
-	Response::err(Some(id), code, error.to_string())
+	eprintln!("エンジン処理に失敗しました（{code}）: {error}");
+	Response::err(Some(id), code, error.user_message())
 }
 
 /// `ping`：疎通確認（docs/api/contract.md 1.2節）。`{}` → `{ version }`。
@@ -235,5 +246,21 @@ mod tests {
 		let response = dispatch(&mut database, request);
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "NOT_FOUND");
+	}
+
+	#[test]
+	fn engine_error_response_hides_paths_and_internal_details() {
+		let error = EngineError::PathIo {
+			path: "C:\\Users\\sample\\Documents\\大学\\秘密.pdf".to_string(),
+			source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied"),
+		};
+
+		let response = engine_error_response("req-io".to_string(), error);
+		let error = response.error.unwrap();
+
+		assert_eq!(error.code, "IO_ERROR");
+		assert_eq!(error.message, "ファイルの読み書きに失敗しました。");
+		assert!(!error.message.contains("C:\\"));
+		assert!(!error.message.contains("access denied"));
 	}
 }

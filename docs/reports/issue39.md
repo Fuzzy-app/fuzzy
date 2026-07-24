@@ -46,7 +46,7 @@
 ## 型・API・DB・仕様の整合性
 
 - `SaveSuggestion`へ保存用コース名と警告を追加し、`updateCourseFolderName`をAPI契約・`packages/shared/src/types.ts`へ追加した
-- `courses.academic_year`と`courses.folder_name_override`をDBスキーマv2へ追加し、年度を`term`から実行時推測しない設計へ変更した
+- `courses.academic_year`と`courses.folder_name_override`を未リリース版の完成形DBスキーマv1へ統合し、年度を`term`から実行時推測しない設計へ変更した
 - 保存先提案を「ファイルのフルパス」ではなく `saveFiles.targetPath` に渡す「フォルダ」として扱い、既存の `SaveSuggestion` 契約・モック実装と揃えた
 - `RuleSet` のグローバルテンプレートとコース別例外、`files.rule_compliant` / `violation_reason`、コースID基準の上書きという既存設計を維持した
 - `PatternEstimator` が返す `{filename}` を含む候補は、現行APIで永続化できるルールテンプレートとは別の「推定結果」である。`docs/reports/issue38.md` にあるとおり、ファイル名規則を別ルールとして保持するかは未決事項のため、RuleEngineはAPI契約の既知5トークンだけを受け付ける

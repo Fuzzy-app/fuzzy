@@ -182,7 +182,7 @@ impl DuplicateDetector for DefaultDuplicateDetector {
 			.collect::<Vec<_>>();
 
 		let candidate_pairs = lsh_candidate_pairs(fingerprints, max_distance);
-		let mut accepted_edges = Vec::new();
+		let mut similarity_edges = Vec::new();
 		let mut sets = DisjointSets::new(fingerprints.len());
 		for (left, right) in candidate_pairs {
 			let (Some(left_simhash), Some(right_simhash)) =
@@ -190,14 +190,17 @@ impl DuplicateDetector for DefaultDuplicateDetector {
 			else {
 				continue;
 			};
+			let similarity = simhash_similarity(left_simhash, right_simhash);
 			// 完全一致はexactグループだけで提示し、同じペアをsimilarへ重複登録しない。
 			if fingerprints[left].hash_blake3 == fingerprints[right].hash_blake3 {
+				// 第三の類似ファイルを介して同じsimilar連結成分へ入った場合は、
+				// 最も近い相手との類似度計算に完全一致相手も含める。
+				similarity_edges.push((left, right, similarity));
 				continue;
 			}
-			let similarity = simhash_similarity(left_simhash, right_simhash);
 			if similarity >= threshold {
 				sets.union(left, right);
-				accepted_edges.push((left, right, similarity));
+				similarity_edges.push((left, right, similarity));
 			}
 		}
 
@@ -207,9 +210,11 @@ impl DuplicateDetector for DefaultDuplicateDetector {
 			components.entry(root).or_default().push(index);
 		}
 		let mut closest_similarity = vec![0.0_f64; fingerprints.len()];
-		for &(left, right, similarity) in &accepted_edges {
-			closest_similarity[left] = closest_similarity[left].max(similarity);
-			closest_similarity[right] = closest_similarity[right].max(similarity);
+		for (left, right, similarity) in similarity_edges {
+			if sets.find(left) == sets.find(right) {
+				closest_similarity[left] = closest_similarity[left].max(similarity);
+				closest_similarity[right] = closest_similarity[right].max(similarity);
+			}
 		}
 		for component in components.into_values().filter(|group| group.len() >= 2) {
 			let mut members = component
@@ -484,6 +489,28 @@ mod tests {
 
 		assert_eq!(groups.len(), 1);
 		assert_eq!(groups[0].method, DuplicateMethod::Exact);
+	}
+
+	#[test]
+	fn similar_group_similarity_uses_the_closest_exact_member() {
+		let fingerprints = vec![
+			stored(1, "b3:same", Some(0)),
+			stored(2, "b3:same", Some(0)),
+			stored(3, "b3:near", Some(1)),
+		];
+
+		let groups = DefaultDuplicateDetector::default()
+			.detect_groups(&fingerprints, 63.0 / 64.0)
+			.unwrap();
+		let similar = groups
+			.iter()
+			.find(|group| group.method == DuplicateMethod::Similar)
+			.unwrap();
+
+		assert_eq!(similar.members.len(), 3);
+		assert_eq!(similar.members[0].similarity, 1.0);
+		assert_eq!(similar.members[1].similarity, 1.0);
+		assert_eq!(similar.members[2].similarity, 63.0 / 64.0);
 	}
 
 	#[test]
