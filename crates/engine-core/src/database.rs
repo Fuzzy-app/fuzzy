@@ -1,7 +1,7 @@
 //! Tauriとnative-hostが共有するSQLite接続・永続化層。
 //!
-//! 同じDBパス解決、外部キー設定、スキーマ適用、マイグレーションを両プロセスで
-//! 使用し、SQLiteを唯一の正本として扱う。
+//! 同じDBパス解決、外部キー設定、スキーマ適用を両プロセスで使用し、
+//! SQLiteを唯一の正本として扱う。
 
 use std::path::{Path, PathBuf};
 
@@ -12,16 +12,14 @@ use crate::{
 	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION, SCHEMA_SQL,
 };
 
+mod duplicates;
 mod rules;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-const EXTENSION_RUNTIME_MIGRATION_SQL: &str =
-	include_str!("../fixtures/migrations/0001_extension_runtime_observations.sql");
-const COURSE_FOLDER_NAMES_MIGRATION_SQL: &str =
-	include_str!("../fixtures/migrations/0002_course_folder_names.sql");
+const SCHEMA_VERSION: i64 = 1;
 
-/// SQLite接続。接続時にFK有効化、スキーマ適用、マイグレーションを保証する。
+/// SQLite接続。接続時にFK有効化と完成形スキーマの適用を保証する。
 pub struct Database {
 	conn: Connection,
 }
@@ -58,13 +56,15 @@ impl Database {
 
 		if !schema_applied(&conn)? {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
-		}
-
-		// schema.sql適用済みの既存DBにも新しいテーブルを追加する。
-		conn.execute_batch(EXTENSION_RUNTIME_MIGRATION_SQL)
-			.map_err(db_err)?;
-		if table_exists(&conn, "courses")? && schema_version(&conn)? < 2 {
-			apply_schema(&mut conn, COURSE_FOLDER_NAMES_MIGRATION_SQL)?;
+		} else {
+			let version = schema_version(&conn)?;
+			if version != SCHEMA_VERSION {
+				return Err(EngineError::Database {
+					message: format!(
+						"未対応のSQLiteスキーマ世代です（期待: {SCHEMA_VERSION}, 実際: {version}）。開発用DBを再作成してください"
+					),
+				});
+			}
 		}
 
 		Ok(Self { conn })
@@ -299,55 +299,44 @@ mod tests {
 	}
 
 	#[test]
-	fn migration_adds_extension_table_to_existing_database() {
-		let conn = Connection::open_in_memory().unwrap();
-		conn.execute_batch(
-			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-		)
-		.unwrap();
-
-		let database = Database::from_connection(conn).unwrap();
-		let count: i64 = database
+	fn completed_schema_is_version_one_and_enforces_duplicate_similarity() {
+		let database = Database::open_in_memory().unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
+		database
 			.conn()
-			.query_row(
-				"SELECT count(*) FROM sqlite_master
-				 WHERE type = 'table' AND name = 'extension_runtime_observations'",
-				[],
-				|row| row.get(0),
+			.execute_batch(
+				"INSERT INTO files (
+					id, original_name, saved_path, size_bytes, hash_blake3
+				 ) VALUES (1, '資料.pdf', 'C:\\資料.pdf', 1, 'b3:test');
+				 INSERT INTO duplicate_groups (id, method) VALUES (1, 'similar');
+				 INSERT INTO duplicate_members (group_id, file_id, similarity)
+				 VALUES (1, 1, 0.75);",
 			)
 			.unwrap();
-		assert_eq!(count, 1);
+
+		assert!(database
+			.conn()
+			.execute(
+				"UPDATE duplicate_members SET similarity = 1.1 WHERE file_id = 1",
+				[],
+			)
+			.is_err());
 	}
 
 	#[test]
-	fn migration_adds_course_folder_fields_and_backfills_academic_year() {
+	fn unsupported_schema_version_is_rejected() {
 		let conn = Connection::open_in_memory().unwrap();
 		conn.execute_batch(
 			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-			 CREATE TABLE courses (
-				id INTEGER PRIMARY KEY,
-				moodle_course_id TEXT NOT NULL UNIQUE,
-				name TEXT NOT NULL,
-				term TEXT
-			 );
-			 INSERT INTO courses (id, moodle_course_id, name, term)
-			 VALUES (1, 'course-db', 'データベース', '2026前期');
-			 PRAGMA user_version = 1;",
+			 PRAGMA user_version = 2;",
 		)
 		.unwrap();
 
-		let database = Database::from_connection(conn).unwrap();
-		let values: (Option<i64>, Option<String>) = database
-			.conn()
-			.query_row(
-				"SELECT academic_year, folder_name_override FROM courses WHERE id = 1",
-				[],
-				|row| Ok((row.get(0)?, row.get(1)?)),
-			)
-			.unwrap();
-
-		assert_eq!(values, (Some(2026), None));
-		assert_eq!(schema_version(database.conn()).unwrap(), 2);
+		let error = match Database::from_connection(conn) {
+			Ok(_) => panic!("未対応スキーマを受け入れてはいけません"),
+			Err(error) => error,
+		};
+		assert!(matches!(error, EngineError::Database { .. }));
 	}
 
 	#[test]

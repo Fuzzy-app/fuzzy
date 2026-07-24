@@ -60,7 +60,9 @@ CREATE TABLE files (
 	saved_path       TEXT NOT NULL UNIQUE,
 	size_bytes       INTEGER NOT NULL,
 	mime_type        TEXT,
+	-- BLAKE3は b3:<64桁の小文字16進数> 形式。既存のseed値はデモ用の省略表記
 	hash_blake3      TEXT NOT NULL,
+	-- 64 bitのビット列をSQLiteの符号付きINTEGERへそのまま写像する
 	simhash          INTEGER,
 	text_extracted   INTEGER NOT NULL DEFAULT 0,
 	rule_compliant   INTEGER NOT NULL DEFAULT 1,
@@ -137,4 +139,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 1;

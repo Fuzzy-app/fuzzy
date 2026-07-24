@@ -34,6 +34,25 @@ pub enum EngineError {
 	Internal { message: String },
 }
 
+impl EngineError {
+	/// APIレスポンスや画面表示に使える、内部情報を含まない固定メッセージ。
+	///
+	/// [`fmt::Display`]はローカルログ向けの詳細を返すため、外部境界では必ず
+	/// このメソッドを使用する。
+	pub fn user_message(&self) -> &'static str {
+		match self {
+			Self::InvalidInput { .. } => "入力内容が不正です。",
+			Self::NotFound { .. } => "指定されたデータが見つかりません。",
+			Self::InvalidPath { .. } => "指定されたパスを利用できません。",
+			Self::Io(_) | Self::PathIo { .. } => "ファイルの読み書きに失敗しました。",
+			Self::Database { .. } => "データベースの処理に失敗しました。",
+			Self::RuleConflict { .. } => "設定内容が他のルールと競合しています。",
+			Self::Index { .. } => "検索索引の処理に失敗しました。",
+			Self::Internal { .. } => "内部処理に失敗しました。",
+		}
+	}
+}
+
 impl fmt::Display for EngineError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
