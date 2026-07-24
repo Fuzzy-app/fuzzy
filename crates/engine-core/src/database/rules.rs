@@ -10,9 +10,10 @@ use crate::folder_names::{
 	course_folder_names_equal, normalize_course_folder_override, resolve_course_folder_names,
 	CourseFolderIdentity, CourseFolderNameResolution,
 };
-use crate::rule::RuleEngine;
+use crate::rule::{validate_rule_set, RuleEngine};
 use crate::types::{
-	CourseRuleOverride, RuleComplianceSummary, RuleContext, RuleFileEntry, RuleSet,
+	CourseRuleOverride, CourseRuleOverrideRecord, RuleComplianceSummary, RuleContext,
+	RuleFileEntry, RuleSet, RuleSetRecord, RuleViolationRecord,
 };
 use crate::{EngineError, EngineResult};
 
@@ -25,6 +26,167 @@ impl Database {
 	/// グローバルルールとコース別例外ルールをSQLiteの正本から読み込む。
 	pub fn load_rule_set(&self) -> EngineResult<RuleSet> {
 		load_rule_set(&self.conn)
+	}
+
+	/// 画面表示に必要なコース名を含めて保存ルールを取得する。
+	pub fn rule_set_record(&self) -> EngineResult<RuleSetRecord> {
+		load_rule_set_record(&self.conn)
+	}
+
+	/// グローバルルールを保存し、同じトランザクションで違反注釈を再計算する。
+	pub fn update_global_rule(
+		&mut self,
+		pattern_template: &str,
+		engine: &impl RuleEngine,
+	) -> EngineResult<()> {
+		let pattern_template = pattern_template.trim();
+		let transaction = self
+			.conn
+			.transaction_with_behavior(TransactionBehavior::Immediate)
+			.map_err(db_err)?;
+		let mut rules = load_rule_set(&transaction)?;
+		rules.global_pattern_template = pattern_template.to_string();
+		validate_rule_set(&rules)?;
+
+		let updated = transaction
+			.execute(
+				"UPDATE global_rule
+				 SET pattern_template = ?1, updated_at = datetime('now')
+				 WHERE id = 1",
+				[pattern_template],
+			)
+			.map_err(db_err)?;
+		if updated != 1 {
+			return Err(EngineError::Database {
+				message: "グローバルルールが設定されていません".to_string(),
+			});
+		}
+		apply_rule_compliance(&transaction, engine)?;
+		transaction.commit().map_err(db_err)
+	}
+
+	/// コース別例外を保存し、同じトランザクションで違反注釈を再計算する。
+	pub fn update_course_rule_override(
+		&mut self,
+		course_id: i64,
+		split_by_section: bool,
+		pattern_template: Option<&str>,
+		note: Option<&str>,
+		engine: &impl RuleEngine,
+	) -> EngineResult<()> {
+		if course_id <= 0 {
+			return Err(EngineError::InvalidInput {
+				field: "courseId".to_string(),
+				reason: "1以上の整数を指定してください".to_string(),
+			});
+		}
+		let pattern_template = pattern_template
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.map(str::to_string);
+		let note = note
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.map(str::to_string);
+		let override_rule = CourseRuleOverride {
+			course_id,
+			split_by_section,
+			pattern_template,
+			note,
+		};
+
+		let transaction = self
+			.conn
+			.transaction_with_behavior(TransactionBehavior::Immediate)
+			.map_err(db_err)?;
+		let course_exists = transaction
+			.query_row("SELECT 1 FROM courses WHERE id = ?1", [course_id], |_| {
+				Ok(())
+			})
+			.optional()
+			.map_err(db_err)?
+			.is_some();
+		if !course_exists {
+			return Err(EngineError::NotFound {
+				entity: "コース".to_string(),
+				id: course_id.to_string(),
+			});
+		}
+
+		let mut rules = load_rule_set(&transaction)?;
+		if let Some(existing) = rules
+			.course_overrides
+			.iter_mut()
+			.find(|candidate| candidate.course_id == course_id)
+		{
+			*existing = override_rule.clone();
+		} else {
+			rules.course_overrides.push(override_rule.clone());
+		}
+		validate_rule_set(&rules)?;
+
+		transaction
+			.execute(
+				"INSERT INTO course_rule_overrides (
+					course_id, split_by_section, pattern_template, note
+				 ) VALUES (?1, ?2, ?3, ?4)
+				 ON CONFLICT(course_id) DO UPDATE SET
+					split_by_section = excluded.split_by_section,
+					pattern_template = excluded.pattern_template,
+					note = excluded.note",
+				params![
+					override_rule.course_id,
+					override_rule.split_by_section,
+					override_rule.pattern_template,
+					override_rule.note
+				],
+			)
+			.map_err(db_err)?;
+		apply_rule_compliance(&transaction, engine)?;
+		transaction.commit().map_err(db_err)
+	}
+
+	/// SQLiteに注釈されたルール違反を取得する。
+	/// 絶対パスは内部値のまま返し、Native Messaging境界でのみ相対化する。
+	pub fn rule_violations(&self) -> EngineResult<Vec<RuleViolationRecord>> {
+		let mut statement = self
+			.conn
+			.prepare(
+				"SELECT
+					f.id,
+					f.original_name,
+					f.course_id,
+					c.name,
+					f.saved_path,
+					f.violation_reason
+				 FROM files f
+				 LEFT JOIN courses c ON c.id = f.course_id
+				 WHERE f.rule_compliant = 0
+				 ORDER BY f.id",
+			)
+			.map_err(db_err)?;
+		let records = statement
+			.query_map([], |row| {
+				let reason = row.get::<_, Option<String>>(5)?.ok_or_else(|| {
+					rusqlite::Error::InvalidColumnType(
+						5,
+						"violation_reason".to_string(),
+						rusqlite::types::Type::Null,
+					)
+				})?;
+				Ok(RuleViolationRecord {
+					file_id: row.get(0)?,
+					file_name: row.get(1)?,
+					course_id: row.get(2)?,
+					course_name: row.get(3)?,
+					saved_path: PathBuf::from(row.get::<_, String>(4)?),
+					reason,
+				})
+			})
+			.map_err(db_err)?
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.map_err(db_err)?;
+		Ok(records)
 	}
 
 	/// ルール照合に必要な保存済みファイルとコース文脈を読み込む。
@@ -102,51 +264,58 @@ impl Database {
 			.conn
 			.transaction_with_behavior(TransactionBehavior::Immediate)
 			.map_err(db_err)?;
-		let base_folder = load_base_folder_path(&transaction)?;
-		let rules = load_rule_set(&transaction)?;
-		let files = load_rule_files(&transaction)?;
-		let violations = engine.check_all(&files, &base_folder, &rules)?;
+		let summary = apply_rule_compliance(&transaction, engine)?;
+		transaction.commit().map_err(db_err)?;
+		Ok(summary)
+	}
+}
 
-		let mut annotations = BTreeMap::new();
-		for violation in violations {
-			let file_id = violation.file_id.ok_or_else(|| EngineError::Internal {
-				message: "DB由来のルール違反にファイルIDがありません".to_string(),
-			})?;
-			if annotations.insert(file_id, violation.reason).is_some() {
-				return Err(EngineError::Internal {
-					message: format!("ファイルID {file_id} のルール違反が重複しています"),
-				});
-			}
+fn apply_rule_compliance(
+	conn: &Connection,
+	engine: &impl RuleEngine,
+) -> EngineResult<RuleComplianceSummary> {
+	let base_folder = load_base_folder_path(conn)?;
+	let rules = load_rule_set(conn)?;
+	let files = load_rule_files(conn)?;
+	let violations = engine.check_all(&files, &base_folder, &rules)?;
+
+	let mut annotations = BTreeMap::new();
+	for violation in violations {
+		let file_id = violation.file_id.ok_or_else(|| EngineError::Internal {
+			message: "DB由来のルール違反にファイルIDがありません".to_string(),
+		})?;
+		if annotations.insert(file_id, violation.reason).is_some() {
+			return Err(EngineError::Internal {
+				message: format!("ファイルID {file_id} のルール違反が重複しています"),
+			});
 		}
+	}
 
-		transaction
+	conn.execute(
+		"UPDATE files SET rule_compliant = 1, violation_reason = NULL",
+		[],
+	)
+	.map_err(db_err)?;
+	for (file_id, reason) in &annotations {
+		let updated = conn
 			.execute(
-				"UPDATE files SET rule_compliant = 1, violation_reason = NULL",
-				[],
+				"UPDATE files
+				 SET rule_compliant = 0, violation_reason = ?1
+				 WHERE id = ?2",
+				params![reason, file_id],
 			)
 			.map_err(db_err)?;
-		for (file_id, reason) in &annotations {
-			let updated = transaction
-				.execute(
-					"UPDATE files
-					 SET rule_compliant = 0, violation_reason = ?1
-					 WHERE id = ?2",
-					params![reason, file_id],
-				)
-				.map_err(db_err)?;
-			if updated != 1 {
-				return Err(EngineError::Internal {
-					message: format!("ファイルID {file_id} のルール注釈を更新できませんでした"),
-				});
-			}
+		if updated != 1 {
+			return Err(EngineError::Internal {
+				message: format!("ファイルID {file_id} のルール注釈を更新できませんでした"),
+			});
 		}
-		transaction.commit().map_err(db_err)?;
-
-		Ok(RuleComplianceSummary {
-			checked_count: files.len(),
-			violation_count: annotations.len(),
-		})
 	}
+
+	Ok(RuleComplianceSummary {
+		checked_count: files.len(),
+		violation_count: annotations.len(),
+	})
 }
 
 fn load_base_folder_path(conn: &Connection) -> EngineResult<PathBuf> {
@@ -202,6 +371,55 @@ fn load_rule_set(conn: &Connection) -> EngineResult<RuleSet> {
 		.map_err(db_err)?;
 
 	Ok(RuleSet {
+		global_pattern_template,
+		course_overrides,
+	})
+}
+
+fn load_rule_set_record(conn: &Connection) -> EngineResult<RuleSetRecord> {
+	let global_pattern_template = conn
+		.query_row(
+			"SELECT pattern_template FROM global_rule WHERE id = 1",
+			[],
+			|row| row.get(0),
+		)
+		.optional()
+		.map_err(db_err)?
+		.ok_or_else(|| EngineError::Database {
+			message: "グローバルルールが設定されていません".to_string(),
+		})?;
+	let mut statement = conn
+		.prepare(
+			"SELECT
+				o.course_id,
+				c.name,
+				o.split_by_section,
+				o.pattern_template,
+				o.note
+			 FROM course_rule_overrides o
+			 JOIN courses c ON c.id = o.course_id
+			 ORDER BY o.course_id",
+		)
+		.map_err(db_err)?;
+	let course_overrides = statement
+		.query_map([], |row| {
+			let split_by_section = match row.get::<_, i64>(2)? {
+				0 => false,
+				1 => true,
+				value => return Err(rusqlite::Error::IntegralValueOutOfRange(2, value)),
+			};
+			Ok(CourseRuleOverrideRecord {
+				course_id: row.get(0)?,
+				course_name: row.get(1)?,
+				split_by_section,
+				pattern_template: row.get(3)?,
+				note: row.get(4)?,
+			})
+		})
+		.map_err(db_err)?
+		.collect::<rusqlite::Result<Vec<_>>>()
+		.map_err(db_err)?;
+	Ok(RuleSetRecord {
 		global_pattern_template,
 		course_overrides,
 	})
@@ -493,5 +711,79 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(first_override, None);
+	}
+
+	#[test]
+	fn rule_record_includes_course_names_and_violations() {
+		let database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+
+		let rules = database.rule_set_record().unwrap();
+		assert_eq!(
+			rules.global_pattern_template,
+			"{term}/{course}/第{section}回"
+		);
+		assert_eq!(rules.course_overrides[0].course_name, "アプリ演習");
+
+		let violations = database.rule_violations().unwrap();
+		assert_eq!(
+			violations
+				.iter()
+				.map(|item| item.file_id)
+				.collect::<Vec<_>>(),
+			vec![4, 9]
+		);
+		assert_eq!(violations[0].course_name.as_deref(), Some("データベース"));
+	}
+
+	#[test]
+	fn global_rule_update_and_violation_refresh_are_atomic() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+
+		let before = database.load_rule_set().unwrap();
+		let result = database.update_global_rule("{course}/{unknown}", &DefaultRuleEngine);
+		assert!(result.is_err());
+		assert_eq!(database.load_rule_set().unwrap(), before);
+
+		database
+			.update_global_rule("{term}/{course}/第{section}回", &DefaultRuleEngine)
+			.unwrap();
+		assert_eq!(database.rule_violations().unwrap().len(), 2);
+	}
+
+	#[test]
+	fn course_rule_override_is_upserted_and_revalidated() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+
+		database
+			.update_course_rule_override(
+				2,
+				false,
+				Some("{term}/{course}"),
+				Some("  回ごとに分けない  "),
+				&DefaultRuleEngine,
+			)
+			.unwrap();
+		let rules = database.rule_set_record().unwrap();
+		let database_rule = rules
+			.course_overrides
+			.iter()
+			.find(|rule| rule.course_id == 2)
+			.unwrap();
+		assert!(!database_rule.split_by_section);
+		assert_eq!(database_rule.note.as_deref(), Some("回ごとに分けない"));
+
+		assert!(matches!(
+			database.update_course_rule_override(
+				999,
+				false,
+				Some("{term}/{course}"),
+				None,
+				&DefaultRuleEngine
+			),
+			Err(EngineError::NotFound { .. })
+		));
 	}
 }
