@@ -119,9 +119,24 @@ pub struct SaveSuggestion {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CheckSimilarFilesRequest {
+pub struct BeginCheckSimilarFileRequest {
+	pub transfer_id: String,
+	pub byte_length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppendCheckSimilarFileChunkRequest {
+	pub transfer_id: String,
+	pub chunk_index: u32,
+	pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckSimilarFilesTransferRequest {
+	pub transfer_id: String,
 	pub file_meta: MoodleFileMeta,
-	pub content_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -838,6 +853,48 @@ mod tests {
 		}))
 		.unwrap();
 		assert_eq!(begin.files[0].file_id, "4376");
+
+		let similarity_begin: BeginCheckSimilarFileRequest =
+			serde_json::from_value(serde_json::json!({
+				"transferId": "similar-1",
+				"byteLength": 4
+			}))
+			.unwrap();
+		assert_eq!(similarity_begin.byte_length, 4);
+		let similarity_chunk: AppendCheckSimilarFileChunkRequest =
+			serde_json::from_value(serde_json::json!({
+				"transferId": "similar-1",
+				"chunkIndex": 0,
+				"dataBase64": "dGVzdA=="
+			}))
+			.unwrap();
+		assert_eq!(similarity_chunk.chunk_index, 0);
+		let similarity_finish: CheckSimilarFilesTransferRequest =
+			serde_json::from_value(serde_json::json!({
+				"transferId": "similar-1",
+				"fileMeta": {
+					"title": "ガイダンス資料.pdf",
+					"url": "https://moodle.example/guide.pdf",
+					"moodleFileId": "4376",
+					"sectionTitle": null,
+					"mimeHint": "pdf"
+				}
+			}))
+			.unwrap();
+		assert_eq!(similarity_finish.transfer_id, "similar-1");
+		assert!(
+			serde_json::from_value::<CheckSimilarFilesTransferRequest>(serde_json::json!({
+				"fileMeta": {
+					"title": "ガイダンス資料.pdf",
+					"url": "https://moodle.example/guide.pdf",
+					"moodleFileId": "4376",
+					"sectionTitle": null,
+					"mimeHint": "pdf"
+				},
+				"contentBase64": "dGVzdA=="
+			}))
+			.is_err()
+		);
 
 		let result = SaveFilesResult {
 			saved_file_ids: vec!["4376".to_string()],

@@ -13,6 +13,10 @@ import {
 	transferFileId,
 } from "../moodle/fileDownloader";
 
+const MAX_CONCURRENT_SIMILARITY_CHECKS = 2;
+let activeSimilarityChecks = 0;
+const similarityCheckWaiters: Array<() => void> = [];
+
 export async function checkMoodleFileFromBackground(
 	client: Pick<FuzzyApiClient, "mode" | "checkSimilarFiles">,
 	request: CheckSimilarFilesRequest,
@@ -20,12 +24,42 @@ export async function checkMoodleFileFromBackground(
 	downloadOptions: MoodleFileDownloadOptions = {},
 ): Promise<SimilarFileMatch[]> {
 	if (client.mode === "mock") return client.checkSimilarFiles(request);
-	const downloaded = await downloadMoodleFile(request.fileMeta, pageOrigin, downloadOptions);
-	if (!downloaded) throw new Error("Moodle資料を類似照合用に取得できません");
-	return client.checkSimilarFiles({
-		fileMeta: request.fileMeta,
-		contentBase64: downloaded.contentBase64,
+	return withSimilarityCheckSlot(async () => {
+		const downloaded = await downloadMoodleFile(request.fileMeta, pageOrigin, downloadOptions);
+		if (!downloaded) throw new Error("Moodle資料を類似照合用に取得できません");
+		return client.checkSimilarFiles({
+			fileMeta: request.fileMeta,
+			contentBase64: downloaded.contentBase64,
+		});
 	});
+}
+
+async function withSimilarityCheckSlot<T>(operation: () => Promise<T>): Promise<T> {
+	await acquireSimilarityCheckSlot();
+	try {
+		return await operation();
+	} finally {
+		releaseSimilarityCheckSlot();
+	}
+}
+
+function acquireSimilarityCheckSlot(): Promise<void> {
+	if (activeSimilarityChecks < MAX_CONCURRENT_SIMILARITY_CHECKS) {
+		activeSimilarityChecks += 1;
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => {
+		similarityCheckWaiters.push(resolve);
+	});
+}
+
+function releaseSimilarityCheckSlot(): void {
+	const next = similarityCheckWaiters.shift();
+	if (next) {
+		next();
+		return;
+	}
+	activeSimilarityChecks -= 1;
 }
 
 /**

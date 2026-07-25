@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD;
@@ -13,8 +13,9 @@ use engine_core::types::SavedFileRegistration;
 use engine_core::{Database, EngineError, EngineResult};
 
 use crate::api_types::{
-	AppendSaveFileChunkRequest, BeginSaveFilesRequest, SaveFileDescriptor, SaveFileFailure,
-	SaveFileFailureCode, SaveFilesResult,
+	AppendCheckSimilarFileChunkRequest, AppendSaveFileChunkRequest, BeginCheckSimilarFileRequest,
+	BeginSaveFilesRequest, SaveFileDescriptor, SaveFileFailure, SaveFileFailureCode,
+	SaveFilesResult,
 };
 
 const MAX_ACTIVE_TRANSFERS: usize = 4;
@@ -22,12 +23,14 @@ const MAX_FILES_PER_TRANSFER: usize = 20;
 pub(crate) const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TRANSFER_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODED_CHUNK_BYTES: usize = 256 * 1024;
+const MAX_ENCODED_CHUNK_CHARACTERS: usize = MAX_DECODED_CHUNK_BYTES.div_ceil(3) * 4;
 const MAX_ZIP_ENTRIES: usize = 1_000;
 const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct FileTransferManager {
 	transfers: HashMap<String, PendingTransfer>,
+	similarity_transfers: HashMap<String, PendingSimilarityTransfer>,
 }
 
 struct PendingTransfer {
@@ -124,6 +127,12 @@ struct PendingFile {
 	next_chunk_index: u32,
 }
 
+struct PendingSimilarityTransfer {
+	byte_length: usize,
+	bytes: Vec<u8>,
+	next_chunk_index: u32,
+}
+
 impl FileTransferManager {
 	pub fn begin(
 		&mut self,
@@ -131,10 +140,10 @@ impl FileTransferManager {
 		request: BeginSaveFilesRequest,
 	) -> EngineResult<()> {
 		validate_transfer_id(&request.transfer_id)?;
-		if self.transfers.contains_key(&request.transfer_id) {
+		if self.contains_transfer(&request.transfer_id) {
 			return Err(invalid("transferId", "同じ転送IDは再利用できません"));
 		}
-		if self.transfers.len() >= MAX_ACTIVE_TRANSFERS {
+		if self.active_transfer_count() >= MAX_ACTIVE_TRANSFERS {
 			return Err(invalid("transferId", "同時転送数の上限を超えています"));
 		}
 		if request.files.is_empty() || request.files.len() > MAX_FILES_PER_TRANSFER {
@@ -192,18 +201,71 @@ impl FileTransferManager {
 		if request.chunk_index != file.next_chunk_index {
 			return Err(invalid("chunkIndex", "チャンクの順序が不正です"));
 		}
-		let decoded = STANDARD
-			.decode(request.data_base64)
-			.map_err(|_| invalid("dataBase64", "Base64データが不正です"))?;
-		if decoded.len() > MAX_DECODED_CHUNK_BYTES {
-			return Err(invalid("dataBase64", "チャンクサイズが上限を超えています"));
-		}
+		let decoded = decode_chunk(&request.data_base64)?;
 		if file.bytes.len().saturating_add(decoded.len()) > file.descriptor.byte_length {
 			return Err(invalid("dataBase64", "宣言サイズを超えています"));
 		}
 		file.bytes.extend_from_slice(&decoded);
 		file.next_chunk_index += 1;
 		Ok(())
+	}
+
+	pub fn begin_similarity(&mut self, request: BeginCheckSimilarFileRequest) -> EngineResult<()> {
+		validate_transfer_id(&request.transfer_id)?;
+		if self.contains_transfer(&request.transfer_id) {
+			return Err(invalid("transferId", "同じ転送IDは再利用できません"));
+		}
+		if self.active_transfer_count() >= MAX_ACTIVE_TRANSFERS {
+			return Err(invalid("transferId", "同時転送数の上限を超えています"));
+		}
+		if request.byte_length == 0 || request.byte_length > MAX_FILE_BYTES {
+			return Err(invalid("byteLength", "ファイルサイズが許容範囲外です"));
+		}
+		self.similarity_transfers.insert(
+			request.transfer_id,
+			PendingSimilarityTransfer {
+				byte_length: request.byte_length,
+				bytes: Vec::new(),
+				next_chunk_index: 0,
+			},
+		);
+		Ok(())
+	}
+
+	pub fn append_similarity(
+		&mut self,
+		request: AppendCheckSimilarFileChunkRequest,
+	) -> EngineResult<()> {
+		let mut transfer = self
+			.similarity_transfers
+			.remove(&request.transfer_id)
+			.ok_or_else(|| invalid("transferId", "転送が開始されていません"))?;
+		if request.chunk_index != transfer.next_chunk_index {
+			return Err(invalid("chunkIndex", "チャンクの順序が不正です"));
+		}
+		let decoded = decode_chunk(&request.data_base64)?;
+		if transfer.bytes.len().saturating_add(decoded.len()) > transfer.byte_length {
+			return Err(invalid("dataBase64", "宣言サイズを超えています"));
+		}
+		transfer.bytes.extend_from_slice(&decoded);
+		transfer.next_chunk_index += 1;
+		self.similarity_transfers
+			.insert(request.transfer_id, transfer);
+		Ok(())
+	}
+
+	pub fn finish_similarity(&mut self, transfer_id: &str) -> EngineResult<Vec<u8>> {
+		let transfer = self
+			.similarity_transfers
+			.remove(transfer_id)
+			.ok_or_else(|| invalid("transferId", "転送が開始されていません"))?;
+		if transfer.bytes.len() != transfer.byte_length {
+			return Err(invalid(
+				"transferId",
+				"宣言サイズ分の転送が完了していません",
+			));
+		}
+		Ok(transfer.bytes)
 	}
 
 	pub fn commit(
@@ -303,6 +365,28 @@ impl FileTransferManager {
 			failed_files,
 		})
 	}
+
+	fn contains_transfer(&self, transfer_id: &str) -> bool {
+		self.transfers.contains_key(transfer_id)
+			|| self.similarity_transfers.contains_key(transfer_id)
+	}
+
+	fn active_transfer_count(&self) -> usize {
+		self.transfers.len() + self.similarity_transfers.len()
+	}
+}
+
+fn decode_chunk(data_base64: &str) -> EngineResult<Vec<u8>> {
+	if data_base64.is_empty() || data_base64.len() > MAX_ENCODED_CHUNK_CHARACTERS {
+		return Err(invalid("dataBase64", "チャンクサイズが許容範囲外です"));
+	}
+	let decoded = STANDARD
+		.decode(data_base64)
+		.map_err(|_| invalid("dataBase64", "Base64データが不正です"))?;
+	if decoded.is_empty() || decoded.len() > MAX_DECODED_CHUNK_BYTES {
+		return Err(invalid("dataBase64", "チャンクサイズが許容範囲外です"));
+	}
+	Ok(decoded)
 }
 
 fn validate_descriptor(file: &SaveFileDescriptor) -> EngineResult<()> {
@@ -421,18 +505,34 @@ fn valid_content(file: &PendingFile) -> bool {
 		.file_name
 		.to_ascii_lowercase()
 		.ends_with(".docx")
-		|| file
-			.descriptor
-			.mime_type
-			.as_deref()
-			.is_some_and(|mime| mime.contains("wordprocessingml.document"));
-	!is_docx
-		|| matches!(
-			file.bytes.get(..4),
-			Some([0x50, 0x4b, 0x03, 0x04])
-				| Some([0x50, 0x4b, 0x05, 0x06])
-				| Some([0x50, 0x4b, 0x07, 0x08])
-		)
+		|| file.descriptor.mime_type.as_deref().is_some_and(|mime| {
+			mime.to_ascii_lowercase()
+				.contains("wordprocessingml.document")
+		});
+	!is_docx || valid_docx_content(&file.bytes)
+}
+
+fn valid_docx_content(bytes: &[u8]) -> bool {
+	let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(bytes)) else {
+		return false;
+	};
+	readable_docx_entry(&mut archive, "[Content_Types].xml")
+		&& readable_docx_entry(&mut archive, "word/document.xml")
+}
+
+fn readable_docx_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, name: &str) -> bool {
+	let Ok(mut entry) = archive.by_name(name) else {
+		return false;
+	};
+	let expected_size = entry.size();
+	if !entry.is_file() || expected_size == 0 || expected_size > MAX_FILE_BYTES as u64 {
+		return false;
+	}
+	std::io::copy(
+		&mut entry.by_ref().take(expected_size.saturating_add(1)),
+		&mut std::io::sink(),
+	)
+	.is_ok_and(|read_size| read_size == expected_size)
 }
 
 fn invalid(field: &str, reason: &str) -> EngineError {
@@ -445,7 +545,10 @@ fn invalid(field: &str, reason: &str) -> EngineError {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::api_types::{AppendSaveFileChunkRequest, BeginSaveFilesRequest, SaveFileDescriptor};
+	use crate::api_types::{
+		AppendCheckSimilarFileChunkRequest, AppendSaveFileChunkRequest,
+		BeginCheckSimilarFileRequest, BeginSaveFilesRequest, SaveFileDescriptor,
+	};
 	use std::time::{SystemTime, UNIX_EPOCH};
 	use zip::write::SimpleFileOptions;
 
@@ -455,24 +558,25 @@ mod tests {
 		let target = root.join("course");
 		std::fs::create_dir_all(&root).unwrap();
 		let database = Database::open_in_memory().unwrap();
+		let docx = docx_bytes();
 		let mut manager = FileTransferManager::default();
 		manager
-			.begin(&root, begin_request(&target, "transfer-1", "guide.docx", 5))
+			.begin(
+				&root,
+				begin_request(&target, "transfer-1", "guide.docx", docx.len()),
+			)
 			.unwrap();
 		manager
 			.append(AppendSaveFileChunkRequest {
 				transfer_id: "transfer-1".to_string(),
 				file_id: "file-1".to_string(),
 				chunk_index: 0,
-				data_base64: STANDARD.encode([0x50, 0x4b, 0x03, 0x04, 0x01]),
+				data_base64: STANDARD.encode(&docx),
 			})
 			.unwrap();
 		let result = manager.commit(&database, &root, "transfer-1").unwrap();
 		assert_eq!(result.saved_file_ids, vec!["file-1"]);
-		assert_eq!(
-			std::fs::read(target.join("guide.docx")).unwrap(),
-			vec![0x50, 0x4b, 0x03, 0x04, 0x01]
-		);
+		assert_eq!(std::fs::read(target.join("guide.docx")).unwrap(), docx);
 		assert_eq!(
 			database.saved_file_path_by_moodle_id("file-1").unwrap(),
 			target.join("guide.docx")
@@ -503,6 +607,94 @@ mod tests {
 			SaveFileFailureCode::InvalidContent
 		);
 		assert!(!target.join("login.docx").exists());
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn rejects_corrupt_docx_and_zip_without_docx_entries() {
+		let root = unique_temp_dir();
+		let target = root.join("course");
+		std::fs::create_dir_all(&root).unwrap();
+		let database = Database::open_in_memory().unwrap();
+		let invalid_files = [
+			(
+				"corrupt.docx",
+				vec![0x50, 0x4b, 0x03, 0x04, 0x01],
+				"transfer-corrupt",
+			),
+			(
+				"ordinary.docx",
+				zip_bytes(&[("guide.txt", b"guide")]),
+				"transfer-ordinary",
+			),
+			(
+				"missing-document.docx",
+				zip_bytes(&[("[Content_Types].xml", b"<Types/>")]),
+				"transfer-missing-document",
+			),
+			(
+				"corrupt-entry.docx",
+				corrupt_docx_bytes(),
+				"transfer-corrupt-entry",
+			),
+		];
+
+		for (file_name, contents, transfer_id) in invalid_files {
+			let mut manager = FileTransferManager::default();
+			manager
+				.begin(
+					&root,
+					begin_request(&target, transfer_id, file_name, contents.len()),
+				)
+				.unwrap();
+			manager
+				.append(AppendSaveFileChunkRequest {
+					transfer_id: transfer_id.to_string(),
+					file_id: "file-1".to_string(),
+					chunk_index: 0,
+					data_base64: STANDARD.encode(contents),
+				})
+				.unwrap();
+
+			let result = manager.commit(&database, &root, transfer_id).unwrap();
+
+			assert!(result.saved_file_ids.is_empty());
+			assert_eq!(
+				result.failed_files[0].code,
+				SaveFileFailureCode::InvalidContent
+			);
+			assert!(!target.join(file_name).exists());
+		}
+
+		let mime_only_contents = zip_bytes(&[("guide.txt", b"guide")]);
+		let mut mime_only_request = begin_request(
+			&target,
+			"transfer-mime-only",
+			"ordinary.bin",
+			mime_only_contents.len(),
+		);
+		mime_only_request.files[0].mime_type = Some(
+			"APPLICATION/VND.OPENXMLFORMATS-OFFICEDOCUMENT.WORDPROCESSINGML.DOCUMENT".to_string(),
+		);
+		let mut mime_only_manager = FileTransferManager::default();
+		mime_only_manager.begin(&root, mime_only_request).unwrap();
+		mime_only_manager
+			.append(AppendSaveFileChunkRequest {
+				transfer_id: "transfer-mime-only".to_string(),
+				file_id: "file-1".to_string(),
+				chunk_index: 0,
+				data_base64: STANDARD.encode(mime_only_contents),
+			})
+			.unwrap();
+		let result = mime_only_manager
+			.commit(&database, &root, "transfer-mime-only")
+			.unwrap();
+		assert!(result.saved_file_ids.is_empty());
+		assert_eq!(
+			result.failed_files[0].code,
+			SaveFileFailureCode::InvalidContent
+		);
+		assert!(!target.join("ordinary.bin").exists());
 		std::fs::remove_dir_all(root).unwrap();
 	}
 
@@ -538,6 +730,145 @@ mod tests {
 			SaveFileFailureCode::AlreadyExists
 		);
 		assert_eq!(std::fs::read(existing_path).unwrap(), b"original");
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn rebuilds_similarity_content_from_ordered_chunks() {
+		let mut manager = FileTransferManager::default();
+		manager
+			.begin_similarity(BeginCheckSimilarFileRequest {
+				transfer_id: "similar-1".to_string(),
+				byte_length: 6,
+			})
+			.unwrap();
+		for (chunk_index, contents) in [b"abc".as_slice(), b"def"].into_iter().enumerate() {
+			manager
+				.append_similarity(AppendCheckSimilarFileChunkRequest {
+					transfer_id: "similar-1".to_string(),
+					chunk_index: chunk_index as u32,
+					data_base64: STANDARD.encode(contents),
+				})
+				.unwrap();
+		}
+
+		assert_eq!(manager.finish_similarity("similar-1").unwrap(), b"abcdef");
+		assert!(manager.finish_similarity("similar-1").is_err());
+	}
+
+	#[test]
+	fn discards_invalid_or_incomplete_similarity_transfers() {
+		for (transfer_id, byte_length, data_base64) in [
+			("invalid-base64", 4, "not base64!".to_string()),
+			(
+				"oversized-chunk",
+				4,
+				"A".repeat(MAX_ENCODED_CHUNK_CHARACTERS + 4),
+			),
+			("empty-chunk", 1, String::new()),
+			("declared-overflow", 3, STANDARD.encode(b"test")),
+		] {
+			let mut manager = FileTransferManager::default();
+			manager
+				.begin_similarity(BeginCheckSimilarFileRequest {
+					transfer_id: transfer_id.to_string(),
+					byte_length,
+				})
+				.unwrap();
+			assert!(manager
+				.append_similarity(AppendCheckSimilarFileChunkRequest {
+					transfer_id: transfer_id.to_string(),
+					chunk_index: 0,
+					data_base64,
+				})
+				.is_err());
+			assert!(manager.finish_similarity(transfer_id).is_err());
+		}
+
+		let mut manager = FileTransferManager::default();
+		manager
+			.begin_similarity(BeginCheckSimilarFileRequest {
+				transfer_id: "wrong-order".to_string(),
+				byte_length: 4,
+			})
+			.unwrap();
+		assert!(manager
+			.append_similarity(AppendCheckSimilarFileChunkRequest {
+				transfer_id: "wrong-order".to_string(),
+				chunk_index: 1,
+				data_base64: STANDARD.encode(b"test"),
+			})
+			.is_err());
+		assert!(manager.finish_similarity("wrong-order").is_err());
+
+		manager
+			.begin_similarity(BeginCheckSimilarFileRequest {
+				transfer_id: "incomplete".to_string(),
+				byte_length: 5,
+			})
+			.unwrap();
+		manager
+			.append_similarity(AppendCheckSimilarFileChunkRequest {
+				transfer_id: "incomplete".to_string(),
+				chunk_index: 0,
+				data_base64: STANDARD.encode(b"test"),
+			})
+			.unwrap();
+		assert!(manager.finish_similarity("incomplete").is_err());
+		assert!(manager.finish_similarity("incomplete").is_err());
+	}
+
+	#[test]
+	fn enforces_similarity_size_and_combined_active_transfer_limits() {
+		let contract_compatible_chunk = "A".repeat(192 * 1024 + 4);
+		assert_eq!(
+			decode_chunk(&contract_compatible_chunk).unwrap().len(),
+			(192 * 1024 + 4) / 4 * 3
+		);
+
+		let mut manager = FileTransferManager::default();
+		for byte_length in [0, MAX_FILE_BYTES + 1] {
+			assert!(manager
+				.begin_similarity(BeginCheckSimilarFileRequest {
+					transfer_id: format!("invalid-{byte_length}"),
+					byte_length,
+				})
+				.is_err());
+		}
+		manager
+			.begin_similarity(BeginCheckSimilarFileRequest {
+				transfer_id: "maximum-size".to_string(),
+				byte_length: MAX_FILE_BYTES,
+			})
+			.unwrap();
+		assert!(manager.finish_similarity("maximum-size").is_err());
+
+		let root = unique_temp_dir();
+		let target = root.join("course");
+		std::fs::create_dir_all(&root).unwrap();
+		manager
+			.begin(&root, begin_request(&target, "shared-id", "guide.pdf", 1))
+			.unwrap();
+		assert!(manager
+			.begin_similarity(BeginCheckSimilarFileRequest {
+				transfer_id: "shared-id".to_string(),
+				byte_length: 1,
+			})
+			.is_err());
+		for index in 0..3 {
+			manager
+				.begin_similarity(BeginCheckSimilarFileRequest {
+					transfer_id: format!("active-{index}"),
+					byte_length: 1,
+				})
+				.unwrap();
+		}
+		assert!(manager
+			.begin_similarity(BeginCheckSimilarFileRequest {
+				transfer_id: "active-over-limit".to_string(),
+				byte_length: 1,
+			})
+			.is_err());
 		std::fs::remove_dir_all(root).unwrap();
 	}
 
@@ -604,8 +935,12 @@ mod tests {
 				file_id: "file-1".to_string(),
 				file_name: file_name.to_string(),
 				mime_type: Some(
-					"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-						.to_string(),
+					if file_name.to_ascii_lowercase().ends_with(".docx") {
+						"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+					} else {
+						"application/octet-stream"
+					}
+					.to_string(),
 				),
 				byte_length,
 			}],
@@ -631,5 +966,44 @@ mod tests {
 			.unwrap();
 		archive.write_all(contents).unwrap();
 		archive.finish().unwrap();
+	}
+
+	fn docx_bytes() -> Vec<u8> {
+		zip_bytes(&[
+			(
+				"[Content_Types].xml",
+				br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+			),
+			(
+				"word/document.xml",
+				br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+			),
+		])
+	}
+
+	fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+		let buffer = Cursor::new(Vec::new());
+		let mut archive = zip::ZipWriter::new(buffer);
+		for (entry_name, contents) in entries {
+			archive
+				.start_file(
+					*entry_name,
+					SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+				)
+				.unwrap();
+			archive.write_all(contents).unwrap();
+		}
+		archive.finish().unwrap().into_inner()
+	}
+
+	fn corrupt_docx_bytes() -> Vec<u8> {
+		let mut bytes = docx_bytes();
+		let marker = b"<w:document";
+		let marker_offset = bytes
+			.windows(marker.len())
+			.position(|window| window == marker)
+			.unwrap();
+		bytes[marker_offset] ^= 0x01;
+		bytes
 	}
 }

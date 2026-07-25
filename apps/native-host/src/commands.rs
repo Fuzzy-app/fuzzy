@@ -3,8 +3,6 @@
 use std::io::Write;
 use std::path::Path;
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use engine_core::duplicate::{
 	DefaultDuplicateDetector, DuplicateDetector, DEFAULT_SIMILARITY_THRESHOLD,
 };
@@ -17,17 +15,18 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::api_types::{
-	AppendSaveFileChunkRequest, Assignment, AssignmentChange, BeginSaveFilesRequest,
-	CheckSimilarFilesRequest, CourseFolderNameResolution, DashboardSummary, DataSyncEvent,
-	DuplicateGroupListItem, EmptyRequest, ExportDataRequest, ExportDataResult, ExtractZipRequest,
-	ExtractZipResult, GetAssignmentChangesRequest, GetDeadlinesRequest, ImportDataRequest,
-	ImportDataResult, NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet,
-	RuleViolationListItem, SaveFilesRequest, SaveSuggestion, SearchRequest, SearchResult,
-	SimilarFileMatch, SuggestSavePathRequest, UpdateCourseFolderNameRequest,
-	UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest,
-	UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
+	AppendCheckSimilarFileChunkRequest, AppendSaveFileChunkRequest, Assignment, AssignmentChange,
+	BeginCheckSimilarFileRequest, BeginSaveFilesRequest, CheckSimilarFilesTransferRequest,
+	CourseFolderNameResolution, DashboardSummary, DataSyncEvent, DuplicateGroupListItem,
+	EmptyRequest, ExportDataRequest, ExportDataResult, ExtractZipRequest, ExtractZipResult,
+	GetAssignmentChangesRequest, GetDeadlinesRequest, ImportDataRequest, ImportDataResult,
+	NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet, RuleViolationListItem,
+	SaveFilesRequest, SaveSuggestion, SearchRequest, SearchResult, SimilarFileMatch,
+	SuggestSavePathRequest, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
+	UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest, UpdateNotificationRulesRequest,
+	UpdateSubmissionStatusRequest,
 };
-use crate::file_transfer::{extract_zip_archive, FileTransferManager, MAX_FILE_BYTES};
+use crate::file_transfer::{extract_zip_archive, FileTransferManager};
 use crate::protocol::{Request, Response};
 
 const DEFAULT_SEARCH_LIMIT: usize = 50;
@@ -64,7 +63,9 @@ pub fn dispatch_with_file_transfers(
 		"ping" => ping(request.id),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
 		"suggestSavePath" => suggest_save_path(database, request),
-		"checkSimilarFiles" => check_similar_files(database, request),
+		"beginCheckSimilarFile" => begin_check_similar_file(file_transfers, request),
+		"appendCheckSimilarFileChunk" => append_check_similar_file_chunk(file_transfers, request),
+		"checkSimilarFiles" => check_similar_files(database, file_transfers, request),
 		"beginSaveFiles" => begin_save_files(database, file_transfers, request),
 		"appendSaveFileChunk" => append_save_file_chunk(file_transfers, request),
 		"saveFiles" => save_files(database, file_transfers, request),
@@ -274,30 +275,49 @@ fn suggest_save_path(database: &mut Database, request: Request) -> Response {
 	respond(request.id, result)
 }
 
-fn check_similar_files(database: &Database, request: Request) -> Response {
-	let payload = match parse_payload::<CheckSimilarFilesRequest>(&request) {
+fn begin_check_similar_file(
+	file_transfers: &mut FileTransferManager,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<BeginCheckSimilarFileRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	respond(
+		request.id,
+		file_transfers
+			.begin_similarity(payload)
+			.map(|()| OkResult { ok: true }),
+	)
+}
+
+fn append_check_similar_file_chunk(
+	file_transfers: &mut FileTransferManager,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<AppendCheckSimilarFileChunkRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	respond(
+		request.id,
+		file_transfers
+			.append_similarity(payload)
+			.map(|()| OkResult { ok: true }),
+	)
+}
+
+fn check_similar_files(
+	database: &Database,
+	file_transfers: &mut FileTransferManager,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<CheckSimilarFilesTransferRequest>(&request) {
 		Ok(payload) => payload,
 		Err(response) => return response,
 	};
 	let result = (|| {
-		let content = payload
-			.content_base64
-			.ok_or_else(|| EngineError::InvalidInput {
-				field: "contentBase64".to_string(),
-				reason: "保存前照合には取得済みファイル内容が必要です".to_string(),
-			})?;
-		let bytes = STANDARD
-			.decode(content)
-			.map_err(|_| EngineError::InvalidInput {
-				field: "contentBase64".to_string(),
-				reason: "Base64データが不正です".to_string(),
-			})?;
-		if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
-			return Err(EngineError::InvalidInput {
-				field: "contentBase64".to_string(),
-				reason: "ファイルサイズが許容範囲外です".to_string(),
-			});
-		}
+		let bytes = file_transfers.finish_similarity(&payload.transfer_id)?;
 		let mut temporary = tempfile::NamedTempFile::new().map_err(EngineError::Io)?;
 		temporary.write_all(&bytes).map_err(EngineError::Io)?;
 		let detector = DefaultDuplicateDetector::new(database.load_file_fingerprints()?);
@@ -814,7 +834,7 @@ mod tests {
 	}
 
 	#[test]
-	fn check_similar_files_requires_downloaded_content() {
+	fn check_similar_files_requires_a_completed_transfer() {
 		let mut database = seeded_database();
 		let response = dispatch(
 			&mut database,
@@ -834,6 +854,78 @@ mod tests {
 
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+	}
+
+	#[test]
+	fn check_similar_files_uses_chunked_content_on_one_transfer_manager() {
+		let mut database = seeded_database();
+		let mut transfers = FileTransferManager::default();
+		let begin = dispatch_with_file_transfers(
+			&mut database,
+			&mut transfers,
+			request(
+				"beginCheckSimilarFile",
+				serde_json::json!({
+					"transferId": "similar-command",
+					"byteLength": 4
+				}),
+			),
+		);
+		assert!(begin.ok, "{:?}", begin.error);
+
+		let append = dispatch_with_file_transfers(
+			&mut database,
+			&mut transfers,
+			request(
+				"appendCheckSimilarFileChunk",
+				serde_json::json!({
+					"transferId": "similar-command",
+					"chunkIndex": 0,
+					"dataBase64": "dGVzdA=="
+				}),
+			),
+		);
+		assert!(append.ok, "{:?}", append.error);
+
+		let checked = dispatch_with_file_transfers(
+			&mut database,
+			&mut transfers,
+			request(
+				"checkSimilarFiles",
+				serde_json::json!({
+					"transferId": "similar-command",
+					"fileMeta": {
+						"title": "guide.pdf",
+						"url": "https://moodle.example/pluginfile.php/4376/guide.pdf",
+						"moodleFileId": "4376",
+						"sectionTitle": null,
+						"mimeHint": "pdf"
+					}
+				}),
+			),
+		);
+		assert!(checked.ok, "{:?}", checked.error);
+		assert!(checked.data.unwrap().is_array());
+
+		let reused = dispatch_with_file_transfers(
+			&mut database,
+			&mut transfers,
+			request(
+				"checkSimilarFiles",
+				serde_json::json!({
+					"transferId": "similar-command",
+					"fileMeta": {
+						"title": "guide.pdf",
+						"url": "https://moodle.example/pluginfile.php/4376/guide.pdf",
+						"moodleFileId": "4376",
+						"sectionTitle": null,
+						"mimeHint": "pdf"
+					}
+				}),
+			),
+		);
+		assert!(!reused.ok);
+		assert_eq!(reused.error.unwrap().code, "INVALID_REQUEST");
 	}
 
 	#[test]
@@ -914,7 +1006,7 @@ mod tests {
 				serde_json::json!({
 					"installationId": "550e8400-e29b-41d4-a716-446655440000",
 					"extensionVersion": "0.1.0",
-					"protocolVersion": 1
+					"protocolVersion": 2
 				}),
 			),
 		);
@@ -942,7 +1034,7 @@ mod tests {
 				serde_json::json!({
 					"installationId": "../invalid",
 					"extensionVersion": "0.1.0",
-					"protocolVersion": 1
+					"protocolVersion": 2
 				}),
 			),
 		);

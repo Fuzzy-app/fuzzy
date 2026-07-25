@@ -183,8 +183,37 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("suggestSavePath", request);
 	}
 
-	checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
-		return this.send("checkSimilarFiles", request);
+	async checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
+		const contentBase64 = request.contentBase64;
+		if (typeof contentBase64 !== "string") {
+			throw new ApiError("INVALID_REQUEST", "類似照合用ファイルの内容が必要です");
+		}
+		const byteLength = decodedBase64Length(contentBase64);
+		if (byteLength === null || byteLength <= 0 || byteLength > FILE_TRANSFER_LIMITS.maxFileBytes) {
+			throw new ApiError("INVALID_REQUEST", "類似照合用ファイルのサイズが許容範囲外です");
+		}
+
+		const transferId = crypto.randomUUID();
+		const session = this.openSession();
+		try {
+			await session.send("beginCheckSimilarFile", { transferId, byteLength });
+			let chunkIndex = 0;
+			for (let offset = 0; offset < contentBase64.length; offset += NATIVE_FILE_CHUNK_CHARACTERS) {
+				await session.send("appendCheckSimilarFileChunk", {
+					transferId,
+					chunkIndex,
+					dataBase64: contentBase64.slice(offset, offset + NATIVE_FILE_CHUNK_CHARACTERS),
+				});
+				chunkIndex += 1;
+			}
+			return await session.send<SimilarFileMatch[]>(
+				"checkSimilarFiles",
+				{ transferId, fileMeta: request.fileMeta },
+				30_000,
+			);
+		} finally {
+			session.disconnect();
+		}
 	}
 
 	async saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
@@ -294,4 +323,11 @@ export class NativeApiClient implements FuzzyApiClient {
 	importData(request: ImportDataRequest): Promise<ImportDataResult> {
 		return this.send("importData", request);
 	}
+}
+
+function decodedBase64Length(value: string): number | null {
+	if (value.length === 0 || value.length % 4 !== 0) return null;
+	const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+	const length = (value.length / 4) * 3 - padding;
+	return Number.isSafeInteger(length) ? length : null;
 }

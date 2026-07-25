@@ -10,7 +10,7 @@ use ts_rs::TS;
 use crate::{EngineError, EngineResult};
 
 /// 現在のNative Messaging契約バージョン。
-pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 1;
+pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 2;
 /// 正常状態として扱う拡張機能の最低バージョン。
 pub const MINIMUM_COMPATIBLE_EXTENSION_VERSION: &str = "0.1.0";
 /// 最終応答を「最近」とみなす期間（24時間）。
@@ -168,7 +168,7 @@ mod tests {
 		let report = ExtensionRuntimeReport {
 			installation_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
 			extension_version: "1.2.3-beta+1".to_string(),
-			protocol_version: 1,
+			protocol_version: EXTENSION_RUNTIME_PROTOCOL_VERSION,
 		};
 
 		assert!(report.validate().is_ok());
@@ -179,7 +179,7 @@ mod tests {
 		let mut report = ExtensionRuntimeReport {
 			installation_id: "../profile".to_string(),
 			extension_version: "1.0.0".to_string(),
-			protocol_version: 1,
+			protocol_version: EXTENSION_RUNTIME_PROTOCOL_VERSION,
 		};
 		assert!(report.validate().is_err());
 

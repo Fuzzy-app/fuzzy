@@ -13,13 +13,15 @@
 - backgroundが送信元Moodleと同一オリジンの資料だけを`credentials: include`で取得
 - Cookie等の認証情報を渡さず、取得済み内容だけをBase64化
 - 1接続内で`beginSaveFiles`→`appendSaveFileChunk`→`saveFiles`を送信
+- 保存前の類似照合も`beginCheckSimilarFile`→`appendCheckSimilarFileChunk`→`checkSimilarFiles`で分割転送し、backgroundで全タブ合計2件までに制限
+- 類似照合の分割転送導入に合わせ、Native Messaging契約バージョンを`2`へ更新
 - 20ファイル、1ファイル64MiB、合計128MiBの上限を設定
 - 一時的なHTTPエラーは1回再試行
 
 ## native-hostの実保存
 
 - SQLiteの保存ルート以下かを字句上・実体解決後の両方で検証
-- Windowsファイル名、宣言サイズ、HTML先頭、DOCXのZIPシグネチャを再検証
+- Windowsファイル名、宣言サイズ、HTML先頭を再検証し、DOCXはZIPとして開けて`[Content_Types].xml`と`word/document.xml`を上限内で最後まで読み取れる場合だけ受理
 - 既存ファイルを上書きせず、成功したファイルだけを`savedFileIds`へ返す
 - 失敗分は`DOWNLOAD_FAILED`、`INVALID_CONTENT`、`ALREADY_EXISTS`、`IO_ERROR`で個別に返す
 - 保存成功時にコースID、MoodleファイルID、BLAKE3、SimHashを`files`テーブルへ登録

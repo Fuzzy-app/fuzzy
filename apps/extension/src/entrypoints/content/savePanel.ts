@@ -10,6 +10,7 @@ import {
 	splitWindowsPath,
 } from "@fuzzy/shared";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
+import { boundedParallelMap } from "../../lib/boundedParallelMap";
 import { transferFileId } from "../../lib/moodle/fileDownloader";
 import { displayFileTitle, fileTypeInfo, isZipFile } from "../../lib/moodle/fileType";
 import type { MoodleFileLink } from "../../lib/moodle/pageSnapshot";
@@ -45,6 +46,8 @@ import {
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
+/** 大きな資料を複数のnative-hostプロセスへ同時転送しないための上限。 */
+const SIMILARITY_CHECK_CONCURRENCY = 2;
 
 interface SimilarWarning {
 	file: MoodleFileLink;
@@ -244,12 +247,10 @@ export async function mountSavePanel(): Promise<void> {
 	}
 
 	async function collectSimilarWarnings(files: MoodleFileLink[]): Promise<SimilarWarning[]> {
-		const byFile = await Promise.all(
-			files.map(async (file) => {
-				const matches = await api.checkSimilarFiles({ fileMeta: file });
-				return matches.map((match) => ({ file, match }));
-			}),
-		);
+		const byFile = await boundedParallelMap(files, SIMILARITY_CHECK_CONCURRENCY, async (file) => {
+			const matches = await api.checkSimilarFiles({ fileMeta: file });
+			return matches.map((match) => ({ file, match }));
+		});
 		return byFile.flat();
 	}
 

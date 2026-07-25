@@ -99,6 +99,48 @@ describe("Moodle資料保存のbackground境界", () => {
 
 		expect(capturedContent).toBe("AQIDBA==");
 	});
+
+	test("全タブの類似照合をbackground全体で同時2件までに制限する", async () => {
+		let activeChecks = 0;
+		let maximumActiveChecks = 0;
+		const releases: Array<() => void> = [];
+		const client = {
+			mode: "native" as const,
+			async checkSimilarFiles() {
+				activeChecks += 1;
+				maximumActiveChecks = Math.max(maximumActiveChecks, activeChecks);
+				await new Promise<void>((resolve) => releases.push(resolve));
+				activeChecks -= 1;
+				return [];
+			},
+		} as unknown as Pick<FuzzyApiClient, "mode" | "checkSimilarFiles">;
+		const fetcher = (async () =>
+			new Response(new Uint8Array([1, 2, 3, 4]), {
+				status: 200,
+				headers: { "content-type": "application/pdf" },
+			})) as unknown as typeof fetch;
+
+		const checks = Array.from({ length: 4 }, (_, index) =>
+			checkMoodleFileFromBackground(
+				client,
+				{ fileMeta: createFile(String(index), `https://moodle.example/file-${index}.pdf`) },
+				"https://moodle.example",
+				{ fetcher },
+			),
+		);
+		await waitFor(() => releases.length === 2);
+		expect(maximumActiveChecks).toBe(2);
+
+		releases[0]?.();
+		releases[1]?.();
+		await waitFor(() => releases.length === 4);
+		expect(maximumActiveChecks).toBe(2);
+
+		releases[2]?.();
+		releases[3]?.();
+		await Promise.all(checks);
+		expect(activeChecks).toBe(0);
+	});
 });
 
 function createFile(id: string, url: string) {
@@ -109,4 +151,12 @@ function createFile(id: string, url: string) {
 		sectionTitle: null,
 		mimeHint: "docx",
 	};
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	throw new Error("条件が時間内に成立しませんでした");
 }

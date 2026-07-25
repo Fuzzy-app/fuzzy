@@ -682,13 +682,13 @@ mod tests {
 	fn runtime_observation_preserves_first_seen_and_version_history() {
 		let database = Database::open_in_memory().unwrap();
 		let first = database
-			.record_extension_runtime(&report("1.0.0", 1))
+			.record_extension_runtime(&report("1.0.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 		let repeated = database
-			.record_extension_runtime(&report("1.0.0", 1))
+			.record_extension_runtime(&report("1.0.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 		let updated = database
-			.record_extension_runtime(&report("1.1.0", 1))
+			.record_extension_runtime(&report("1.1.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 
 		assert_eq!(first.first_seen_at, repeated.first_seen_at);
@@ -715,7 +715,7 @@ mod tests {
 			ExtensionSetupState::Waiting
 		);
 		database
-			.record_extension_runtime(&report("1.0.0", 1))
+			.record_extension_runtime(&report("1.0.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 		assert_eq!(
 			database.extension_setup_status_since(before).unwrap().state,
@@ -731,7 +731,7 @@ mod tests {
 	fn setup_status_reports_incompatible_version_or_protocol() {
 		let database = Database::open_in_memory().unwrap();
 		database
-			.record_extension_runtime(&report("0.0.9", 1))
+			.record_extension_runtime(&report("0.0.9", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 
 		assert_eq!(
@@ -743,7 +743,7 @@ mod tests {
 		);
 
 		database
-			.record_extension_runtime(&report("2.0.0", 99))
+			.record_extension_runtime(&report("2.0.0", EXTENSION_RUNTIME_PROTOCOL_VERSION - 1))
 			.unwrap();
 
 		assert_eq!(
@@ -765,7 +765,7 @@ mod tests {
 		let desktop_database = Database::open(&path).unwrap();
 		let native_host_database = Database::open(&path).unwrap();
 		native_host_database
-			.record_extension_runtime(&report("1.0.0", 1))
+			.record_extension_runtime(&report("1.0.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 
 		assert_eq!(
@@ -790,7 +790,7 @@ mod tests {
 		);
 
 		database
-			.record_extension_runtime(&report("0.1.0", 1))
+			.record_extension_runtime(&report("0.1.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 		assert_eq!(
 			database.extension_recovery_status().unwrap().state,
@@ -815,7 +815,7 @@ mod tests {
 	fn recovery_status_rejects_old_extension_or_protocol_version() {
 		let database = Database::open_in_memory().unwrap();
 		database
-			.record_extension_runtime(&report("0.0.9", 1))
+			.record_extension_runtime(&report("0.0.9", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 		assert_eq!(
 			database.extension_recovery_status().unwrap().state,
@@ -823,7 +823,7 @@ mod tests {
 		);
 
 		database
-			.record_extension_runtime(&report("0.2.0", 99))
+			.record_extension_runtime(&report("0.2.0", EXTENSION_RUNTIME_PROTOCOL_VERSION - 1))
 			.unwrap();
 		assert_eq!(
 			database.extension_recovery_status().unwrap().state,
@@ -835,10 +835,10 @@ mod tests {
 	fn compatible_update_or_reinstall_returns_recovery_to_ready() {
 		let database = Database::open_in_memory().unwrap();
 		database
-			.record_extension_runtime(&report("0.0.9", 1))
+			.record_extension_runtime(&report("0.0.9", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 
-		let mut updated = report("0.2.0", 1);
+		let mut updated = report("0.2.0", EXTENSION_RUNTIME_PROTOCOL_VERSION);
 		database.record_extension_runtime(&updated).unwrap();
 		assert_eq!(
 			database.extension_recovery_status().unwrap().state,
@@ -859,9 +859,9 @@ mod tests {
 	fn recent_compatible_observation_wins_across_installations() {
 		let database = Database::open_in_memory().unwrap();
 		database
-			.record_extension_runtime(&report("0.1.0", 1))
+			.record_extension_runtime(&report("0.1.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
-		let mut incompatible = report("0.0.9", 1);
+		let mut incompatible = report("0.0.9", EXTENSION_RUNTIME_PROTOCOL_VERSION);
 		incompatible.installation_id = "other-browser-installation".to_string();
 		database.record_extension_runtime(&incompatible).unwrap();
 
@@ -874,10 +874,10 @@ mod tests {
 	fn latest_observation_supersedes_older_version_for_the_same_installation() {
 		let database = Database::open_in_memory().unwrap();
 		database
-			.record_extension_runtime(&report("0.1.0", 1))
+			.record_extension_runtime(&report("0.1.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 		database
-			.record_extension_runtime(&report("0.0.9", 1))
+			.record_extension_runtime(&report("0.0.9", EXTENSION_RUNTIME_PROTOCOL_VERSION))
 			.unwrap();
 
 		let status = database.extension_recovery_status().unwrap();
