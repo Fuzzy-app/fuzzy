@@ -183,15 +183,30 @@ impl Database {
 		let mut statement = self
 			.conn
 			.prepare(
-				"SELECT
+				"WITH ranked_observations AS (
+					SELECT
+						installation_id,
+						extension_version,
+						protocol_version,
+						first_seen_at,
+						last_seen_at,
+						rowid AS source_rowid,
+						ROW_NUMBER() OVER (
+							PARTITION BY installation_id
+							ORDER BY julianday(last_seen_at) DESC, rowid DESC
+						) AS installation_rank
+					FROM extension_runtime_observations
+				)
+				SELECT
 					installation_id,
 					extension_version,
 					protocol_version,
 					first_seen_at,
 					last_seen_at,
 					julianday(last_seen_at) >= julianday('now', ?1)
-				FROM extension_runtime_observations
-				ORDER BY julianday(last_seen_at) DESC, rowid DESC",
+				FROM ranked_observations
+				WHERE installation_rank = 1
+				ORDER BY julianday(last_seen_at) DESC, source_rowid DESC",
 			)
 			.map_err(db_err)?;
 		let rows = statement
@@ -633,5 +648,20 @@ mod tests {
 		let status = database.extension_recovery_status().unwrap();
 		assert_eq!(status.state, ExtensionRecoveryState::Ready);
 		assert_eq!(status.observation.unwrap().extension_version, "0.1.0");
+	}
+
+	#[test]
+	fn latest_observation_supersedes_older_version_for_the_same_installation() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.1.0", 1))
+			.unwrap();
+		database
+			.record_extension_runtime(&report("0.0.9", 1))
+			.unwrap();
+
+		let status = database.extension_recovery_status().unwrap();
+		assert_eq!(status.state, ExtensionRecoveryState::Incompatible);
+		assert_eq!(status.observation.unwrap().extension_version, "0.0.9");
 	}
 }

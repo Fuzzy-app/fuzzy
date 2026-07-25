@@ -383,10 +383,7 @@ mod tests {
 		let mut database = Database::open_in_memory().unwrap();
 		let response = dispatch(&mut database, request("ping", serde_json::json!({})));
 		assert!(response.ok);
-		assert_eq!(
-			response.data.unwrap()["version"],
-			env!("CARGO_PKG_VERSION")
-		);
+		assert_eq!(response.data.unwrap()["version"], env!("CARGO_PKG_VERSION"));
 	}
 
 	#[test]

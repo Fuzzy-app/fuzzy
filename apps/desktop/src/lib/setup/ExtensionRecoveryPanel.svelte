@@ -75,8 +75,6 @@
 	}
 
 	async function startRecheck(openMoodle: boolean): Promise<void> {
-		recheckStartedAt = new Date().toISOString();
-		nowMs = Date.now();
 		errorMessage = null;
 		successMessage = null;
 		if (openMoodle) {
@@ -89,8 +87,12 @@
 					error instanceof ExtensionInstallError
 						? error.message
 						: "Moodleを開けませんでした。";
+				recheckStartedAt = null;
+				return;
 			}
 		}
+		recheckStartedAt = new Date().toISOString();
+		nowMs = Date.now();
 		await refreshStatus();
 	}
 

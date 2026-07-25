@@ -319,16 +319,22 @@ describe("SQLite-backed extension recovery status", () => {
 		).toBe("ready");
 	});
 
-	test("年度別Moodleをユーザー操作で既定ブラウザに開く", async () => {
+	test("年度切替に依存しないMoodle URLをユーザー操作で既定ブラウザに開く", async () => {
 		const openedUrls: string[] = [];
-		const date = new Date("2026-07-25T00:00:00.000Z");
-		expect(getMoodleRecoveryUrl(date)).toBe("https://moodle2026.wakayama-u.ac.jp/2026/");
-		await openMoodleForRecoveryClient(date, {
+		expect(getMoodleRecoveryUrl()).toBe("https://moodle.wakayama-u.ac.jp/");
+		await openMoodleForRecoveryClient({
 			openUrl: async (url) => {
 				openedUrls.push(url);
 			},
 		});
-		expect(openedUrls).toEqual(["https://moodle2026.wakayama-u.ac.jp/2026/"]);
+		expect(openedUrls).toEqual(["https://moodle.wakayama-u.ac.jp/"]);
+		await expect(
+			openMoodleForRecoveryClient({
+				openUrl: async () => {
+					throw new Error("failed");
+				},
+			}),
+		).rejects.toMatchObject({ code: "OPEN_FAILED" });
 	});
 
 	test("復旧画面にブラウザ分岐・復旧状態の永続化を置かない", async () => {
@@ -347,5 +353,8 @@ describe("SQLite-backed extension recovery status", () => {
 		expect(componentSource).not.toContain("Edge");
 		expect(routeSource).toContain("extensionRecoveryLoadError");
 		expect(routeSource).toContain("on:click={loadExtensionRecoveryStatus}");
+		expect(routeSource).toContain("let isRecoveryMode = false;");
+		expect(routeSource).toContain('isRecoveryMode = status.state !== "missing"');
+		expect(routeSource).not.toContain("$: isRecoveryMode = setupStatus.done");
 	});
 });

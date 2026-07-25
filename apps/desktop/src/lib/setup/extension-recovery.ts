@@ -21,6 +21,7 @@ export type ExtensionRecoveryViewState =
 
 export const extensionRuntimeRecentSeconds = 24 * 60 * 60;
 export const recoveryRecheckTimeoutMs = 15_000;
+export const moodleRecoveryUrl = "https://moodle.wakayama-u.ac.jp/";
 
 export function parseExtensionRecoveryStatus(value: unknown): ExtensionRecoveryStatus | null {
 	if (!value || typeof value !== "object") return null;
@@ -98,16 +99,14 @@ export function deriveExtensionRecoveryViewState(
 	return nowMs - startedAtMs >= timeoutMs ? "timed-out" : "checking";
 }
 
-export function getMoodleRecoveryUrl(date: Date = new Date()): string {
-	const year = date.getFullYear();
-	return `https://moodle${year}.wakayama-u.ac.jp/${year}/`;
+export function getMoodleRecoveryUrl(): string {
+	return moodleRecoveryUrl;
 }
 
 export async function openMoodleForRecoveryClient(
-	date: Date = new Date(),
 	runtime?: UrlOpenRuntime | null,
 ): Promise<string> {
-	const url = getMoodleRecoveryUrl(date);
+	const url = getMoodleRecoveryUrl();
 	let opener = runtime;
 	if (opener === undefined) {
 		opener = isTauriRuntime()

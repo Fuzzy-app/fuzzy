@@ -67,6 +67,7 @@
 	let extensionRecoveryStatus: ExtensionRecoveryStatus | null = null;
 	let extensionRecoveryLoadError: string | null = null;
 	let isLoadingExtensionRecovery = false;
+	let isRecoveryMode = false;
 	const minimumScanLoadingMs = 450;
 	const extensionVerificationStartedAt = new Date().toISOString();
 
@@ -75,6 +76,7 @@
 
 		if (setupStatus.done) {
 			currentStepIndex = 3;
+			isRecoveryMode = true;
 			await loadExtensionRecoveryStatus();
 		}
 	});
@@ -83,7 +85,10 @@
 		isLoadingExtensionRecovery = true;
 		extensionRecoveryLoadError = null;
 		try {
-			extensionRecoveryStatus = await getExtensionRecoveryStatusClient();
+			const status = await getExtensionRecoveryStatusClient();
+			extensionRecoveryStatus = status;
+			// 実応答の履歴がなければ初回導入は未完了なので、導入待機を継続する。
+			isRecoveryMode = status.state !== "missing";
 		} catch (error) {
 			extensionRecoveryStatus = null;
 			extensionRecoveryLoadError =
@@ -248,7 +253,6 @@
 	$: canSaveSetup = Boolean(
 		draft.baseFolderPath && selectedCandidate && selectedRule,
 	);
-	$: isRecoveryMode = setupStatus.done;
 	$: steps = stepLabels.map((label, index) => ({
 		label,
 		state: (index < currentStepIndex
@@ -590,33 +594,35 @@
 				</div>
 			</section>
 			{#if currentStepIndex === 3}
-				{#if extensionRecoveryStatus}
-					<ExtensionRecoveryPanel initialStatus={extensionRecoveryStatus} />
-				{:else if isRecoveryMode}
-					<section class="panel recovery-load-panel">
-						<div class="panel-header">
-							<div>
-								<p class="eyebrow">拡張機能の状態</p>
-								<h1>SQLiteの応答情報を確認</h1>
-								<p>
-									保存済みの最終応答を読み取り、拡張機能の状態を確認します。
-								</p>
+				{#if isRecoveryMode}
+					{#if extensionRecoveryStatus}
+						<ExtensionRecoveryPanel initialStatus={extensionRecoveryStatus} />
+					{:else}
+						<section class="panel recovery-load-panel">
+							<div class="panel-header">
+								<div>
+									<p class="eyebrow">拡張機能の状態</p>
+									<h1>SQLiteの応答情報を確認</h1>
+									<p>
+										保存済みの最終応答を読み取り、拡張機能の状態を確認します。
+									</p>
+								</div>
 							</div>
-						</div>
-						{#if extensionRecoveryLoadError}
-							<p class="error-banner" role="alert">
-								{extensionRecoveryLoadError}
-							</p>
-						{/if}
-						<button
-							class="primary-button"
-							type="button"
-							on:click={loadExtensionRecoveryStatus}
-							disabled={isLoadingExtensionRecovery}
-						>
-							{isLoadingExtensionRecovery ? "確認中..." : "再試行"}
-						</button>
-					</section>
+							{#if extensionRecoveryLoadError}
+								<p class="error-banner" role="alert">
+									{extensionRecoveryLoadError}
+								</p>
+							{/if}
+							<button
+								class="primary-button"
+								type="button"
+								on:click={loadExtensionRecoveryStatus}
+								disabled={isLoadingExtensionRecovery}
+							>
+								{isLoadingExtensionRecovery ? "確認中..." : "再試行"}
+							</button>
+						</section>
+					{/if}
 				{:else}
 					<ExtensionInstallStep
 						verificationStartedAt={extensionVerificationStartedAt}
