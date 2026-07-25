@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-23
+最終更新: 2026-07-25
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はnative-hostのAPI DTOを正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期のRust DTOは `apps/native-host/src/api_types.rs`、暫定TS型は `packages/shared/src/types.ts` に定義する。`crates/engine-core` の絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -30,7 +30,9 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `ping`                     | 疎通確認（フォールバック判定に使用）      | `{}` → `{ version }`                                |
 | `reportExtensionRuntime`   | 拡張機能の実応答・バージョンをSQLiteへ記録 | `{ installationId, extensionVersion, protocolVersion }` → `ExtensionRuntimeObservation` |
 | `suggestSavePath`          | 保存先候補の提案                | `{ course, fileMeta }` → `SaveSuggestion[]`         |
-| `saveFiles`                | 一括保存実行                  | `{ files[], targetPath }` → `{ savedFileIds }`      |
+| `beginSaveFiles`           | 取得済み資料の分割転送開始           | `{ transferId, targetPath, files: [{ fileId, fileName, mimeType, byteLength }] }` → `{ ok: true }` |
+| `appendSaveFileChunk`      | 取得済み資料のBase64チャンク追加      | `{ transferId, fileId, chunkIndex, dataBase64 }` → `{ ok: true }` |
+| `saveFiles`                | 転送完了済み資料の一括保存実行         | `{ transferId }` → `SaveFilesResult`                |
 | `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
 | `checkSimilarFiles`        | 保存前の類似ファイル検知            | `{ fileMeta }` → `SimilarFileMatch[]` |
 | `search`                   | 全文検索（該当箇所ジャンプ用のページ情報含む） | `{ query }` → `SearchResult[]`                      |
@@ -86,7 +88,27 @@ interface SaveSuggestion {
 
 クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
 
-#### 1.2.1 ルール違反・重複一覧の型と安全境界
+#### 1.2.1 Moodle資料の確定・分割転送・実保存
+
+拡張機能のcontent scriptからbackgroundへ渡す保存要求は`MoodleSaveFilesRequest = { files: MoodleFileMeta[], targetPath }`とする。backgroundはメッセージ送信元ページと各資料URLが同一オリジンであることを検証し、`credentials: "include"`のGETで本体を取得する。リダイレクト後のURLも同一オリジンでなければ拒否する。Cookie・Authorizationヘッダー等の認証情報はpayloadへ含めず、取得済み内容だけをNative Messagingへ渡す。
+
+`mod/resource/view.php`の種別確定はHEADを先に使用し、HEAD非対応・HTTPエラー・情報不足時はGETへフォールバックする。`Content-Disposition`の`filename*`を`filename`より優先し、対応済み拡張子を持つ実ファイル名を使用する。実ファイル名がない場合は表示名へ確定した拡張子を補う。`text/html`、HTML先頭シグネチャ、ログイン／エラーページ、種別未確定の間接リンクは保存しない。DOCXはZIPシグネチャも確認する。
+
+Native Messagingの転送は同じ接続上で`beginSaveFiles`、0個以上の`appendSaveFileChunk`、`saveFiles`の順に行う。`chunkIndex`はファイルごとに0から連続させる。拡張機能はBase64文字列を192KiB以下に分割し、native-hostは復号後256KiB以下だけを受理する。1要求は20ファイル、1ファイル64MiB、合計128MiBまでとする。切断・タイムアウト・一時的なHTTP失敗を固定キャッシュせず、利用者の再実行で新しい`transferId`を使って再試行できるようにする。
+
+```ts
+interface SaveFilesResult {
+	savedFileIds: string[];
+	failedFiles: Array<{
+		fileId: string;
+		code: "DOWNLOAD_FAILED" | "INVALID_CONTENT" | "ALREADY_EXISTS" | "IO_ERROR";
+	}>;
+}
+```
+
+native-hostは`targetPath`がSQLiteの`app_settings.base_folder_path`以下であることを、既存の最深祖先を実体解決した後にも検証する。単一ファイル名だけを許可し、Windows禁止文字・予約名・末尾の空白／ピリオドを拒否する。既存ファイルは上書きしない。複数ファイルの一部が失敗した場合も、実際に書き込めた`fileId`だけを`savedFileIds`へ入れ、失敗分を`failedFiles`へ入れる。
+
+#### 1.2.2 ルール違反・重複一覧の型と安全境界
 
 `getRuleViolations` は次の形式を返す。
 
@@ -209,5 +231,4 @@ type ExtensionSetupStatus =
 
 ## 4. 未決事項
 
-- `saveFiles` のレスポンスに保存後の `SaveSuggestion` 形式を含めるか
 - `exportData` / `importData` のファイル形式（生SQLiteファイル vs 専用アーカイブ）
