@@ -5,6 +5,7 @@
 		createRulePreviewValues,
 		previewRulePattern,
 	} from "@fuzzy/shared";
+	import { getExtensionRecoveryStatusClient } from "$lib/setup/extension-recovery";
 	import {
 		getSetupStatusClient,
 		pickBaseFolderClient,
@@ -13,6 +14,8 @@
 	} from "$lib/setup/api";
 	import { createCourseOverrides } from "$lib/setup/course-overrides";
 	import ExtensionInstallStep from "$lib/setup/ExtensionInstallStep.svelte";
+	import ExtensionRecoveryPanel from "$lib/setup/ExtensionRecoveryPanel.svelte";
+	import type { ExtensionRecoveryStatus } from "@fuzzy/shared";
 	import type {
 		InitialRuleOption,
 		SetupDraft,
@@ -61,6 +64,9 @@
 	let isSaving = false;
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
+	let extensionRecoveryStatus: ExtensionRecoveryStatus | null = null;
+	let extensionRecoveryLoadError: string | null = null;
+	let isLoadingExtensionRecovery = false;
 	const minimumScanLoadingMs = 450;
 	const extensionVerificationStartedAt = new Date().toISOString();
 
@@ -69,8 +75,25 @@
 
 		if (setupStatus.done) {
 			currentStepIndex = 3;
+			await loadExtensionRecoveryStatus();
 		}
 	});
+
+	async function loadExtensionRecoveryStatus(): Promise<void> {
+		isLoadingExtensionRecovery = true;
+		extensionRecoveryLoadError = null;
+		try {
+			extensionRecoveryStatus = await getExtensionRecoveryStatusClient();
+		} catch (error) {
+			extensionRecoveryStatus = null;
+			extensionRecoveryLoadError =
+				error instanceof Error
+					? error.message
+					: "拡張機能の状態を確認できませんでした。";
+		} finally {
+			isLoadingExtensionRecovery = false;
+		}
+	}
 
 	function formatScannedAt(value: string | null): string {
 		if (!value) {
@@ -225,6 +248,7 @@
 	$: canSaveSetup = Boolean(
 		draft.baseFolderPath && selectedCandidate && selectedRule,
 	);
+	$: isRecoveryMode = setupStatus.done;
 	$: steps = stepLabels.map((label, index) => ({
 		label,
 		state: (index < currentStepIndex
@@ -238,7 +262,7 @@
 <svelte:head>
 	<meta
 		name="description"
-		content="Fuzzy の初期セットアップ画面。保存パターン、初期ルール、ブラウザ拡張機能の導入を設定できます。"
+		content="Fuzzy の初期セットアップと、セットアップ後の拡張機能復旧確認を行います。"
 	/>
 </svelte:head>
 
@@ -248,7 +272,7 @@
 			<div class="brand-mark">F</div>
 			<div class="brand-copy">
 				<strong>Fuzzy</strong>
-				<span>初期セットアップ</span>
+				<span>{isRecoveryMode ? "拡張機能の確認" : "初期セットアップ"}</span>
 			</div>
 		</div>
 		<div class="window-actions" aria-hidden="true">
@@ -261,45 +285,58 @@
 	<section class="workspace">
 		<aside class="sidebar">
 			<p class="sidebar-label">
-				保存先と初期ルールを設定した後、ブラウザ拡張機能の導入を案内します。
+				{isRecoveryMode
+					? "SQLiteに保存された最終応答を確認し、必要な場合だけ復旧手順を案内します。"
+					: "保存先と初期ルールを設定した後、ブラウザ拡張機能の導入を案内します。"}
 			</p>
-			<nav aria-label="セットアップの流れ">
+			{#if isRecoveryMode}
 				<ul class="side-list">
-					{#each sidebarItems as item, index}
-						<li
-							class:active={index <= currentStepIndex}
-							aria-current={index === currentStepIndex ? "step" : undefined}
-						>
-							<span class="side-index">{index + 1}</span>
-							<span>{item}</span>
-						</li>
-					{/each}
+					<li class="active" aria-current="page">
+						<span class="side-index">✓</span>
+						<span>拡張機能の状態</span>
+					</li>
 				</ul>
-			</nav>
+			{:else}
+				<nav aria-label="セットアップの流れ">
+					<ul class="side-list">
+						{#each sidebarItems as item, index}
+							<li
+								class:active={index <= currentStepIndex}
+								aria-current={index === currentStepIndex ? "step" : undefined}
+							>
+								<span class="side-index">{index + 1}</span>
+								<span>{item}</span>
+							</li>
+						{/each}
+					</ul>
+				</nav>
+			{/if}
 		</aside>
 
 		<section class="content">
-			<div class="progress" aria-label="進捗">
-				{#each steps as item, index}
-					<div
-						class="progress-item"
-						aria-current={item.state === "current" ? "step" : undefined}
-					>
+			{#if !isRecoveryMode}
+				<div class="progress" aria-label="進捗">
+					{#each steps as item, index}
 						<div
-							class:current={item.state === "current"}
-							class:done={item.state === "done"}
-							class="progress-dot"
+							class="progress-item"
+							aria-current={item.state === "current" ? "step" : undefined}
 						>
-							{#if item.state === "done"}
-								✓
-							{:else}
-								{index + 1}
-							{/if}
+							<div
+								class:current={item.state === "current"}
+								class:done={item.state === "done"}
+								class="progress-dot"
+							>
+								{#if item.state === "done"}
+									✓
+								{:else}
+									{index + 1}
+								{/if}
+							</div>
+							<span>{item.label}</span>
 						</div>
-						<span>{item.label}</span>
-					</div>
-				{/each}
-			</div>
+					{/each}
+				</div>
+			{/if}
 
 			<section class="panel" hidden={currentStepIndex !== 2}>
 				<div class="panel-header">
@@ -553,10 +590,39 @@
 				</div>
 			</section>
 			{#if currentStepIndex === 3}
-				<ExtensionInstallStep
-					verificationStartedAt={extensionVerificationStartedAt}
-					onBack={() => (currentStepIndex = 2)}
-				/>
+				{#if extensionRecoveryStatus}
+					<ExtensionRecoveryPanel initialStatus={extensionRecoveryStatus} />
+				{:else if isRecoveryMode}
+					<section class="panel recovery-load-panel">
+						<div class="panel-header">
+							<div>
+								<p class="eyebrow">拡張機能の状態</p>
+								<h1>SQLiteの応答情報を確認</h1>
+								<p>
+									保存済みの最終応答を読み取り、拡張機能の状態を確認します。
+								</p>
+							</div>
+						</div>
+						{#if extensionRecoveryLoadError}
+							<p class="error-banner" role="alert">
+								{extensionRecoveryLoadError}
+							</p>
+						{/if}
+						<button
+							class="primary-button"
+							type="button"
+							on:click={loadExtensionRecoveryStatus}
+							disabled={isLoadingExtensionRecovery}
+						>
+							{isLoadingExtensionRecovery ? "確認中..." : "再試行"}
+						</button>
+					</section>
+				{:else}
+					<ExtensionInstallStep
+						verificationStartedAt={extensionVerificationStartedAt}
+						onBack={() => (currentStepIndex = 2)}
+					/>
+				{/if}
 			{/if}
 		</section>
 	</section>

@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
-	EngineError, EngineResult, ExtensionRuntimeObservation, ExtensionRuntimeReport,
-	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION, SCHEMA_SQL,
+	is_compatible_extension_version, EngineError, EngineResult, ExtensionRecoveryState,
+	ExtensionRecoveryStatus, ExtensionRuntimeObservation, ExtensionRuntimeReport,
+	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION,
+	EXTENSION_RUNTIME_RECENT_SECONDS, SCHEMA_SQL,
 };
 
 mod duplicates;
@@ -173,6 +175,56 @@ impl Database {
 		})
 	}
 
+	/// 最新の保存済み応答から、セットアップ完了後の復旧状態を算出する。
+	pub fn extension_recovery_status(&self) -> EngineResult<ExtensionRecoveryStatus> {
+		let recent_modifier = format!("-{EXTENSION_RUNTIME_RECENT_SECONDS} seconds");
+		let mut statement = self
+			.conn
+			.prepare(
+				"SELECT
+					installation_id,
+					extension_version,
+					protocol_version,
+					first_seen_at,
+					last_seen_at,
+					julianday(last_seen_at) >= julianday('now', ?1)
+				FROM extension_runtime_observations
+				ORDER BY julianday(last_seen_at) DESC, rowid DESC",
+			)
+			.map_err(db_err)?;
+		let rows = statement
+			.query_map([recent_modifier], |row| {
+				Ok((observation_from_row(row)?, row.get::<_, bool>(5)?))
+			})
+			.map_err(db_err)?;
+		let observations = rows.collect::<Result<Vec<_>, _>>().map_err(db_err)?;
+		let Some((latest_observation, _)) = observations.first() else {
+			return Ok(ExtensionRecoveryStatus::missing());
+		};
+		if let Some((observation, _)) = observations
+			.iter()
+			.find(|(observation, recent)| is_compatible_observation(observation) && *recent)
+		{
+			return Ok(ExtensionRecoveryStatus {
+				state: ExtensionRecoveryState::Ready,
+				observation: Some(observation.clone()),
+				recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
+			});
+		}
+
+		let state = if !is_compatible_observation(latest_observation) {
+			ExtensionRecoveryState::Incompatible
+		} else {
+			ExtensionRecoveryState::Stale
+		};
+
+		Ok(ExtensionRecoveryStatus {
+			state,
+			observation: Some(latest_observation.clone()),
+			recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
+		})
+	}
+
 	/// 内部接続への参照。DB実装の結合テストで使用する。
 	#[cfg(test)]
 	fn conn(&self) -> &Connection {
@@ -188,6 +240,11 @@ fn observation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtensionRu
 		first_seen_at: row.get(3)?,
 		last_seen_at: row.get(4)?,
 	})
+}
+
+fn is_compatible_observation(observation: &ExtensionRuntimeObservation) -> bool {
+	observation.protocol_version == EXTENSION_RUNTIME_PROTOCOL_VERSION
+		&& is_compatible_extension_version(&observation.extension_version)
 }
 
 fn schema_applied(conn: &Connection) -> EngineResult<bool> {
@@ -478,5 +535,94 @@ mod tests {
 		drop(native_host_database);
 		drop(desktop_database);
 		let _ = std::fs::remove_dir_all(&directory);
+	}
+
+	#[test]
+	fn recovery_status_distinguishes_missing_recent_and_stale_observations() {
+		let database = Database::open_in_memory().unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Missing
+		);
+
+		database
+			.record_extension_runtime(&report("0.1.0", 1))
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Ready
+		);
+
+		database
+			.conn()
+			.execute(
+				"UPDATE extension_runtime_observations
+				 SET last_seen_at = '2000-01-01T00:00:00.000Z'",
+				[],
+			)
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Stale
+		);
+	}
+
+	#[test]
+	fn recovery_status_rejects_old_extension_or_protocol_version() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.0.9", 1))
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Incompatible
+		);
+
+		database
+			.record_extension_runtime(&report("0.2.0", 99))
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Incompatible
+		);
+	}
+
+	#[test]
+	fn compatible_update_or_reinstall_returns_recovery_to_ready() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.0.9", 1))
+			.unwrap();
+
+		let mut updated = report("0.2.0", 1);
+		database.record_extension_runtime(&updated).unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Ready
+		);
+
+		updated.installation_id = "replacement-installation".to_string();
+		database.record_extension_runtime(&updated).unwrap();
+		let status = database.extension_recovery_status().unwrap();
+		assert_eq!(status.state, ExtensionRecoveryState::Ready);
+		assert_eq!(
+			status.observation.unwrap().installation_id,
+			"replacement-installation"
+		);
+	}
+
+	#[test]
+	fn recent_compatible_observation_wins_across_installations() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.1.0", 1))
+			.unwrap();
+		let mut incompatible = report("0.0.9", 1);
+		incompatible.installation_id = "other-browser-installation".to_string();
+		database.record_extension_runtime(&incompatible).unwrap();
+
+		let status = database.extension_recovery_status().unwrap();
+		assert_eq!(status.state, ExtensionRecoveryState::Ready);
+		assert_eq!(status.observation.unwrap().extension_version, "0.1.0");
 	}
 }

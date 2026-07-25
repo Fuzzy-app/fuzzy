@@ -1,4 +1,4 @@
-import type { ExtensionSetupStatus } from "@fuzzy/shared";
+import type { ExtensionRuntimeObservation, ExtensionSetupStatus } from "@fuzzy/shared";
 
 export type ExtensionInstallChannel = "bundled" | "store";
 
@@ -53,7 +53,7 @@ const bundledManifestResourcePath = "extension/chrome-mv3/manifest.json";
 // ブラウザの種類は判定せず、既定ブラウザでページを開く。
 export const extensionStoreUrl: string | null = null;
 
-function isTauriRuntime(): boolean {
+export function isTauriRuntime(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
@@ -189,7 +189,7 @@ export async function openExtensionInstallDestinationClient(
 	}
 }
 
-async function createStatusRuntime(): Promise<ExtensionStatusRuntime | null> {
+export async function createStatusRuntime(): Promise<ExtensionStatusRuntime | null> {
 	if (!isTauriRuntime()) return null;
 	const { invoke } = await import("@tauri-apps/api/core");
 	return { invoke };
@@ -203,12 +203,25 @@ export function parseExtensionSetupStatus(value: unknown): ExtensionSetupStatus 
 		return candidate.observation === null ? { state: "waiting", observation: null } : null;
 	}
 	if (candidate.state !== "ready" && candidate.state !== "incompatible") return null;
-	if (!candidate.observation || typeof candidate.observation !== "object") return null;
+	const observation = parseExtensionRuntimeObservation(candidate.observation);
+	if (!observation) return null;
 
-	const observation = candidate.observation as Record<string, unknown>;
+	return {
+		state: candidate.state,
+		observation,
+	};
+}
+
+export function parseExtensionRuntimeObservation(
+	value: unknown,
+): ExtensionRuntimeObservation | null {
+	if (!value || typeof value !== "object") return null;
+	const observation = value as Record<string, unknown>;
 	if (
 		typeof observation.installationId !== "string" ||
+		!/^[A-Za-z0-9-]{1,128}$/.test(observation.installationId) ||
 		typeof observation.extensionVersion !== "string" ||
+		!/^[A-Za-z0-9.+-]{1,64}$/.test(observation.extensionVersion) ||
 		typeof observation.protocolVersion !== "number" ||
 		!Number.isInteger(observation.protocolVersion) ||
 		observation.protocolVersion <= 0 ||
@@ -221,14 +234,11 @@ export function parseExtensionSetupStatus(value: unknown): ExtensionSetupStatus 
 	}
 
 	return {
-		state: candidate.state,
-		observation: {
-			installationId: observation.installationId,
-			extensionVersion: observation.extensionVersion,
-			protocolVersion: observation.protocolVersion,
-			firstSeenAt: observation.firstSeenAt,
-			lastSeenAt: observation.lastSeenAt,
-		},
+		installationId: observation.installationId,
+		extensionVersion: observation.extensionVersion,
+		protocolVersion: observation.protocolVersion,
+		firstSeenAt: observation.firstSeenAt,
+		lastSeenAt: observation.lastSeenAt,
 	};
 }
 

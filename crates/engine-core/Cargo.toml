@@ -14,3 +14,4 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 blake3 = "1"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
+semver = "1"

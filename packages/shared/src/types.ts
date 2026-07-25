@@ -279,3 +279,12 @@ export interface ExtensionSetupStatus {
 	state: ExtensionSetupState;
 	observation: ExtensionRuntimeObservation | null;
 }
+
+export type ExtensionRecoveryState = "missing" | "ready" | "stale" | "incompatible";
+
+/** SQLiteの最新応答から算出した、セットアップ完了後の拡張機能状態。 */
+export interface ExtensionRecoveryStatus {
+	state: ExtensionRecoveryState;
+	observation: ExtensionRuntimeObservation | null;
+	recentWithinSeconds: number;
+}

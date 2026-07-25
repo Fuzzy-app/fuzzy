@@ -3,12 +3,17 @@
 //! ブラウザ名や利用者の自己申告ではなく、Native Messagingで受信した
 //! バージョン付きの応答を初期セットアップ完了の根拠にする。
 
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::{EngineError, EngineResult};
 
 /// 現在のNative Messaging契約バージョン。
 pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 1;
+/// 正常状態として扱う拡張機能の最低バージョン。
+pub const MINIMUM_COMPATIBLE_EXTENSION_VERSION: &str = "0.1.0";
+/// 最終応答を「最近」とみなす期間（24時間）。
+pub const EXTENSION_RUNTIME_RECENT_SECONDS: u64 = 24 * 60 * 60;
 
 /// 拡張機能がnative-hostへ報告する実行情報。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -108,6 +113,45 @@ impl ExtensionSetupStatus {
 	}
 }
 
+/// セットアップ完了後のデスクトップ画面から見た拡張機能の状態。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExtensionRecoveryState {
+	Missing,
+	Ready,
+	Stale,
+	Incompatible,
+}
+
+/// SQLiteの最新応答から算出した、セットアップ完了後の復旧状態。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionRecoveryStatus {
+	pub state: ExtensionRecoveryState,
+	pub observation: Option<ExtensionRuntimeObservation>,
+	pub recent_within_seconds: u64,
+}
+
+impl ExtensionRecoveryStatus {
+	pub fn missing() -> Self {
+		Self {
+			state: ExtensionRecoveryState::Missing,
+			observation: None,
+			recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
+		}
+	}
+}
+
+/// 保存された拡張機能バージョンが現在の最低対応版以上かを判定する。
+pub fn is_compatible_extension_version(version: &str) -> bool {
+	let Ok(candidate) = Version::parse(version) else {
+		return false;
+	};
+	let minimum =
+		Version::parse(MINIMUM_COMPATIBLE_EXTENSION_VERSION).expect("最低対応版は有効な形式");
+	candidate >= minimum
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -139,5 +183,14 @@ mod tests {
 		report.extension_version = "1.0.0".to_string();
 		report.protocol_version = 0;
 		assert!(report.validate().is_err());
+	}
+
+	#[test]
+	fn extension_version_compatibility_uses_minimum_supported_version() {
+		assert!(!is_compatible_extension_version("0.0.9"));
+		assert!(!is_compatible_extension_version("0.1.0-beta.1"));
+		assert!(is_compatible_extension_version("0.1.0"));
+		assert!(is_compatible_extension_version("0.2.0-beta.1"));
+		assert!(!is_compatible_extension_version("invalid"));
 	}
 }

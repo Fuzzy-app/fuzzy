@@ -173,6 +173,7 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 | `save_initial_setup`      | 選んだパターン／ルールをSQLiteに保存           | `{ path, pattern, courseOverrides? }` → `{ ok }` |
 | `get_setup_status`        | 初期セットアップ済みかどうか確認                | `()` → `{ done: boolean }`                       |
 | `get_extension_setup_status` | 確認開始後の拡張機能実応答をSQLiteから取得 | `{ since: string }` → `ExtensionSetupStatus` |
+| `get_extension_recovery_status` | セットアップ後の最新応答・互換性・鮮度をSQLiteから取得 | `()` → `ExtensionRecoveryStatus` |
 
 `pick_base_folder` 等の実体は `crates/engine-core` の `ScanEngine` を呼び出す（`apps/desktop/src-tauri` と `apps/native-host` の両方が同じ `crates/engine-core` に依存する設計。`docs/仕様書.md` 3.3節）。
 
@@ -188,6 +189,21 @@ type ExtensionSetupStatus =
 - `waiting`：`since`以降の応答がない
 - `ready`：`since`以降に現在の通信仕様バージョンと一致する応答がある
 - `incompatible`：`since`以降に応答はあるが通信仕様バージョンが一致しない
+
+`get_extension_recovery_status`はSQLiteの応答履歴を読み取り、状態を保存せずに次の形で返す。最近の応答とみなす期間は24時間、最低対応拡張機能バージョンは`0.1.0`とする。ブラウザ種別によらず最近の互換応答が1件でもあれば`ready`とし、それがない場合は最新応答の拡張機能バージョンと通信仕様から`stale`または`incompatible`を算出する。
+
+```ts
+interface ExtensionRecoveryStatus {
+	state: "missing" | "ready" | "stale" | "incompatible";
+	observation: ExtensionRuntimeObservation | null;
+	recentWithinSeconds: number;
+}
+```
+
+- `missing`：応答履歴がない。セットアップ未完了時は初回導入フロー、完了済みの場合は復旧案内を表示する
+- `ready`：24時間以内に、拡張機能・通信仕様の両方に互換性がある応答がある
+- `stale`：最新応答に互換性はあるが24時間より古い。削除とは断定せず、Moodleを開いて再確認する
+- `incompatible`：拡張機能バージョンまたは通信仕様バージョンに互換性がない
 
 ---
 

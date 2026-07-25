@@ -13,6 +13,13 @@ import type {
 	ExtensionInstallRuntime,
 	ExtensionStatusRuntime,
 } from "../../apps/desktop/src/lib/setup/extension-install";
+import {
+	deriveExtensionRecoveryViewState,
+	getExtensionRecoveryStatusClient,
+	getMoodleRecoveryUrl,
+	openMoodleForRecoveryClient,
+	parseExtensionRecoveryStatus,
+} from "../../apps/desktop/src/lib/setup/extension-recovery";
 
 const extensionId = "abcdefghijklmnopabcdefghijklmnop";
 const chromeStoreUrl = `https://chromewebstore.google.com/detail/fuzzy/${extensionId}`;
@@ -154,6 +161,18 @@ describe("SQLite-backed extension setup status", () => {
 				observation: { ...readyStatus.observation, lastSeenAt: "invalid" },
 			}),
 		).toBeNull();
+		expect(
+			parseExtensionSetupStatus({
+				...readyStatus,
+				observation: { ...readyStatus.observation, installationId: "../profile" },
+			}),
+		).toBeNull();
+		expect(
+			parseExtensionSetupStatus({
+				...readyStatus,
+				observation: { ...readyStatus.observation, extensionVersion: "0.1.0<script>" },
+			}),
+		).toBeNull();
 	});
 
 	test("確認開始日時をTauriへ渡し、SQLite由来の応答だけで完了する", async () => {
@@ -192,5 +211,141 @@ describe("SQLite-backed extension setup status", () => {
 		await expect(
 			getExtensionSetupStatusClient("2026-07-20T12:00:00.000Z", runtime),
 		).rejects.toMatchObject({ code: "STATUS_UNAVAILABLE" });
+	});
+});
+
+describe("SQLite-backed extension recovery status", () => {
+	const observation = {
+		installationId: "550e8400-e29b-41d4-a716-446655440000",
+		extensionVersion: "0.1.0",
+		protocolVersion: 1,
+		firstSeenAt: "2026-07-20T12:00:00.000Z",
+		lastSeenAt: "2026-07-20T12:01:00.000Z",
+	} as const;
+	const readyStatus = {
+		state: "ready",
+		observation,
+		recentWithinSeconds: 86_400,
+	} as const;
+	const staleStatus = { ...readyStatus, state: "stale" } as const;
+
+	test("復旧状態のTauri応答を厳密に検証する", () => {
+		expect(parseExtensionRecoveryStatus(readyStatus)).toEqual(readyStatus);
+		expect(
+			parseExtensionRecoveryStatus({
+				state: "missing",
+				observation: null,
+				recentWithinSeconds: 86_400,
+			}),
+		).toEqual({
+			state: "missing",
+			observation: null,
+			recentWithinSeconds: 86_400,
+		});
+		expect(
+			parseExtensionRecoveryStatus({
+				...readyStatus,
+				recentWithinSeconds: 0,
+			}),
+		).toBeNull();
+		expect(
+			parseExtensionRecoveryStatus({
+				...readyStatus,
+				state: "missing",
+			}),
+		).toBeNull();
+	});
+
+	test("SQLiteの最新応答を取得するTauriコマンドだけを呼ぶ", async () => {
+		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+		const runtime: ExtensionStatusRuntime = {
+			invoke: async <T>(command: string, args: Record<string, unknown>) => {
+				calls.push({ command, args });
+				return readyStatus as T;
+			},
+		};
+
+		await expect(getExtensionRecoveryStatusClient(runtime)).resolves.toEqual(readyStatus);
+		expect(calls).toEqual([{ command: "get_extension_recovery_status", args: {} }]);
+	});
+
+	test("応答あり・古い応答・再確認タイムアウトを区別する", () => {
+		expect(deriveExtensionRecoveryViewState(readyStatus, null)).toBe("ready");
+		expect(deriveExtensionRecoveryViewState(staleStatus, null)).toBe("stale");
+
+		const startedAt = "2026-07-20T12:00:00.000Z";
+		expect(
+			deriveExtensionRecoveryViewState(
+				staleStatus,
+				startedAt,
+				Date.parse("2026-07-20T12:00:10.000Z"),
+				15_000,
+			),
+		).toBe("checking");
+		expect(
+			deriveExtensionRecoveryViewState(
+				staleStatus,
+				startedAt,
+				Date.parse("2026-07-20T12:00:15.000Z"),
+				15_000,
+			),
+		).toBe("timed-out");
+	});
+
+	test("互換性なし・更新後・再インストール後の新しい応答を反映する", () => {
+		expect(deriveExtensionRecoveryViewState({ ...readyStatus, state: "incompatible" }, null)).toBe(
+			"incompatible",
+		);
+		expect(
+			deriveExtensionRecoveryViewState(
+				{
+					...readyStatus,
+					observation: { ...observation, extensionVersion: "0.2.0" },
+				},
+				"2026-07-20T12:00:00.000Z",
+			),
+		).toBe("ready");
+		expect(
+			deriveExtensionRecoveryViewState(
+				{
+					...readyStatus,
+					observation: {
+						...observation,
+						installationId: "replacement-installation",
+					},
+				},
+				"2026-07-20T12:00:00.000Z",
+			),
+		).toBe("ready");
+	});
+
+	test("年度別Moodleをユーザー操作で既定ブラウザに開く", async () => {
+		const openedUrls: string[] = [];
+		const date = new Date("2026-07-25T00:00:00.000Z");
+		expect(getMoodleRecoveryUrl(date)).toBe("https://moodle2026.wakayama-u.ac.jp/2026/");
+		await openMoodleForRecoveryClient(date, {
+			openUrl: async (url) => {
+				openedUrls.push(url);
+			},
+		});
+		expect(openedUrls).toEqual(["https://moodle2026.wakayama-u.ac.jp/2026/"]);
+	});
+
+	test("復旧画面にブラウザ分岐・復旧状態の永続化を置かない", async () => {
+		const componentSource = await Bun.file(
+			resolve(import.meta.dir, "../../apps/desktop/src/lib/setup/ExtensionRecoveryPanel.svelte"),
+		).text();
+		const routeSource = await Bun.file(
+			resolve(import.meta.dir, "../../apps/desktop/src/routes/+page.svelte"),
+		).text();
+
+		expect(componentSource).toContain("Moodleを開いて再確認");
+		expect(componentSource).toContain("拡張機能の導入手順を開く");
+		expect(componentSource).not.toContain("localStorage");
+		expect(componentSource).not.toContain("IndexedDB");
+		expect(componentSource).not.toContain("Chrome");
+		expect(componentSource).not.toContain("Edge");
+		expect(routeSource).toContain("extensionRecoveryLoadError");
+		expect(routeSource).toContain("on:click={loadExtensionRecoveryStatus}");
 	});
 });
