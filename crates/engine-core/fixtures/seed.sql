@@ -55,7 +55,7 @@ INSERT INTO assignments (id, course_id, title, source, due_at, due_at_status, su
 INSERT INTO notification_rules (offset_minutes, label, enabled) VALUES
 	(4320, '3日前', 1),
 	(1440, '1日前', 1),
-	(540,  '当日 9:00', 1),
+	(540,  '9時間前', 1),
 	(60,   '1時間前', 0);
 
 INSERT INTO search_index_meta (file_id, page_count) VALUES
