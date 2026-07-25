@@ -4,13 +4,13 @@
  * ルール違反一覧に表示する1件。
  */
 export type RuleViolationListItem = {
-	fileId: number;
-	fileName: string;
-	courseId: number | null;
-	courseName: string | null;
-	/**
-	 * 初期設定の保存ルートからの相対パス。ファイル名を含む。
-	 */
-	relativePath: string;
-	reason: string;
+  fileId: number;
+  fileName: string;
+  courseId: number | null;
+  courseName: string | null;
+  /**
+   * 初期設定の保存ルートからの相対パス。ファイル名を含む。
+   */
+  relativePath: string;
+  reason: string;
 };

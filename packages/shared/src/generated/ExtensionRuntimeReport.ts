@@ -4,16 +4,16 @@
  * 拡張機能がnative-hostへ報告する実行情報。
  */
 export type ExtensionRuntimeReport = {
-	/**
-	 * ブラウザプロファイル内の拡張機能インストールを区別するローカルID。
-	 */
-	installationId: string;
-	/**
-	 * manifest.jsonの拡張機能バージョン。
-	 */
-	extensionVersion: string;
-	/**
-	 * 拡張機能が使用するNative Messaging契約バージョン。
-	 */
-	protocolVersion: number;
+  /**
+   * ブラウザプロファイル内の拡張機能インストールを区別するローカルID。
+   */
+  installationId: string;
+  /**
+   * manifest.jsonの拡張機能バージョン。
+   */
+  extensionVersion: string;
+  /**
+   * 拡張機能が使用するNative Messaging契約バージョン。
+   */
+  protocolVersion: number;
 };

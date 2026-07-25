@@ -4,6 +4,6 @@
  * 保存用コースフォルダ名の編集要求。`None`は自動提案へ戻す。
  */
 export type UpdateCourseFolderNameRequest = {
-	courseId: number;
-	folderName: string | null;
+  courseId: number;
+  folderName: string | null;
 };

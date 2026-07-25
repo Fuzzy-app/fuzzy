@@ -17,3 +17,6 @@ tantivy = "0.26"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
 zip = { version = "4", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+ts-rs = { workspace = true, features = ["format"] }

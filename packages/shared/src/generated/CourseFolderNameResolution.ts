@@ -5,7 +5,7 @@ import type { CourseFolderNameWarning } from "./CourseFolderNameWarning";
  * 一意性を確認済みの保存用コースフォルダ名。
  */
 export type CourseFolderNameResolution = {
-	courseId: number | null;
-	folderName: string;
-	warnings: Array<CourseFolderNameWarning>;
+  courseId: number | null;
+  folderName: string;
+  warnings: Array<CourseFolderNameWarning>;
 };

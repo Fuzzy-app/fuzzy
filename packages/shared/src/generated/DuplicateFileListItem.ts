@@ -4,14 +4,14 @@
  * 重複グループに含まれる1ファイル。
  */
 export type DuplicateFileListItem = {
-	fileId: number;
-	fileName: string;
-	/**
-	 * 初期設定の保存ルートからの相対パス。ファイル名を含む。
-	 */
-	relativePath: string;
-	/**
-	 * 0.0〜1.0。完全一致の場合は1.0。
-	 */
-	similarity: number;
+  fileId: number;
+  fileName: string;
+  /**
+   * 初期設定の保存ルートからの相対パス。ファイル名を含む。
+   */
+  relativePath: string;
+  /**
+   * 0.0〜1.0。完全一致の場合は1.0。
+   */
+  similarity: number;
 };

@@ -4,9 +4,9 @@
  * SQLiteに保存した、インストール・バージョン単位の初回／最終応答。
  */
 export type ExtensionRuntimeObservation = {
-	installationId: string;
-	extensionVersion: string;
-	protocolVersion: number;
-	firstSeenAt: string;
-	lastSeenAt: string;
+  installationId: string;
+  extensionVersion: string;
+  protocolVersion: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
 };

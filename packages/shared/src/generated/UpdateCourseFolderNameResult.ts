@@ -5,6 +5,6 @@ import type { CourseFolderNameResolution } from "./CourseFolderNameResolution";
  * 保存用コースフォルダ名の更新結果。
  */
 export type UpdateCourseFolderNameResult = {
-	ok: boolean;
-	courseFolder: CourseFolderNameResolution;
+  ok: boolean;
+  courseFolder: CourseFolderNameResolution;
 };

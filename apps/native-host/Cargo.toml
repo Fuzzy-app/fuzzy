@@ -11,3 +11,6 @@ engine-core = { path = "../../crates/engine-core" }
 serde.workspace = true
 serde_json.workspace = true
 ts-rs.workspace = true
+
+[dev-dependencies]
+ts-rs = { workspace = true, features = ["format"] }

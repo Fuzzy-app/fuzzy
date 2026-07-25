@@ -370,6 +370,7 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(page_count, None);
+		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}
 
@@ -398,6 +399,7 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(page_count, 2);
+		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}
 
@@ -428,6 +430,7 @@ mod tests {
 		assert_eq!(hits.len(), 1);
 		assert_eq!(hits[0].file_id, 4);
 		assert_eq!(hits[0].page, None);
+		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}
 
@@ -450,6 +453,7 @@ mod tests {
 		engine.clear().unwrap();
 		assert!(engine.search("全文検索", 10).unwrap().is_empty());
 		assert!(document_path.exists());
+		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}
 }

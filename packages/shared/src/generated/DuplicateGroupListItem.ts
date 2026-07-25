@@ -6,7 +6,7 @@ import type { DuplicateMethod } from "./DuplicateMethod";
  * 重複ファイル一覧に表示する1グループ。
  */
 export type DuplicateGroupListItem = {
-	groupId: number;
-	method: DuplicateMethod;
-	members: Array<DuplicateFileListItem>;
+  groupId: number;
+  method: DuplicateMethod;
+  members: Array<DuplicateFileListItem>;
 };

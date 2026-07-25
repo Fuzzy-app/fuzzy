@@ -5,7 +5,7 @@ import type { CourseFolderNameWarningCode } from "./CourseFolderNameWarningCode"
  * backendの別名・短縮名を利用者へ提示する警告。
  */
 export type CourseFolderNameWarning = {
-	code: CourseFolderNameWarningCode;
-	message: string;
-	suggestedFolderName: string;
+  code: CourseFolderNameWarningCode;
+  message: string;
+  suggestedFolderName: string;
 };

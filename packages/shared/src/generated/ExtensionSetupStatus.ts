@@ -6,6 +6,6 @@ import type { ExtensionSetupState } from "./ExtensionSetupState";
  * Tauriが返す初期セットアップ用の状態。
  */
 export type ExtensionSetupStatus = {
-	state: ExtensionSetupState;
-	observation: ExtensionRuntimeObservation | null;
+  state: ExtensionSetupState;
+  observation: ExtensionRuntimeObservation | null;
 };

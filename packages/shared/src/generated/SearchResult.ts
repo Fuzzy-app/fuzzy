@@ -4,10 +4,10 @@
  * 全文検索のAPI結果。ファイル情報はSQLiteの正本から投影する。
  */
 export type SearchResult = {
-	fileId: number;
-	fileName: string;
-	courseName: string | null;
-	snippet: string;
-	page: number | null;
-	score: number;
+  fileId: number;
+  fileName: string;
+  courseName: string | null;
+  snippet: string;
+  page: number | null;
+  score: number;
 };
