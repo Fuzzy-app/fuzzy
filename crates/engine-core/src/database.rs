@@ -1,17 +1,19 @@
 //! Tauriとnative-hostが共有するSQLite接続・永続化層。
 //!
-//! 同じDBパス解決、外部キー設定、スキーマ適用を両プロセスで使用し、
-//! SQLiteを唯一の正本として扱う。
+//! 同じDBパス解決、外部キー設定、スキーマ適用、マイグレーションを両プロセスで
+//! 使用し、SQLiteを唯一の正本として扱う。
 
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::types::SearchDocumentMetadata;
 use crate::{
 	EngineError, EngineResult, ExtensionRuntimeObservation, ExtensionRuntimeReport,
 	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION, SCHEMA_SQL,
 };
 
+mod backup;
 mod duplicates;
 mod learning;
 mod notifications;
@@ -20,11 +22,18 @@ mod sync;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+const EXTENSION_RUNTIME_MIGRATION_SQL: &str =
+	include_str!("../fixtures/migrations/0001_extension_runtime_observations.sql");
+const COURSE_FOLDER_NAMES_MIGRATION_SQL: &str =
+	include_str!("../fixtures/migrations/0002_course_folder_names.sql");
+const ASSIGNMENT_SYNC_MIGRATION_SQL: &str =
+	include_str!("../fixtures/migrations/0003_assignment_sync.sql");
 
-/// SQLite接続。接続時にFK有効化と完成形スキーマの適用を保証する。
+/// SQLite接続。接続時にFK有効化、スキーマ適用、マイグレーションを保証する。
 pub struct Database {
 	conn: Connection,
+	path: Option<PathBuf>,
 }
 
 impl Database {
@@ -41,16 +50,16 @@ impl Database {
 			}
 		}
 		let conn = Connection::open(path).map_err(db_err)?;
-		Self::from_connection(conn)
+		Self::from_connection(conn, Some(path.to_path_buf()))
 	}
 
 	/// メモリ上のDBを開く。
 	pub fn open_in_memory() -> EngineResult<Self> {
 		let conn = Connection::open_in_memory().map_err(db_err)?;
-		Self::from_connection(conn)
+		Self::from_connection(conn, None)
 	}
 
-	fn from_connection(mut conn: Connection) -> EngineResult<Self> {
+	fn from_connection(mut conn: Connection, path: Option<PathBuf>) -> EngineResult<Self> {
 		conn.execute_batch(
 			"PRAGMA foreign_keys = ON;
 			 PRAGMA busy_timeout = 5000;",
@@ -59,20 +68,28 @@ impl Database {
 
 		if !schema_applied(&conn)? {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
-		} else {
-			let version = schema_version(&conn)?;
-			if version == 1 {
-				migrate_v1_to_v2(&mut conn)?;
-			} else if version != SCHEMA_VERSION {
-				return Err(EngineError::Database {
-					message: format!(
-						"未対応のSQLiteスキーマ世代です（期待: {SCHEMA_VERSION}, 実際: {version}）。開発用DBを再作成してください"
-					),
-				});
-			}
 		}
 
-		Ok(Self { conn })
+		let version = schema_version(&conn)?;
+		if version > SCHEMA_VERSION {
+			return Err(EngineError::Database {
+				message: format!(
+					"未対応のSQLiteスキーマ世代です（対応上限: {SCHEMA_VERSION}, 実際: {version}）。新しいバージョンのFuzzyで作成されたDBか確認してください"
+				),
+			});
+		}
+
+		// schema.sql適用済みの既存DBにも新しいテーブルを追加する。
+		conn.execute_batch(EXTENSION_RUNTIME_MIGRATION_SQL)
+			.map_err(db_err)?;
+		if table_exists(&conn, "courses")? && schema_version(&conn)? < 2 {
+			apply_schema(&mut conn, COURSE_FOLDER_NAMES_MIGRATION_SQL)?;
+		}
+		if table_exists(&conn, "assignments")? && schema_version(&conn)? < 3 {
+			apply_schema(&mut conn, ASSIGNMENT_SYNC_MIGRATION_SQL)?;
+		}
+
+		Ok(Self { conn, path })
 	}
 
 	/// 拡張機能から届いた実行情報を、native-hostの受信時刻で保存する。
@@ -178,17 +195,69 @@ impl Database {
 		})
 	}
 
-	/// 内部接続への参照。DB実装の結合テストで使用する。
-	#[cfg(test)]
-	fn conn(&self) -> &Connection {
-		&self.conn
+	/// 全文索引への投入完了をSQLiteの補助メタ情報へ反映する。
+	pub fn mark_search_indexed(&self, file_id: i64, page_count: Option<u32>) -> EngineResult<()> {
+		self.conn
+			.execute(
+				"INSERT INTO search_index_meta (file_id, indexed_at, page_count)
+				 VALUES (?1, datetime('now'), ?2)
+				 ON CONFLICT(file_id) DO UPDATE SET
+					indexed_at = excluded.indexed_at,
+					page_count = excluded.page_count",
+				params![file_id, page_count.map(i64::from)],
+			)
+			.map_err(db_err)?;
+		Ok(())
 	}
 
-	/// 開発・テスト用のサンプルデータを投入する。
-	/// リリースビルドには含めず、実利用DBへ誤って投入できないようにする。
-	#[cfg(debug_assertions)]
-	pub fn apply_development_seed(&self) -> EngineResult<()> {
-		self.conn.execute_batch(crate::SEED_SQL).map_err(db_err)
+	/// 全文索引からの削除に追従して補助メタ情報を削除する。
+	pub fn remove_search_index_meta(&self, file_id: i64) -> EngineResult<()> {
+		self.conn
+			.execute(
+				"DELETE FROM search_index_meta WHERE file_id = ?1",
+				[file_id],
+			)
+			.map_err(db_err)?;
+		Ok(())
+	}
+
+	/// 全文索引を再構築する前に、全ファイルの索引済み情報を無効化する。
+	pub fn clear_search_index_meta(&self) -> EngineResult<()> {
+		self.conn
+			.execute("DELETE FROM search_index_meta", [])
+			.map_err(db_err)?;
+		Ok(())
+	}
+
+	/// 検索ヒットのファイル名・コース名をSQLiteの正本から取得する。
+	pub fn search_document_metadata(
+		&self,
+		file_id: i64,
+	) -> EngineResult<Option<SearchDocumentMetadata>> {
+		self.conn
+			.query_row(
+				"SELECT files.id, files.original_name, courses.name
+				 FROM files
+				 INNER JOIN search_index_meta ON search_index_meta.file_id = files.id
+				 LEFT JOIN courses ON courses.id = files.course_id
+				 WHERE files.id = ?1",
+				[file_id],
+				|row| {
+					Ok(SearchDocumentMetadata {
+						file_id: row.get(0)?,
+						file_name: row.get(1)?,
+						course_name: row.get(2)?,
+					})
+				},
+			)
+			.optional()
+			.map_err(db_err)
+	}
+
+	/// 内部接続への参照。DB実装の結合テストで使用する。
+	#[cfg(test)]
+	pub(crate) fn conn(&self) -> &Connection {
+		&self.conn
 	}
 }
 
@@ -225,18 +294,6 @@ fn schema_version(conn: &Connection) -> EngineResult<i64> {
 fn apply_schema(conn: &mut Connection, schema_sql: &str) -> EngineResult<()> {
 	let transaction = conn.transaction().map_err(db_err)?;
 	transaction.execute_batch(schema_sql).map_err(db_err)?;
-	transaction.commit().map_err(db_err)
-}
-
-fn migrate_v1_to_v2(conn: &mut Connection) -> EngineResult<()> {
-	let transaction = conn.transaction().map_err(db_err)?;
-	transaction
-		.execute_batch(
-			"ALTER TABLE assignments ADD COLUMN removed_at TEXT;
-			 CREATE INDEX idx_assignments_active ON assignments(removed_at);
-			 PRAGMA user_version = 2;",
-		)
-		.map_err(db_err)?;
 	transaction.commit().map_err(db_err)
 }
 
@@ -356,24 +413,75 @@ mod tests {
 		)
 		.unwrap();
 
-		let error = match Database::from_connection(conn) {
-			Ok(_) => panic!("未対応スキーマを受け入れてはいけません"),
-			Err(error) => error,
-		};
-		assert!(matches!(error, EngineError::Database { .. }));
+		assert!(matches!(
+			Database::from_connection(conn, None),
+			Err(EngineError::Database { .. })
+		));
 	}
 
 	#[test]
-	fn version_one_database_is_migrated_without_losing_assignments() {
+	fn migration_adds_extension_table_to_existing_database() {
+		let conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn, None).unwrap();
+		let count: i64 = database
+			.conn()
+			.query_row(
+				"SELECT count(*) FROM sqlite_master
+				 WHERE type = 'table' AND name = 'extension_runtime_observations'",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(count, 1);
+	}
+
+	#[test]
+	fn migration_adds_course_folder_fields_and_backfills_academic_year() {
+		let conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			 CREATE TABLE courses (
+				id INTEGER PRIMARY KEY,
+				moodle_course_id TEXT NOT NULL UNIQUE,
+				name TEXT NOT NULL,
+				term TEXT
+			 );
+			 INSERT INTO courses (id, moodle_course_id, name, term)
+			 VALUES (1, 'course-db', 'データベース', '2026前期');
+			 PRAGMA user_version = 1;",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn, None).unwrap();
+		let values: (Option<i64>, Option<String>) = database
+			.conn()
+			.query_row(
+				"SELECT academic_year, folder_name_override FROM courses WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+
+		assert_eq!(values, (Some(2026), None));
+		assert_eq!(schema_version(database.conn()).unwrap(), 2);
+	}
+
+	#[test]
+	fn version_two_database_is_migrated_without_losing_assignments() {
 		let mut conn = Connection::open_in_memory().unwrap();
-		let version_one_schema = SCHEMA_SQL
+		let version_two_schema = SCHEMA_SQL
 			.replace("\n\tremoved_at       TEXT,", "")
 			.replace(
 				"CREATE INDEX idx_assignments_active ON assignments(removed_at);\n",
 				"",
 			)
-			.replace("PRAGMA user_version = 2;", "PRAGMA user_version = 1;");
-		apply_schema(&mut conn, &version_one_schema).unwrap();
+			.replace("PRAGMA user_version = 3;", "PRAGMA user_version = 2;");
+		apply_schema(&mut conn, &version_two_schema).unwrap();
 		conn.execute_batch(
 			"INSERT INTO courses (id, moodle_course_id, name) VALUES (1, 'course-1', 'Course');
 			 INSERT INTO assignments (id, course_id, title, source)
@@ -381,7 +489,7 @@ mod tests {
 		)
 		.unwrap();
 
-		let database = Database::from_connection(conn).unwrap();
+		let database = Database::from_connection(conn, None).unwrap();
 		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
 		let assignment: (String, Option<String>) = database
 			.conn()
@@ -532,6 +640,112 @@ mod tests {
 
 		drop(native_host_database);
 		drop(desktop_database);
+		let _ = std::fs::remove_dir_all(&directory);
+	}
+
+	#[test]
+	fn export_and_import_preserve_data_but_invalidate_search_metadata() {
+		use crate::index::{DefaultIndexEngine, IndexEngine};
+
+		let directory =
+			std::env::temp_dir().join(format!("fuzzy-backup-test-{}", std::process::id()));
+		let source_path = directory.join("source.db");
+		let backup_path = directory.join("backup.db");
+		let target_path = directory.join("target.db");
+		let _ = std::fs::remove_dir_all(&directory);
+
+		let source = Database::open(&source_path).unwrap();
+		source
+			.conn()
+			.execute(
+				"INSERT INTO files (
+					id, original_name, saved_path, size_bytes, hash_blake3
+				 ) VALUES (41, '第4回_正規化.pdf', '資料\\第4回_正規化.pdf', 1, 'hash-41')",
+				[],
+			)
+			.unwrap();
+		source.mark_search_indexed(41, Some(12)).unwrap();
+		source.export_to(&backup_path).unwrap();
+
+		let mut target = Database::open(&target_path).unwrap();
+		target.import_from(&backup_path).unwrap();
+
+		let file_name: String = target
+			.conn()
+			.query_row("SELECT original_name FROM files WHERE id = 41", [], |row| {
+				row.get(0)
+			})
+			.unwrap();
+		let indexed_count: i64 = target
+			.conn()
+			.query_row("SELECT count(*) FROM search_index_meta", [], |row| {
+				row.get(0)
+			})
+			.unwrap();
+		assert_eq!(file_name, "第4回_正規化.pdf");
+		assert_eq!(indexed_count, 0);
+
+		let restored_document = directory.join("第4回_正規化.txt");
+		std::fs::write(&restored_document, "第3正規化と更新異常").unwrap();
+		target
+			.conn()
+			.execute(
+				"UPDATE files SET original_name = ?1, saved_path = ?2 WHERE id = 41",
+				params![
+					"第4回_正規化.txt",
+					restored_document.to_string_lossy().as_ref()
+				],
+			)
+			.unwrap();
+		let mut index = DefaultIndexEngine::open(&directory.join("search-index")).unwrap();
+		index.index_file(&target, 41, &restored_document).unwrap();
+		assert_eq!(index.search("正規化", 10).unwrap()[0].file_id, 41);
+		let rebuilt_count: i64 = target
+			.conn()
+			.query_row("SELECT count(*) FROM search_index_meta", [], |row| {
+				row.get(0)
+			})
+			.unwrap();
+		assert_eq!(rebuilt_count, 1);
+
+		drop(index);
+		drop(target);
+		drop(source);
+		let _ = std::fs::remove_dir_all(&directory);
+	}
+
+	#[test]
+	fn import_rejects_non_fuzzy_database_without_changing_current_data() {
+		let directory =
+			std::env::temp_dir().join(format!("fuzzy-invalid-import-{}", std::process::id()));
+		let target_path = directory.join("target.db");
+		let invalid_path = directory.join("invalid.db");
+		let _ = std::fs::remove_dir_all(&directory);
+		std::fs::create_dir_all(&directory).unwrap();
+		Connection::open(&invalid_path)
+			.unwrap()
+			.execute("CREATE TABLE unrelated (id INTEGER)", [])
+			.unwrap();
+		let mut target = Database::open(&target_path).unwrap();
+		target
+			.conn()
+			.execute(
+				"INSERT INTO app_settings (key, value) VALUES ('marker', 'preserved')",
+				[],
+			)
+			.unwrap();
+
+		assert!(target.import_from(&invalid_path).is_err());
+		let marker: String = target
+			.conn()
+			.query_row(
+				"SELECT value FROM app_settings WHERE key = 'marker'",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(marker, "preserved");
+		drop(target);
 		let _ = std::fs::remove_dir_all(&directory);
 	}
 }

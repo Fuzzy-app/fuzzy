@@ -1,6 +1,6 @@
 import { FUZZY_SCREENS, type FuzzyScreenId } from "../../lib/ui/screenCopy";
 
-const BRAND_ICON_PATH = "/icon/fuzzy.svg";
+const BRAND_ICON_PATH = "/icon/128.png";
 
 /** 外部由来の文字列をHTMLとして解釈せず、textContentだけでDOMへ追加する。 */
 export function shellElement<K extends keyof HTMLElementTagNameMap>(

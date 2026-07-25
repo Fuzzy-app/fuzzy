@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-23
+最終更新: 2026-07-25
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はnative-hostのAPI DTOを正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期のRust DTOは `apps/native-host/src/api_types.rs`、暫定TS型は `packages/shared/src/types.ts` に定義する。`crates/engine-core` の絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -47,7 +47,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules: NotificationRuleInput[] }` → `{ ok, rules: NotificationRule[] }` |
 | `getLatestSyncEvent`       | 直近の同期結果取得（データ取得通知用）     | `{}` → `DataSyncEvent \| null`                      |
 | `getAssignmentChanges`     | 同期で検出された課題の変更点一覧（変更点表示用） | `{ sinceSyncEventId? }` → `AssignmentChange[]`      |
-| `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
+| `exportData`               | バックアップ用エクスポート           | `{ filePath }` → `{ filePath }`                     |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 
 `suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。backendは`moodleCourseId`でSQLiteのコースを解決し、省略時は同名候補が一意な場合だけ既存コースへ結び付ける。曖昧な場合は`RULE_CONFLICT`を返し、同じフォルダへの混在を許可しない。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
@@ -80,11 +80,26 @@ interface SaveSuggestion {
 
 `path`はnative-hostが保存に使う、`app_settings.base_folder_path`を含む絶対パス、`relativePath`はUI表示・手動編集に使う保存ルート以下の相対パスである。`suggestSavePath`はSQLiteに保存されたグローバルルールとコース別例外を適用する。適用パターンに`{section}`があってセクション情報を取得できない場合は、そのコース直下までのパターンへ縮退し、エラーにしない。
 
-コース保存名の生成・検証はbackendだけが担当する。生の名前をNFKCへ揃え、括弧書きは年度・学期、`担当:`等の明示的な担当者表記、`配布資料`だけを補足として除去する。クラス・分野・演習・`追加`等の未知または曖昧な内容は保持し、ネストでは内側の明確な補足だけを除去する。対応が壊れた括弧範囲は加工しない。`/`と`\`は中黒`・`へ変換し、絵文字、Windows禁止文字・予約名を処理する。UTF-16で80コード単位を超える場合は単語境界、次に書記素境界で短縮して決定的サフィックスを付ける。簡略化後の衝突では、除去された補足の識別語、Moodle安定コースIDの順で一意な別名を生成し、完全に同じ生コース名同士も安定IDから決定的に区別して`name_conflict`を返す。短縮時は`name_shortened`を返す。警告の`message`と`suggestedFolderName`はUIに表示し、ユーザーが編集できるようにする。
+コース保存名の生成・検証はbackendだけが担当する。生の名前をNFKCへ揃え、補足括弧・絵文字・Windows禁止文字を処理し、UTF-16で80コード単位を超える場合は単語境界、次に書記素境界で短縮して決定的サフィックスを付ける。簡略化後の衝突では、除去された補足の識別語、Moodle安定コースIDの順で一意な別名を生成し、`name_conflict`を返す。短縮時は`name_shortened`を返す。警告の`message`と`suggestedFolderName`はUIに表示し、ユーザーが編集できるようにする。
 
 `updateCourseFolderName.folderName`はユーザーが選んだ単一フォルダ名、`null`は自動提案へ戻す操作を表す。backendはNFKC後にWindows名と80 UTF-16コード単位の上限を検証し、全コースをトランザクション内で再解決する。別コースが現在使用中の実効名と同じ編集名、および再解決後に異なるコースの実効名が大文字・小文字を区別しない比較で同一になる更新は`RULE_CONFLICT`としてロールバックする。編集によって別コースの現在の保存名を暗黙に変更しない。
 
 クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
+
+`search`は次の`SearchResult[]`をスコア降順で返す。PDFは1始まりのページ番号、PowerPointはスライド番号を`page`へ設定し、ページ概念を持たないWord・Excel・テキスト文書は`null`とする。`fileName`と`courseName`は索引へ重複保存せず、検索時にSQLiteの`files`・`courses`から取得する。
+
+```ts
+interface SearchResult {
+	fileId: number;
+	fileName: string;
+	courseName: string | null;
+	snippet: string;
+	page: number | null;
+	score: number;
+}
+```
+
+`exportData` / `importData`のファイル形式は生SQLiteファイルとする。`exportData.filePath`はユーザーが選択した未作成の出力先とし、既存ファイルを暗黙に上書きしない。SQLite Online Backup APIで書き出し、Tantivy索引、IndexedDB、`browser.storage.local`は含めない。`importData`はSQLiteの整合性とFuzzyの必須テーブルを検証してから置き換え、`search_index_meta`と既存Tantivy索引を無効化して`{ ok: true, reindexRequired: true }`を返す。クライアントはこの値を受けて再スキャンを案内する。
 
 #### 1.2.1 ルール違反・重複一覧の型と安全境界
 
@@ -120,7 +135,7 @@ interface DuplicateGroupListItem {
 }
 ```
 
-`similarity` は0.0以上1.0以下とし、`method = "exact"` の全メンバーは1.0とする。`method = "similar"`では、同じグループ内で最も近い他ファイルとのSimHash類似度を返す。同じ完全一致ペアだけでは`similar`グループを作らない。完全一致ペアが第三の類似ファイルを介して同じ`similar`連結成分へ入る場合は両方を掲載し、互いを最も近い相手として類似度1.0を返す。同名ファイルを識別できるよう、各メンバーにファイル名を含む `relativePath` を必ず含める。検出の暫定閾値とLSH方式は[`../重複検出方式.md`](../重複検出方式.md)を参照する。
+`similarity` は0.0以上1.0以下とし、`method = "exact"` の全メンバーは1.0とする。同名ファイルを識別できるよう、各メンバーにファイル名を含む `relativePath` を必ず含める。
 
 両一覧の `relativePath` は `files.saved_path` から `app_settings.base_folder_path` を除いてnative-hostが導出する。Windows向けの正規化済みバックスラッシュ区切りとし、絶対パス、UNCパス、`.`、`..` を含めない。保存ルート外の行を相対化できない場合は、その絶対パスをレスポンスやエラーメッセージへ含めず、固定の `INTERNAL` エラーにする。拡張機能は受信値を再検証し、不正な一覧をDOMへ表示しない。例外の生メッセージもDOMへ表示しない。
 
@@ -152,7 +167,7 @@ Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issue
 
 初期セットアップ確認のため、拡張機能のインストール・更新・ブラウザ起動時には`reportExtensionRuntime`を1回送信する。この報告に対してはモックへフォールバックせず、native-hostがSQLiteへ保存した成功応答だけを実応答として扱う。
 
-ルール更新時のコース名はクライアントから受け取らず、`courseId` を使ってSQLiteの `courses` から解決する。保存パターンは相対パスのみを許可し、既知のトークン（`{year}` / `{term}` / `{course}` / `{assignment}` / `{section}`）以外、絶対パス、UNCパス、`.` / `..`、Windowsの禁止文字・予約名を拒否する。パターン中の`/`と`\`だけを階層区切りとし、backendは展開する各動的トークン値をNFKC正規化した単一フォルダ要素として扱う。動的値中の`/`と`\`は中黒`・`へ変換し、制御文字・Windows禁止文字・予約名・UTF-16で255コード単位を超える要素を安全に処理または拒否する。複数トークンや固定文字を結合した最終要素も再検証する。拡張機能側の検証とプレビューは入力支援であり、正規化・最終検証はnative-host／共有Rustエンジンだけが担当する。
+ルール更新時のコース名はクライアントから受け取らず、`courseId` を使ってSQLiteの `courses` から解決する。保存パターンは相対パスのみを許可し、既知のトークン（`{year}` / `{term}` / `{course}` / `{assignment}` / `{section}`）以外、絶対パス、UNCパス、`.` / `..`、Windowsの禁止文字・予約名を拒否する。拡張機能側の検証は入力支援であり、native-host側でも同じ制約を再検証する。
 
 ### 1.4 データ取得通知・変更点表示のフロー
 
@@ -212,4 +227,3 @@ type ExtensionSetupStatus =
 ## 4. 未決事項
 
 - `saveFiles` のレスポンスに保存後の `SaveSuggestion` 形式を含めるか
-- `exportData` / `importData` のファイル形式（生SQLiteファイル vs 専用アーカイブ）
