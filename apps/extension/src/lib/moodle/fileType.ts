@@ -133,11 +133,26 @@ export function fileTypeFromMoodleIconUrl(value: string | null | undefined): str
 
 /** Content-Dispositionのfilename / filename*から対応済み拡張子を取得する。 */
 export function fileExtensionFromContentDisposition(value: string | null): string | null {
+	return fileExtensionFromName(fileNameFromContentDisposition(value) ?? "");
+}
+
+/** Content-Dispositionのfilename*を優先し、安全な表示用ファイル名だけを返す。 */
+export function fileNameFromContentDisposition(value: string | null): string | null {
 	if (!value) return null;
-	const encodedFileName = value.match(/filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i)?.[1];
+	const encodedFileName = value.match(/filename\*\s*=\s*(?:([^']*)'[^']*')?([^;]+)/i);
 	const regularFileName = value.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i);
-	const fileName = encodedFileName ?? regularFileName?.[1] ?? regularFileName?.[2] ?? "";
-	return fileExtensionFromName(fileName.trim().replace(/^['"]|['"]$/g, ""));
+	const rawFileName = encodedFileName?.[2] ?? regularFileName?.[1] ?? regularFileName?.[2] ?? "";
+	const decoded = safeDecodeURIComponent(rawFileName.trim().replace(/^['"]|['"]$/g, ""));
+	const fileName = decoded.replaceAll("\\", "/").split("/").pop()?.trim() ?? "";
+	if (
+		!fileName ||
+		fileName === "." ||
+		fileName === ".." ||
+		[...fileName].some((character) => character.charCodeAt(0) < 32)
+	) {
+		return null;
+	}
+	return fileName.slice(0, 255);
 }
 
 export function fileType(file: MoodleFileMeta): string {

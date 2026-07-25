@@ -200,7 +200,8 @@ export class MockApiClient implements FuzzyApiClient {
 
 	async saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
 		return delay({
-			savedFileIds: request.files.map((file, index) => file.moodleFileId ?? `${index + 1}`),
+			savedFileIds: request.files.map((file) => file.fileId),
+			failedFiles: [],
 		});
 	}
 

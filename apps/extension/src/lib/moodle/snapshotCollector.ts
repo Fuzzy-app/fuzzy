@@ -1,4 +1,9 @@
-import { fileExtensionFromContentDisposition, normalizeFileTypeHint } from "./fileType";
+import {
+	fileExtensionFromName,
+	fileNameFromContentDisposition,
+	hasSupportedFileExtension,
+	normalizeFileTypeHint,
+} from "./fileType";
 // Moodleページのスナップショット収集（issue48）。
 // ./pageSnapshot.ts が「渡されたDOMの解析」を担うのに対し、このモジュールは
 // フォルダページの追加フェッチを含む収集フロー全体と、失敗時のフォールバックを担う。
@@ -18,7 +23,15 @@ const MAX_FOLDER_DEPTH = 2;
 const MAX_MIME_HINT_REQUESTS = 20;
 const MAX_MIME_HINT_CONCURRENCY = 4;
 const MOODLE_REQUEST_TIMEOUT_MS = 4_000;
-const mimeHintCache = new Map<string, Promise<string | null>>();
+const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
+
+export interface ResolvedMoodleFileMetadata {
+	url: string;
+	mimeHint: string;
+	fileName: string | null;
+}
+
+const mimeHintCache = new Map<string, Promise<ResolvedMoodleFileMetadata | null>>();
 
 export interface MoodleSnapshotCollectionOptions {
 	resolveMimeHints?: boolean;
@@ -30,12 +43,15 @@ export interface MimeHintResolutionOptions {
 	maxRequests?: number;
 	concurrency?: number;
 	timeoutMs?: number;
-	cache?: Map<string, Promise<string | null>>;
+	cache?: Map<string, Promise<ResolvedMoodleFileMetadata | null>>;
 }
 
 export function createEmptyMoodlePageSnapshot(): MoodlePageSnapshot {
 	return {
+		moodleCourseId: null,
 		courseName: null,
+		academicYear: null,
+		term: null,
 		sectionTitle: null,
 		breadcrumbs: [],
 		files: [],
@@ -98,8 +114,16 @@ export async function resolveMissingMimeHints(
 		while (nextIndex < candidates.length) {
 			const candidate = candidates[nextIndex++];
 			if (!candidate) return;
-			const mimeHint = await getCachedMimeHint(candidate.file.url, fetcher, timeoutMs, cache);
-			if (mimeHint) resolvedFiles[candidate.index] = { ...candidate.file, mimeHint };
+			const metadata = await getCachedMimeHint(
+				candidate.file.url,
+				origin,
+				fetcher,
+				timeoutMs,
+				cache,
+			);
+			if (metadata) {
+				resolvedFiles[candidate.index] = applyResolvedMetadata(candidate.file, metadata);
+			}
 		}
 	}
 
@@ -108,18 +132,21 @@ export async function resolveMissingMimeHints(
 		Math.min(options.concurrency ?? MAX_MIME_HINT_CONCURRENCY, candidates.length),
 	);
 	await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
-	return resolvedFiles;
+	return resolvedFiles.filter(
+		(file) => !(MOODLE_RESOURCE_PATTERN.test(file.url) && file.mimeHint === null),
+	);
 }
 
 function getCachedMimeHint(
 	url: string,
+	origin: string,
 	fetcher: typeof fetch,
 	timeoutMs: number,
-	cache: Map<string, Promise<string | null>>,
-): Promise<string | null> {
+	cache: Map<string, Promise<ResolvedMoodleFileMetadata | null>>,
+): Promise<ResolvedMoodleFileMetadata | null> {
 	const cached = cache.get(url);
 	if (cached) return cached;
-	const request = fetchMimeHint(url, fetcher, timeoutMs).then((mimeHint) => {
+	const request = fetchMimeHint(url, origin, fetcher, timeoutMs).then((mimeHint) => {
 		// 一時的な通信失敗やタイムアウトは固定化せず、明示的な再読み込みで再試行できるようにする。
 		if (!mimeHint) cache.delete(url);
 		return mimeHint;
@@ -130,28 +157,76 @@ function getCachedMimeHint(
 
 async function fetchMimeHint(
 	url: string,
+	origin: string,
 	fetcher: typeof fetch,
 	timeoutMs: number,
-): Promise<string | null> {
+): Promise<ResolvedMoodleFileMetadata | null> {
+	const head = await fetchMetadataResponse(url, "HEAD", fetcher, timeoutMs);
+	const headMetadata = head ? metadataFromResponse(head, origin) : null;
+	if (headMetadata?.mimeHint === "html") return null;
+	if (headMetadata) return headMetadata;
+
+	const get = await fetchMetadataResponse(url, "GET", fetcher, timeoutMs);
+	const getMetadata = get ? metadataFromResponse(get, origin) : null;
+	if (getMetadata?.mimeHint === "html") return null;
+	return getMetadata;
+}
+
+async function fetchMetadataResponse(
+	url: string,
+	method: "HEAD" | "GET",
+	fetcher: typeof fetch,
+	timeoutMs: number,
+): Promise<Response | null> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
 		const response = await fetcher(url, {
-			method: "HEAD",
+			method,
 			credentials: "include",
+			headers: method === "GET" ? { Range: "bytes=0-4095" } : undefined,
 			signal: controller.signal,
 		});
 		if (!response.ok) return null;
-
-		const contentTypeHint = normalizeFileTypeHint(response.headers.get("content-type"));
-		if (contentTypeHint) return contentTypeHint;
-
-		return fileExtensionFromContentDisposition(response.headers.get("content-disposition"));
+		if (method === "GET") void response.body?.cancel();
+		return response;
 	} catch {
 		return null;
 	} finally {
 		clearTimeout(timeout);
 	}
+}
+
+function metadataFromResponse(
+	response: Response,
+	origin: string,
+): ResolvedMoodleFileMetadata | null {
+	const finalUrl = response.url || "";
+	if (finalUrl && !isSameOriginUrl(finalUrl, origin)) return null;
+	const contentTypeHint = normalizeFileTypeHint(response.headers.get("content-type"));
+	const fileName = fileNameFromContentDisposition(response.headers.get("content-disposition"));
+	const fileNameHint = fileExtensionFromName(fileName ?? "");
+	const urlHint = fileExtensionFromName(finalUrl);
+	const mimeHint = contentTypeHint ?? fileNameHint ?? urlHint;
+	if (!mimeHint) return null;
+	return { url: finalUrl || response.url, mimeHint, fileName };
+}
+
+function applyResolvedMetadata(
+	file: MoodleFileLink,
+	metadata: ResolvedMoodleFileMetadata,
+): MoodleFileLink {
+	const title = metadata.fileName
+		? metadata.fileName
+		: hasSupportedFileExtension(file.title)
+			? file.title
+			: `${file.title}.${metadata.mimeHint}`;
+	return {
+		...file,
+		title,
+		url: metadata.url || file.url,
+		mimeHint: metadata.mimeHint,
+	};
 }
 
 async function collectNestedFolderFiles(

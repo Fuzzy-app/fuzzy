@@ -6,6 +6,7 @@ export default defineConfig({
 	manifestVersion: 3,
 	modules: ["@wxt-dev/module-svelte"],
 	manifest: {
+		host_permissions: ["https://*.wakayama-u.ac.jp/*"],
 		web_accessible_resources: [
 			{
 				resources: ["icon/fuzzy.svg"],

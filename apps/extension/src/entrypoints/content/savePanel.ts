@@ -10,12 +10,19 @@ import {
 	splitWindowsPath,
 } from "@fuzzy/shared";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
+import { boundedParallelMap } from "../../lib/boundedParallelMap";
+import { transferFileId } from "../../lib/moodle/fileDownloader";
 import { displayFileTitle, fileTypeInfo, isZipFile } from "../../lib/moodle/fileType";
 import type { MoodleFileLink } from "../../lib/moodle/pageSnapshot";
 import {
 	collectMoodlePageSnapshotWithNestedFolders,
 	safeCollectMoodlePageSnapshot,
 } from "../../lib/moodle/snapshotCollector";
+import {
+	buildCourseFolderNameEditor,
+	courseFolderNameUpdateError,
+	initialCourseFolderName,
+} from "./courseFolderNameEditor";
 import { createCollapseHandleIcon } from "./savePanelHandle";
 import { createSavePanelOpenStateWriter, loadSavePanelOpenState } from "./savePanelState";
 import {
@@ -30,6 +37,7 @@ import {
 	type SelectedFilePaths,
 	buildSaveDestinationGroups,
 	commonGroupSuggestions,
+	courseFolderFromSuggestions,
 	createSelectedFilePaths,
 	fileId,
 	loadFileSuggestions,
@@ -38,6 +46,8 @@ import {
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
+/** 大きな資料を複数のnative-hostプロセスへ同時転送しないための上限。 */
+const SIMILARITY_CHECK_CONCURRENCY = 2;
 
 interface SimilarWarning {
 	file: MoodleFileLink;
@@ -79,6 +89,9 @@ export async function mountSavePanel(): Promise<void> {
 	let similarWarnings: SimilarWarning[] = [];
 	let checkingSimilar = false;
 	let awaitingConfirm = false;
+	let courseFolderDraft = "";
+	let courseFolderError: string | null = null;
+	let courseFolderSaving = false;
 	let initialized = false;
 	let loading = false;
 	let saving = false;
@@ -105,6 +118,7 @@ export async function mountSavePanel(): Promise<void> {
 			selectedFileIds = new Set(snapshot.files.map(fileId));
 			suggestions = await loadFileSuggestions(api, snapshot);
 			selectedPaths = createSelectedFilePaths(suggestions);
+			resetCourseFolderEditor();
 			message = null;
 		} catch (error) {
 			message = toErrorMessage(error, "保存先候補の取得に失敗しました");
@@ -124,6 +138,7 @@ export async function mountSavePanel(): Promise<void> {
 			selectedFileIds = new Set(snapshot.files.map(fileId));
 			suggestions = await loadFileSuggestions(api, snapshot);
 			selectedPaths = createSelectedFilePaths(suggestions);
+			resetCourseFolderEditor();
 			manualRelativePath = "";
 			message = null;
 		} catch (error) {
@@ -156,12 +171,22 @@ export async function mountSavePanel(): Promise<void> {
 		let savedCount = 0;
 		let extractedCount = 0;
 		let failedDestinationCount = 0;
+		let failedFileCount = 0;
 		let failedZipCount = 0;
 		for (const group of groups) {
 			try {
-				const result = await api.saveFiles({ files: group.files, targetPath: group.path });
+				const result = await api.saveFiles({
+					files: group.files,
+					targetPath: group.path,
+					courseId: group.courseId,
+				});
 				savedCount += result.savedFileIds.length;
-				const extraction = await extractSelectedZips(group);
+				failedFileCount += result.failedFiles.length;
+				const savedFileIds = new Set(result.savedFileIds);
+				const extraction = await extractSelectedZips({
+					...group,
+					files: group.files.filter((file) => savedFileIds.has(transferFileId(file))),
+				});
 				extractedCount += extraction.extractedCount;
 				failedZipCount += extraction.failedCount;
 			} catch (error) {
@@ -179,6 +204,8 @@ export async function mountSavePanel(): Promise<void> {
 		similarWarnings = [];
 		if (failedDestinationCount > 0) {
 			message = `${savedCount}件は保存しましたが、${failedDestinationCount}か所の保存に失敗しました。再試行してください。`;
+		} else if (failedFileCount > 0) {
+			message = `${savedCount}件は保存しましたが、${failedFileCount}件の取得または保存に失敗しました。再試行してください。`;
 		} else if (failedZipCount > 0) {
 			message = `${savedCount}件を保存しましたが、ZIP ${failedZipCount}件の展開に失敗しました。`;
 		} else {
@@ -220,12 +247,10 @@ export async function mountSavePanel(): Promise<void> {
 	}
 
 	async function collectSimilarWarnings(files: MoodleFileLink[]): Promise<SimilarWarning[]> {
-		const byFile = await Promise.all(
-			files.map(async (file) => {
-				const matches = await api.checkSimilarFiles({ fileMeta: file });
-				return matches.map((match) => ({ file, match }));
-			}),
-		);
+		const byFile = await boundedParallelMap(files, SIMILARITY_CHECK_CONCURRENCY, async (file) => {
+			const matches = await api.checkSimilarFiles({ fileMeta: file });
+			return matches.map((match) => ({ file, match }));
+		});
 		return byFile.flat();
 	}
 
@@ -260,6 +285,45 @@ export async function mountSavePanel(): Promise<void> {
 		awaitingConfirm = false;
 	}
 
+	function resetCourseFolderEditor() {
+		const courseFolder = courseFolderFromSuggestions(suggestions);
+		courseFolderDraft = courseFolder ? initialCourseFolderName(courseFolder) : "";
+		courseFolderError = null;
+	}
+
+	async function updateCourseFolderName(folderName: string | null) {
+		const courseFolder = courseFolderFromSuggestions(suggestions);
+		if (courseFolderSaving || !courseFolder || courseFolder.courseId === null) return;
+
+		courseFolderSaving = true;
+		courseFolderError = null;
+		render();
+		try {
+			await api.updateCourseFolderName({ courseId: courseFolder.courseId, folderName });
+		} catch (error) {
+			courseFolderError = courseFolderNameUpdateError(error);
+			courseFolderSaving = false;
+			render();
+			return;
+		}
+
+		try {
+			suggestions = await loadFileSuggestions(api, snapshot);
+			selectedPaths = createSelectedFilePaths(suggestions);
+			resetCourseFolderEditor();
+			message =
+				folderName === null
+					? "コース保存名を自動提案へ戻しました。"
+					: "コース保存名を更新し、保存先候補を再取得しました。";
+		} catch {
+			message =
+				"コース保存名は更新済みですが、保存先候補を再取得できませんでした。再読み込みしてください。";
+		} finally {
+			courseFolderSaving = false;
+			render();
+		}
+	}
+
 	function render() {
 		// 選択状態の更新でもパネルを再描画するため、現在位置を引き継ぐ。
 		// これがないと、下部の「すべて選択」を押した際にスクロール領域が先頭へ戻る。
@@ -284,6 +348,8 @@ export async function mountSavePanel(): Promise<void> {
 		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
 		const zipFiles = selectedFiles.filter(isZipFile);
 		scroll.append(renderFileList(snapshot.files));
+		const courseFolderEditor = renderCourseFolderEditor();
+		if (courseFolderEditor) scroll.append(courseFolderEditor);
 		if (zipFiles.length > 0) scroll.append(renderZipSection(zipFiles.length));
 		scroll.append(renderPathSection());
 		if (awaitingConfirm && similarWarnings.length > 0) scroll.append(renderSimilarConfirm());
@@ -331,7 +397,7 @@ export async function mountSavePanel(): Promise<void> {
 
 	function renderNote() {
 		const note = document.createElement("p");
-		const busy = loading || saving || checkingSimilar;
+		const busy = loading || saving || checkingSimilar || courseFolderSaving;
 		note.className = busy ? "fuzzy-note" : "fuzzy-note fuzzy-note-result";
 		note.textContent = message ?? "";
 		return note;
@@ -379,6 +445,35 @@ export async function mountSavePanel(): Promise<void> {
 				onSelectionChanged();
 			});
 		}
+		return section;
+	}
+
+	function renderCourseFolderEditor(): HTMLElement | null {
+		const courseFolder = courseFolderFromSuggestions(suggestions);
+		if (!courseFolder) return null;
+
+		const section = document.createElement("section");
+		section.className = "fuzzy-section";
+		const heading = document.createElement("div");
+		heading.className = "fuzzy-section-heading";
+		const title = document.createElement("h3");
+		title.textContent = "コース保存名";
+		heading.append(title);
+		section.append(heading);
+		section.append(
+			buildCourseFolderNameEditor({
+				courseFolder,
+				draftName: courseFolderDraft,
+				saving: courseFolderSaving,
+				error: courseFolderError,
+				onDraftChange: (value) => {
+					courseFolderDraft = value;
+					courseFolderError = null;
+				},
+				onSave: (folderName) => void updateCourseFolderName(folderName),
+				onReset: () => void updateCourseFolderName(null),
+			}),
+		);
 		return section;
 	}
 
@@ -572,7 +667,8 @@ export async function mountSavePanel(): Promise<void> {
 			isExtractDestinationValid() &&
 			!loading &&
 			!saving &&
-			!checkingSimilar;
+			!checkingSimilar &&
+			!courseFolderSaving;
 		actions.innerHTML = `
 			<p data-role="save-summary">${escapeHtml(buildSummaryText(selectedFiles, zipFiles, groups))}</p>
 			<div class="fuzzy-action-meta">
@@ -690,12 +786,17 @@ export async function mountSavePanel(): Promise<void> {
 		return buildSaveDestinationGroups(snapshot.files, selectedFileIds, suggestions, selectedPaths);
 	}
 
-	function currentManualDestination(): { path: string; relativePath: string } | null {
+	function currentManualDestination(): {
+		path: string;
+		relativePath: string;
+		courseId: number | null;
+	} | null {
 		const root = saveRootFromSuggestions(suggestions);
 		const relativePath = normalizeRelativeSavePath(manualRelativePath);
 		if (!root || relativePath === null || !relativePath) return null;
 		const path = resolveSavePathUnderRoot(root, relativePath);
-		return path ? { path, relativePath } : null;
+		const courseId = courseFolderFromSuggestions(suggestions)?.courseId ?? null;
+		return path ? { path, relativePath, courseId } : null;
 	}
 
 	function currentExtractDestinationPath(): string | null {

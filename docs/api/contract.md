@@ -25,14 +25,20 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 ### 1.2 コマンド一覧
 
+現在のNative Messaging契約バージョンは`2`とする。類似照合を単一payloadから専用の分割転送へ変更したため、契約バージョン`1`の拡張機能またはnative-hostは互換として扱わない。
+
 | command                    | 用途                      | payload → data（概要）                                  |
 |----------------------------|-------------------------|-----------------------------------------------------|
 | `ping`                     | 疎通確認（フォールバック判定に使用）      | `{}` → `{ version }`                                |
 | `reportExtensionRuntime`   | 拡張機能の実応答・バージョンをSQLiteへ記録 | `{ installationId, extensionVersion, protocolVersion }` → `ExtensionRuntimeObservation` |
 | `suggestSavePath`          | 保存先候補の提案                | `{ course, fileMeta }` → `SaveSuggestion[]`         |
-| `saveFiles`                | 一括保存実行                  | `{ files[], targetPath }` → `{ savedFileIds }`      |
+| `beginSaveFiles`           | 取得済み資料の分割転送開始           | `{ transferId, targetPath, files: [{ fileId, fileName, mimeType, byteLength }] }` → `{ ok: true }` |
+| `appendSaveFileChunk`      | 取得済み資料のBase64チャンク追加      | `{ transferId, fileId, chunkIndex, dataBase64 }` → `{ ok: true }` |
+| `saveFiles`                | 転送完了済み資料の一括保存実行         | `{ transferId }` → `SaveFilesResult`                |
+| `beginCheckSimilarFile`    | 類似照合用資料の分割転送開始          | `{ transferId, byteLength }` → `{ ok: true }`       |
+| `appendCheckSimilarFileChunk` | 類似照合用資料のBase64チャンク追加 | `{ transferId, chunkIndex, dataBase64 }` → `{ ok: true }` |
 | `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
-| `checkSimilarFiles`        | 保存前の類似ファイル検知            | `{ fileMeta }` → `SimilarFileMatch[]` |
+| `checkSimilarFiles`        | 転送済み内容による保存前の類似ファイル検知 | `{ transferId, fileMeta }` → `SimilarFileMatch[]` |
 | `search`                   | 全文検索（該当箇所ジャンプ用のページ情報含む） | `{ query }` → `SearchResult[]`                      |
 | `getDashboard`             | コース別ダッシュボード集計           | `{}` → `DashboardSummary`                           |
 | `getDeadlines`             | 締切一覧取得（フィルタ可）           | `{ filter? }` → `Assignment[]`                      |
@@ -86,22 +92,31 @@ interface SaveSuggestion {
 
 クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
 
-`search`は次の`SearchResult[]`をスコア降順で返す。PDFは1始まりのページ番号、PowerPointはスライド番号を`page`へ設定し、ページ概念を持たないWord・Excel・テキスト文書は`null`とする。`fileName`と`courseName`は索引へ重複保存せず、検索時にSQLiteの`files`・`courses`から取得する。
+#### 1.2.1 Moodle資料の確定・分割転送・実保存
+
+拡張機能のcontent scriptからbackgroundへ渡す保存要求は`MoodleSaveFilesRequest = { files: MoodleFileMeta[], targetPath, courseId }`とする。`courseId`は`suggestSavePath`がSQLiteへ解決したIDまたは`null`であり、クライアントがコース名から採番しない。backgroundはメッセージ送信元ページと各資料URLが同一オリジンであることを検証し、`credentials: "include"`のGETで本体を取得する。リダイレクト後のURLも同一オリジンでなければ拒否する。Cookie・Authorizationヘッダー等の認証情報はpayloadへ含めず、取得済み内容だけをNative Messagingへ渡す。
+
+`mod/resource/view.php`の種別確定はHEADを先に使用し、HEAD非対応・HTTPエラー・情報不足時はGETへフォールバックする。`Content-Disposition`の`filename*`を`filename`より優先し、対応済み拡張子を持つ実ファイル名を使用する。実ファイル名がない場合は表示名へ確定した拡張子を補う。`text/html`、HTML先頭シグネチャ、ログイン／エラーページ、種別未確定の間接リンクは保存しない。DOCXはnative-hostでZIPアーカイブとして開けることと、`[Content_Types].xml`、`word/document.xml`が空でなく上限内で最後まで読み取れることを確認する。
+
+Native Messagingの転送は同じ接続上で`beginSaveFiles`、0個以上の`appendSaveFileChunk`、`saveFiles`の順に行う。`chunkIndex`はファイルごとに0から連続させる。拡張機能はBase64文字列を192KiB以下に分割し、native-hostは復号後256KiB以下だけを受理する。1要求は20ファイル、1ファイル64MiB、合計128MiBまでとする。backgroundはレスポンスをストリームで読み、Content-Lengthの有無にかかわらず上限到達時に中断する。切断・タイムアウト・一時的なHTTP失敗を固定キャッシュせず、利用者の再実行で新しい`transferId`を使って再試行できるようにする。
+
+類似照合用の内容も同じ接続上で`beginCheckSimilarFile`、0個以上の`appendCheckSimilarFileChunk`、`checkSimilarFiles`の順に送る。単一のNative Messagingメッセージへファイル全体のBase64を含めない。チャンク上限と1ファイル64MiB上限は保存転送と同じとし、`checkSimilarFiles`は宣言サイズ分の転送が完了した`transferId`だけを受理して、照合開始時に転送内容をセッションから取り出す。backgroundは全タブを合わせて同時に照合する資料を2件までに制限し、各保存パネルも実行中workerの収束を待ってから完了または失敗を返す。
 
 ```ts
-interface SearchResult {
-	fileId: number;
-	fileName: string;
-	courseName: string | null;
-	snippet: string;
-	page: number | null;
-	score: number;
+interface SaveFilesResult {
+	savedFileIds: string[];
+	failedFiles: Array<{
+		fileId: string;
+		code: "DOWNLOAD_FAILED" | "INVALID_CONTENT" | "ALREADY_EXISTS" | "IO_ERROR";
+	}>;
 }
 ```
 
-`exportData` / `importData`のファイル形式は生SQLiteファイルとする。`exportData.filePath`はユーザーが選択した未作成の出力先とし、既存ファイルを暗黙に上書きしない。SQLite Online Backup APIで書き出し、Tantivy索引、IndexedDB、`browser.storage.local`は含めない。`importData`はSQLiteの整合性とFuzzyの必須テーブルを検証してから置き換え、`search_index_meta`と既存Tantivy索引を無効化して`{ ok: true, reindexRequired: true }`を返す。クライアントはこの値を受けて再スキャンを案内する。
+native-hostは`targetPath`がSQLiteの`app_settings.base_folder_path`以下であることを、既存の最深祖先を実体解決した後にも検証する。単一ファイル名だけを許可し、Windows禁止文字・予約名・末尾の空白／ピリオドを拒否する。既存ファイルは上書きしない。書き込み成功後はBLAKE3・SimHashとMoodleファイルIDを`files`へ登録し、DB登録に失敗したファイルは削除して成功扱いにしない。複数ファイルの一部が失敗した場合も、ファイル作成とDB登録の両方に成功した`fileId`だけを`savedFileIds`へ入れ、失敗分を`failedFiles`へ入れる。
 
-#### 1.2.1 ルール違反・重複一覧の型と安全境界
+`checkSimilarFiles`はbackgroundが同じ認証付き取得・サイズ制限を適用し、取得済み内容だけを専用のチャンク転送でnative-hostへ渡して、SQLiteに保存されたBLAKE3・SimHashと照合する。未開始、順序不正、宣言サイズ未満・超過、上限超過の転送は照合しない。`extractZip`は`files.moodle_file_id`から保存済みZIPを解決し、保存ルート以下だけへ展開する。パストラバーサル、シンボリックリンク、既存ファイル上書き、1000項目超、展開後256MiB超を拒否する。
+
+#### 1.2.2 ルール違反・重複一覧の型と安全境界
 
 `getRuleViolations` は次の形式を返す。
 

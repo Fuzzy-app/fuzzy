@@ -1,4 +1,5 @@
 import {
+	type CourseFolderNameResolution,
 	type FuzzyApiClient,
 	type SaveSuggestion,
 	canonicalWindowsPath,
@@ -15,12 +16,14 @@ export interface SaveDestinationGroup {
 	key: string;
 	path: string;
 	relativePath: string;
+	courseId: number | null;
 	files: MoodleFileLink[];
 }
 
 interface ManualDestination {
 	path: string;
 	relativePath: string;
+	courseId: number | null;
 }
 
 /** 資料ごとに保存先候補を取得する。先頭資料だけで全件を代表させない。 */
@@ -32,7 +35,10 @@ export async function loadFileSuggestions(
 		snapshot.files.map(async (file) => {
 			const suggestions = await api.suggestSavePath({
 				course: {
+					moodleCourseId: snapshot.moodleCourseId,
 					name: snapshot.courseName,
+					academicYear: snapshot.academicYear,
+					term: snapshot.term,
 					sectionTitle: snapshot.sectionTitle,
 					breadcrumbs: snapshot.breadcrumbs,
 				},
@@ -67,10 +73,18 @@ export function buildSaveDestinationGroups(
 		const destination = manualDestination ?? selectedDestination(file, suggestions, selectedPaths);
 		if (!destination) continue;
 		const path = normalizeWindowsPath(destination.path);
-		const key = canonicalWindowsPath(path);
+		const key = `${destination.courseId ?? "none"}:${canonicalWindowsPath(path)}`;
 		const existing = groups.get(key);
 		if (existing) existing.files.push(file);
-		else groups.set(key, { key, path, relativePath: destination.relativePath, files: [file] });
+		else {
+			groups.set(key, {
+				key,
+				path,
+				relativePath: destination.relativePath,
+				courseId: destination.courseId,
+				files: [file],
+			});
+		}
 	}
 	return [...groups.values()];
 }
@@ -98,6 +112,29 @@ export function saveRootFromSuggestions(suggestions: FileSuggestions): string | 
 		}
 	}
 	return null;
+}
+
+/**
+ * 全資料の提案が同じコース解決結果を参照している場合だけ編集対象として返す。
+ * 複数コースが混ざるページで誤ったコースIDを更新しないための境界。
+ */
+export function courseFolderFromSuggestions(
+	suggestions: FileSuggestions,
+): CourseFolderNameResolution | null {
+	const resolutions = [...suggestions.values()]
+		.map((items) => items[0]?.courseFolder)
+		.filter((item): item is CourseFolderNameResolution => Boolean(item));
+	if (resolutions.length === 0 || resolutions.length !== suggestions.size) return null;
+
+	const first = resolutions[0] as CourseFolderNameResolution;
+	if (
+		resolutions.some(
+			(item) => item.courseId !== first.courseId || item.folderName !== first.folderName,
+		)
+	) {
+		return null;
+	}
+	return first;
 }
 
 export function fileId(file: MoodleFileLink): string {
@@ -137,5 +174,6 @@ function selectedDestination(
 	return {
 		path,
 		relativePath: suggestion?.relativePath ?? normalizeWindowsPath(path),
+		courseId: suggestion?.courseFolder.courseId ?? null,
 	};
 }

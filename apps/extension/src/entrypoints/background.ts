@@ -1,18 +1,22 @@
 import {
 	type CheckSimilarFilesRequest,
 	type DataSyncEvent,
-	type ExtractZipRequest,
 	type FuzzyApiClient,
-	type NotificationRuleInput,
-	type SaveFilesRequest,
-	type SuggestSavePathRequest,
+	type MoodleSaveFilesRequest,
 	createApiClient,
 } from "@fuzzy/shared";
 import {
 	type FuzzyApiRequestMessage,
 	type FuzzyApiResponseMessage,
+	hasValidFuzzyApiRequestPayload,
 	isFuzzyApiRequestMessage,
+	toBackgroundApiError,
 } from "../lib/api/backgroundApi";
+import { callBackgroundApi } from "../lib/api/backgroundDispatch";
+import {
+	checkMoodleFileFromBackground,
+	saveMoodleFilesFromBackground,
+} from "../lib/api/backgroundFileSave";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
 	isRuleManagementRequestMessage,
@@ -116,7 +120,7 @@ export default defineBackground(() => {
 	});
 	startNotificationMonitoring();
 
-	browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+	browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		if (isExtensionRuntimeReportRequestMessage(message)) {
 			void reportExtensionRuntimeOnce().then((ok) => sendResponse({ ok }));
 			return true;
@@ -127,7 +131,9 @@ export default defineBackground(() => {
 		}
 		if (!isFuzzyApiRequestMessage(message)) return false;
 
-		void respondToApiRequest(getClient(), message).then(sendResponse);
+		void respondToApiRequest(getClient(), message, sender.tab?.url ?? sender.url ?? "").then(
+			sendResponse,
+		);
 		return true; // sendResponse を非同期に呼ぶため、メッセージチャネルを維持する
 	});
 });
@@ -135,37 +141,43 @@ export default defineBackground(() => {
 async function respondToApiRequest(
 	clientPromise: Promise<FuzzyApiClient>,
 	message: FuzzyApiRequestMessage,
+	senderUrl = "",
 ): Promise<FuzzyApiResponseMessage> {
+	if (!hasValidFuzzyApiRequestPayload(message)) {
+		return {
+			ok: false,
+			error: { code: "INVALID_REQUEST", message: "リクエストの内容が不正です。" },
+		};
+	}
 	try {
 		const client = await clientPromise;
-		const data = await callBackgroundApi(client, message);
+		const data =
+			message.method === "saveFiles"
+				? await saveMoodleFilesFromBackground(
+						client,
+						message.request as MoodleSaveFilesRequest,
+						pageOrigin(senderUrl),
+					)
+				: message.method === "checkSimilarFiles"
+					? await checkMoodleFileFromBackground(
+							client,
+							message.request as CheckSimilarFilesRequest,
+							pageOrigin(senderUrl),
+						)
+					: await callBackgroundApi(client, message);
 		return { ok: true, data, mode: client.mode };
 	} catch (error) {
 		return {
 			ok: false,
-			error: error instanceof Error ? error.message : "APIの呼び出しに失敗しました",
+			error: toBackgroundApiError(error),
 		};
 	}
 }
 
-// リクエスト本文はメッセージ境界を越えるため実行時には型情報が失われている。
-// メソッド名で分岐し、各APIの想定型として渡す（内容の検証はnative-host側の契約に委ねる）。
-async function callBackgroundApi(
-	client: FuzzyApiClient,
-	message: FuzzyApiRequestMessage,
-): Promise<unknown> {
-	switch (message.method) {
-		case "suggestSavePath":
-			return client.suggestSavePath(message.request as SuggestSavePathRequest);
-		case "checkSimilarFiles":
-			return client.checkSimilarFiles(message.request as CheckSimilarFilesRequest);
-		case "saveFiles":
-			return client.saveFiles(message.request as SaveFilesRequest);
-		case "extractZip":
-			return client.extractZip(message.request as ExtractZipRequest);
-		case "getNotificationRules":
-			return client.getNotificationRules();
-		case "updateNotificationRules":
-			return client.updateNotificationRules(message.request as NotificationRuleInput[]);
+function pageOrigin(url: string): string {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return "";
 	}
 }

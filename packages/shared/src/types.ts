@@ -79,15 +79,41 @@ export interface SuggestSavePathRequest {
 
 export interface CheckSimilarFilesRequest {
 	fileMeta: MoodleFileMeta;
+	/** backgroundが認証付き取得後にnative-hostへ渡す。content scriptからは指定しない。 */
+	contentBase64?: string;
 }
 
-export interface SaveFilesRequest {
+/** content scriptからbackgroundへ渡す、認証付き取得前の保存要求。 */
+export interface MoodleSaveFilesRequest {
 	files: MoodleFileMeta[];
 	targetPath: string;
+	courseId: number | null;
+}
+
+/** backgroundがMoodleから取得し、native-hostへ分割転送する1ファイル。 */
+export interface SaveFilePayload {
+	fileId: string;
+	fileName: string;
+	mimeType: string | null;
+	byteLength: number;
+	contentBase64: string;
+}
+
+/** NativeApiClientへ渡す取得済みファイルの保存要求。 */
+export interface SaveFilesRequest {
+	files: SaveFilePayload[];
+	targetPath: string;
+	courseId: number | null;
+}
+
+export interface SaveFileFailure {
+	fileId: string;
+	code: "DOWNLOAD_FAILED" | "INVALID_CONTENT" | "ALREADY_EXISTS" | "IO_ERROR";
 }
 
 export interface SaveFilesResult {
 	savedFileIds: string[];
+	failedFiles: SaveFileFailure[];
 }
 
 export interface ExtractZipRequest {
@@ -217,4 +243,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 1 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 2 as const;

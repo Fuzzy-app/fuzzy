@@ -1,11 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import {
+	collectMoodlePageSnapshot,
 	extractFileLinks,
 	resolveMoodleActivityMimeHint,
 } from "../../apps/extension/src/lib/moodle/pageSnapshot";
 
 describe("Moodle資料のDOM解析", () => {
+	test("安定コースID・年度・学期・生のコース名を独立した文脈として収集する", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="course-412">
+				<body>
+					<nav><ol class="breadcrumb"><li class="breadcrumb-item">2026前期</li></ol></nav>
+					<main><div data-academic-year="2026" data-academic-term="2026前期"></div>
+						<h1>データベース（担当: 山田）</h1>
+					</main>
+				</body>
+			</html>
+		`);
+		const snapshot = collectMoodlePageSnapshot(document);
+		expect(snapshot.moodleCourseId).toBe("course-412");
+		expect(snapshot.courseName).toBe("データベース（担当: 山田）");
+		expect(snapshot.academicYear).toBe(2026);
+		expect(snapshot.term).toBe("2026前期");
+	});
+
 	test("未認識のバッジでもMP3・EXEアイコンから種別を推定する", () => {
 		expect(
 			resolveMoodleActivityMimeHint(
@@ -39,15 +58,35 @@ describe("Moodle資料のDOM解析", () => {
 		).toBe("pdf");
 	});
 
-	test("周辺の説明文だけではresourceページをファイルと誤判定しない", () => {
+	test("空バッジ・汎用documentアイコンのresourceを未判定候補として保持する", () => {
 		const { document } = parseHTML(`
 			<main>
-				<div class="activity-item">
-					<a href="https://moodle.example/mod/resource/view.php?id=1">Wordで開く資料の説明</a>
+				<div class="activity-item" data-activityname="ガイダンス資料">
+					<img
+						src="https://moodle.example/theme/image.php/boost/core/1/f/document?filtericon=1"
+						class="activityicon"
+						data-region="activity-icon"
+						alt=""
+					/>
+					<a href="https://moodle.example/mod/resource/view.php?id=1">
+						<span class="instancename">
+							ガイダンス資料
+							<span class="accesshide">ファイル</span>
+						</span>
+					</a>
+					<span class="activitybadge badge rounded-pill"></span>
 				</div>
 			</main>
 		`);
-		expect(extractFileLinks(document)).toHaveLength(0);
+		expect(extractFileLinks(document)).toEqual([
+			{
+				title: "ガイダンス資料",
+				url: "https://moodle.example/mod/resource/view.php?id=1",
+				moodleFileId: null,
+				sectionTitle: null,
+				mimeHint: null,
+			},
+		]);
 	});
 
 	test("構造化MIME属性があるresourceページだけを資料として抽出する", () => {

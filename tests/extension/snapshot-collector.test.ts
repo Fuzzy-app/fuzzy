@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { MoodleFileLink } from "../../apps/extension/src/lib/moodle/pageSnapshot";
-import { resolveMissingMimeHints } from "../../apps/extension/src/lib/moodle/snapshotCollector";
+import {
+	type ResolvedMoodleFileMetadata,
+	resolveMissingMimeHints,
+} from "../../apps/extension/src/lib/moodle/snapshotCollector";
 
 const ORIGIN = "https://moodle.example";
 
@@ -17,15 +20,15 @@ describe("未判定MIMEのHEAD補完", () => {
 			activeRequests -= 1;
 			return new Response(null, { status: 200, headers: { "content-type": "application/pdf" } });
 		}) as unknown as typeof fetch;
-		const cache = new Map<string, Promise<string | null>>();
+		const cache = new Map<string, Promise<ResolvedMoodleFileMetadata | null>>();
 		const files = [1, 2, 3, 4].map((id) => createFile(id));
 		const options = { fetcher, origin: ORIGIN, maxRequests: 3, concurrency: 2, cache };
 
 		const first = await resolveMissingMimeHints(files, options);
 		const second = await resolveMissingMimeHints(files, options);
 
-		expect(first.map((file) => file.mimeHint)).toEqual(["pdf", "pdf", "pdf", null]);
-		expect(second.map((file) => file.mimeHint)).toEqual(["pdf", "pdf", "pdf", null]);
+		expect(first.map((file) => file.mimeHint)).toEqual(["pdf", "pdf", "pdf"]);
+		expect(second.map((file) => file.mimeHint)).toEqual(["pdf", "pdf", "pdf"]);
 		expect(requestCount).toBe(3);
 		expect(maxActiveRequests).toBeLessThanOrEqual(2);
 	});
@@ -57,13 +60,65 @@ describe("未判定MIMEのHEAD補完", () => {
 		});
 
 		expect(detected[0]?.mimeHint).toBe("pptx");
-		expect(unknown[0]?.mimeHint).toBeNull();
+		expect(unknown).toEqual([]);
 	});
 
-	test("タイムアウト時は資料一覧を壊さず、外部オリジンへは送信しない", async () => {
+	test("HEADで判定できない場合はGETへフォールバックし、DOCXの実ファイル名を反映する", async () => {
+		const methods: string[] = [];
+		const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			methods.push(init?.method ?? "GET");
+			if (init?.method === "HEAD") return new Response(null, { status: 405 });
+			return new Response(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), {
+				status: 200,
+				headers: {
+					"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+					"content-disposition": "attachment; filename*=UTF-8''guidance%20notes.docx",
+				},
+			});
+		}) as typeof fetch;
+
+		const result = await resolveMissingMimeHints([createFile(1)], {
+			fetcher,
+			origin: ORIGIN,
+			cache: new Map(),
+		});
+
+		expect(methods).toEqual(["HEAD", "GET"]);
+		expect(result[0]).toMatchObject({
+			title: "guidance notes.docx",
+			mimeHint: "docx",
+		});
+	});
+
+	test("HTML応答は資料候補から除外する", async () => {
+		const fetcher = (async () =>
+			new Response("<!doctype html><title>login</title>", {
+				status: 200,
+				headers: { "content-type": "text/html" },
+			})) as unknown as typeof fetch;
+
+		expect(
+			await resolveMissingMimeHints([createFile(1)], {
+				fetcher,
+				origin: ORIGIN,
+				cache: new Map(),
+			}),
+		).toEqual([]);
+	});
+
+	test("タイムアウトを固定化せず再試行でき、外部オリジンへは送信しない", async () => {
 		let requestCount = 0;
+		let fail = true;
 		const fetcher = ((_input: RequestInfo | URL, init?: RequestInit) => {
 			requestCount += 1;
+			if (!fail) {
+				return Promise.resolve(
+					new Response(null, {
+						status: 200,
+						headers: { "content-type": "application/pdf" },
+					}),
+				);
+			}
 			return new Promise<Response>((_resolve, reject) => {
 				init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
 			});
@@ -71,15 +126,19 @@ describe("未判定MIMEのHEAD補完", () => {
 		const sameOrigin = createFile(1);
 		const external = { ...createFile(2), url: "https://outside.example/file" };
 
-		const result = await resolveMissingMimeHints([sameOrigin, external], {
+		const options = {
 			fetcher,
 			origin: ORIGIN,
 			timeoutMs: 5,
 			cache: new Map(),
-		});
+		};
+		const first = await resolveMissingMimeHints([sameOrigin, external], options);
+		fail = false;
+		const second = await resolveMissingMimeHints([sameOrigin, external], options);
 
-		expect(result).toEqual([sameOrigin, external]);
-		expect(requestCount).toBe(1);
+		expect(first).toEqual([external]);
+		expect(second).toEqual([{ ...sameOrigin, title: "資料1.pdf", mimeHint: "pdf" }, external]);
+		expect(requestCount).toBe(3);
 	});
 });
 

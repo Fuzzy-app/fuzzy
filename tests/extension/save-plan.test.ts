@@ -4,6 +4,7 @@ import {
 	type FileSuggestions,
 	buildSaveDestinationGroups,
 	commonGroupSuggestions,
+	courseFolderFromSuggestions,
 	createSelectedFilePaths,
 	fileId,
 	loadFileSuggestions,
@@ -20,14 +21,24 @@ describe("資料別の保存計画", () => {
 	test("全資料について個別に保存先候補を問い合わせる", async () => {
 		const files = [createFile("資料1.pdf", "第1回", "1"), createFile("資料2.pdf", "第2回", "2")];
 		const requestedIds: string[] = [];
+		const requestedCourses: SuggestSavePathRequest["course"][] = [];
 		const api = {
 			async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
 				requestedIds.push(request.fileMeta?.moodleFileId ?? "");
+				requestedCourses.push(request.course);
 				return [createSuggestion(`2026前期\\データベース\\${request.fileMeta?.sectionTitle}`)];
 			},
 		};
 		const suggestions = await loadFileSuggestions(api, createSnapshot(files));
 		expect(requestedIds).toEqual(["1", "2"]);
+		expect(requestedCourses[0]).toEqual({
+			moodleCourseId: "course-412",
+			name: "データベース",
+			academicYear: 2026,
+			term: "2026前期",
+			sectionTitle: null,
+			breadcrumbs: ["2026前期", "データベース"],
+		});
 		expect(suggestions.get(fileId(files[0] as MoodleFileLink))?.[0]?.relativePath).toContain(
 			"第1回",
 		);
@@ -60,7 +71,11 @@ describe("資料別の保存計画", () => {
 			selectedIds,
 			suggestions,
 			selectedPaths,
-			{ path: `${ROOT}\\${manualRelativePath}`, relativePath: manualRelativePath },
+			{
+				path: `${ROOT}\\${manualRelativePath}`,
+				relativePath: manualRelativePath,
+				courseId: 2,
+			},
 		);
 		expect(manualGroups).toHaveLength(1);
 		expect(manualGroups[0]?.files).toHaveLength(2);
@@ -111,6 +126,38 @@ describe("資料別の保存計画", () => {
 			]),
 		).toEqual([createSuggestion("2026前期\\データベース")]);
 	});
+
+	test("全資料が同じコース解決結果を持つ場合だけ編集対象を返す", () => {
+		const first = createSuggestion("2026前期\\データベース\\第1回");
+		const second = createSuggestion("2026前期\\データベース\\第2回");
+		expect(
+			courseFolderFromSuggestions(
+				new Map([
+					["1", [first]],
+					["2", [second]],
+				]),
+			),
+		).toEqual(courseFolder());
+
+		second.courseFolder = { courseId: 3, folderName: "離散数学", warnings: [] };
+		expect(
+			courseFolderFromSuggestions(
+				new Map([
+					["1", [first]],
+					["2", [second]],
+				]),
+			),
+		).toBeNull();
+
+		expect(
+			courseFolderFromSuggestions(
+				new Map([
+					["1", [first]],
+					["2", []],
+				]),
+			),
+		).toBeNull();
+	});
 });
 
 function createSuggestion(relativePath: string, confidence = 0.9): SaveSuggestion {
@@ -138,7 +185,10 @@ function createFile(title: string, sectionTitle: string, id: string): MoodleFile
 
 function createSnapshot(files: MoodleFileLink[]): MoodlePageSnapshot {
 	return {
+		moodleCourseId: "course-412",
 		courseName: "データベース",
+		academicYear: 2026,
+		term: "2026前期",
 		sectionTitle: null,
 		breadcrumbs: ["2026前期", "データベース"],
 		files,

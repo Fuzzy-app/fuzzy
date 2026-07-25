@@ -6,6 +6,37 @@
 
 use std::path::PathBuf;
 
+/// Moodle文脈をSQLiteのコースへ解決した結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CourseContextRecord {
+	pub course_id: i64,
+	pub name: String,
+	pub academic_year: Option<i64>,
+	pub term: Option<String>,
+}
+
+/// ファイルシステムへの保存成功後にSQLiteへ登録するメタデータ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedFileRegistration {
+	pub course_id: Option<i64>,
+	pub section_no: Option<i64>,
+	pub moodle_file_id: Option<String>,
+	pub original_name: String,
+	pub saved_path: PathBuf,
+	pub size_bytes: i64,
+	pub mime_type: Option<String>,
+	pub hash_blake3: String,
+	pub simhash: u64,
+}
+
+/// 保存前の重複・類似照合結果へ表示名を付与したレコード。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimilarFileRecord {
+	pub file_id: i64,
+	pub original_name: String,
+	pub similarity: f64,
+}
+
 /// SQLiteに保存された課題の取得条件。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DeadlineFilter {

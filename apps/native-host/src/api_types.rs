@@ -25,6 +25,143 @@ use ts_rs::TS;
 #[serde(deny_unknown_fields)]
 pub struct EmptyRequest {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveFileDescriptor {
+	pub file_id: String,
+	pub file_name: String,
+	pub mime_type: Option<String>,
+	pub byte_length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BeginSaveFilesRequest {
+	pub transfer_id: String,
+	pub target_path: String,
+	pub course_id: Option<i64>,
+	pub files: Vec<SaveFileDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppendSaveFileChunkRequest {
+	pub transfer_id: String,
+	pub file_id: String,
+	pub chunk_index: u32,
+	pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveFilesRequest {
+	pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SaveFileFailureCode {
+	InvalidContent,
+	AlreadyExists,
+	IoError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveFileFailure {
+	pub file_id: String,
+	pub code: SaveFileFailureCode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveFilesResult {
+	pub saved_file_ids: Vec<String>,
+	pub failed_files: Vec<SaveFileFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoodleCourseContext {
+	pub moodle_course_id: Option<String>,
+	pub name: Option<String>,
+	pub academic_year: Option<i64>,
+	pub term: Option<String>,
+	pub section_title: Option<String>,
+	pub breadcrumbs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoodleFileMeta {
+	pub title: String,
+	pub url: String,
+	pub moodle_file_id: Option<String>,
+	pub section_title: Option<String>,
+	pub mime_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SuggestSavePathRequest {
+	pub course: MoodleCourseContext,
+	pub file_meta: Option<MoodleFileMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSuggestion {
+	pub path: String,
+	pub relative_path: String,
+	pub confidence: f64,
+	pub course_folder: CourseFolderNameResolution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BeginCheckSimilarFileRequest {
+	pub transfer_id: String,
+	pub byte_length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppendCheckSimilarFileChunkRequest {
+	pub transfer_id: String,
+	pub chunk_index: u32,
+	pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckSimilarFilesTransferRequest {
+	pub transfer_id: String,
+	pub file_meta: MoodleFileMeta,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarFileMatch {
+	pub file_id: i64,
+	pub original_name: String,
+	pub similarity: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtractZipRequest {
+	pub file_meta: MoodleFileMeta,
+	pub target_path: String,
+	pub destination_path: String,
+	pub flatten: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractZipResult {
+	pub extracted_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeadlineFilter {
@@ -361,6 +498,7 @@ pub struct NotificationRuleUpdateResult {
 	pub ok: bool,
 	pub rules: Vec<NotificationRule>,
 }
+
 /// 保存用コースフォルダ名の編集要求。`None`は自動提案へ戻す。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -523,45 +661,6 @@ impl DuplicateGroupListItem {
 	}
 }
 
-/// SQLiteの絶対パスを、保存ルート以下の正規化済みWindows相対パスへ変換する。
-/// 保存ルート外の値はパスをエラー文へ含めず拒否する。
-fn safe_relative_windows_path(base_folder: &Path, saved_path: &Path) -> EngineResult<String> {
-	let base = base_folder.to_string_lossy().replace('/', "\\");
-	let saved = saved_path.to_string_lossy().replace('/', "\\");
-	let base = base.trim_end_matches('\\');
-	let prefix_matches = saved
-		.get(..base.len())
-		.is_some_and(|prefix| prefix.eq_ignore_ascii_case(base));
-	let boundary_matches = saved
-		.as_bytes()
-		.get(base.len())
-		.is_some_and(|byte| *byte == b'\\');
-	if base.is_empty() || !prefix_matches || !boundary_matches {
-		return Err(unsafe_stored_path());
-	}
-	let relative = saved.get(base.len() + 1..).ok_or_else(unsafe_stored_path)?;
-	let segments = relative.split('\\').collect::<Vec<_>>();
-	if segments.is_empty()
-		|| segments.iter().any(|segment| {
-			segment.is_empty() || matches!(*segment, "." | "..") || segment.contains(':')
-		}) {
-		return Err(unsafe_stored_path());
-	}
-	Ok(segments.join("\\"))
-}
-
-fn unsafe_stored_path() -> EngineError {
-	EngineError::Internal {
-		message: "保存先を安全な相対パスとして表示できません".to_string(),
-	}
-}
-
-fn invalid_stored_value(name: &str) -> EngineError {
-	EngineError::Database {
-		message: format!("SQLiteに未対応の{name}が保存されています"),
-	}
-}
-
 /// 全文検索要求。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -614,6 +713,45 @@ pub struct ImportDataRequest {
 pub struct ImportDataResult {
 	pub ok: bool,
 	pub reindex_required: bool,
+}
+
+/// SQLiteの絶対パスを、保存ルート以下の正規化済みWindows相対パスへ変換する。
+/// 保存ルート外の値はパスをエラー文へ含めず拒否する。
+fn safe_relative_windows_path(base_folder: &Path, saved_path: &Path) -> EngineResult<String> {
+	let base = base_folder.to_string_lossy().replace('/', "\\");
+	let saved = saved_path.to_string_lossy().replace('/', "\\");
+	let base = base.trim_end_matches('\\');
+	let prefix_matches = saved
+		.get(..base.len())
+		.is_some_and(|prefix| prefix.eq_ignore_ascii_case(base));
+	let boundary_matches = saved
+		.as_bytes()
+		.get(base.len())
+		.is_some_and(|byte| *byte == b'\\');
+	if base.is_empty() || !prefix_matches || !boundary_matches {
+		return Err(unsafe_stored_path());
+	}
+	let relative = saved.get(base.len() + 1..).ok_or_else(unsafe_stored_path)?;
+	let segments = relative.split('\\').collect::<Vec<_>>();
+	if segments.is_empty()
+		|| segments.iter().any(|segment| {
+			segment.is_empty() || matches!(*segment, "." | "..") || segment.contains(':')
+		}) {
+		return Err(unsafe_stored_path());
+	}
+	Ok(segments.join("\\"))
+}
+
+fn unsafe_stored_path() -> EngineError {
+	EngineError::Internal {
+		message: "保存ルート外または不正な保存済みパスを検出しました".to_string(),
+	}
+}
+
+fn invalid_stored_value(name: &str) -> EngineError {
+	EngineError::Database {
+		message: format!("SQLiteに保存された{name}が不正です"),
+	}
 }
 
 #[cfg(test)]
@@ -699,6 +837,75 @@ mod tests {
 		let value = serde_json::to_value(dashboard).unwrap();
 		assert_eq!(value["totalFiles"], 9);
 		assert_eq!(value["upcomingDeadlineCount"], 3);
+	}
+
+	#[test]
+	fn file_transfer_dtos_match_shared_contract() {
+		let begin: BeginSaveFilesRequest = serde_json::from_value(serde_json::json!({
+			"transferId": "transfer-1",
+			"targetPath": "C:\\save",
+			"files": [{
+				"fileId": "4376",
+				"fileName": "ガイダンス資料.docx",
+				"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+				"byteLength": 4
+			}]
+		}))
+		.unwrap();
+		assert_eq!(begin.files[0].file_id, "4376");
+
+		let similarity_begin: BeginCheckSimilarFileRequest =
+			serde_json::from_value(serde_json::json!({
+				"transferId": "similar-1",
+				"byteLength": 4
+			}))
+			.unwrap();
+		assert_eq!(similarity_begin.byte_length, 4);
+		let similarity_chunk: AppendCheckSimilarFileChunkRequest =
+			serde_json::from_value(serde_json::json!({
+				"transferId": "similar-1",
+				"chunkIndex": 0,
+				"dataBase64": "dGVzdA=="
+			}))
+			.unwrap();
+		assert_eq!(similarity_chunk.chunk_index, 0);
+		let similarity_finish: CheckSimilarFilesTransferRequest =
+			serde_json::from_value(serde_json::json!({
+				"transferId": "similar-1",
+				"fileMeta": {
+					"title": "ガイダンス資料.pdf",
+					"url": "https://moodle.example/guide.pdf",
+					"moodleFileId": "4376",
+					"sectionTitle": null,
+					"mimeHint": "pdf"
+				}
+			}))
+			.unwrap();
+		assert_eq!(similarity_finish.transfer_id, "similar-1");
+		assert!(
+			serde_json::from_value::<CheckSimilarFilesTransferRequest>(serde_json::json!({
+				"fileMeta": {
+					"title": "ガイダンス資料.pdf",
+					"url": "https://moodle.example/guide.pdf",
+					"moodleFileId": "4376",
+					"sectionTitle": null,
+					"mimeHint": "pdf"
+				},
+				"contentBase64": "dGVzdA=="
+			}))
+			.is_err()
+		);
+
+		let result = SaveFilesResult {
+			saved_file_ids: vec!["4376".to_string()],
+			failed_files: vec![SaveFileFailure {
+				file_id: "9999".to_string(),
+				code: SaveFileFailureCode::InvalidContent,
+			}],
+		};
+		let value = serde_json::to_value(result).unwrap();
+		assert_eq!(value["savedFileIds"][0], "4376");
+		assert_eq!(value["failedFiles"][0]["code"], "INVALID_CONTENT");
 	}
 
 	#[test]

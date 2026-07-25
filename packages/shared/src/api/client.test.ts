@@ -147,17 +147,19 @@ describe("MockApiClient（サンプルデータ）", () => {
 	test("saveFiles: ユーザーが選んだファイルの保存結果を返す", async () => {
 		const result = await client.saveFiles({
 			targetPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+			courseId: 2,
 			files: [
 				{
-					title: "第4回_正規化.pdf",
-					url: "https://moodle.example/pluginfile.php/1234/mod_resource/content/1/file.pdf",
-					moodleFileId: "1234",
-					sectionTitle: "第4回",
-					mimeHint: "pdf",
+					fileId: "1234",
+					fileName: "第4回_正規化.pdf",
+					mimeType: "application/pdf",
+					byteLength: 4,
+					contentBase64: "JVBERg==",
 				},
 			],
 		});
 		expect(result.savedFileIds).toEqual(["1234"]);
+		expect(result.failedFiles).toEqual([]);
 	});
 
 	test("extractZip: ZIPを展開し、簡略化後のパス一覧を返す", async () => {
