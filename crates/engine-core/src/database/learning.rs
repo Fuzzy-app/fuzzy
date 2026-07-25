@@ -34,7 +34,8 @@ impl Database {
 			.execute(
 				"UPDATE assignments
 				 SET submitted = ?1, updated_at = datetime('now')
-				 WHERE id = ?2",
+				 WHERE id = ?2
+					AND removed_at IS NULL",
 				params![submitted, assignment_id],
 			)
 			.map_err(db_err)?;
@@ -61,6 +62,7 @@ fn load_dashboard(conn: &Connection, now: Option<&str>) -> EngineResult<Dashboar
 					SELECT a.due_at
 					FROM assignments a
 					WHERE a.course_id = c.id
+						AND a.removed_at IS NULL
 						AND a.submitted = 0
 						AND a.due_at IS NOT NULL
 						AND julianday(a.due_at) >= julianday(?1)
@@ -99,6 +101,7 @@ fn load_dashboard(conn: &Connection, now: Option<&str>) -> EngineResult<Dashboar
 			"SELECT COUNT(*)
 			 FROM assignments
 			 WHERE submitted = 0
+				AND removed_at IS NULL
 				AND due_at IS NOT NULL
 				AND julianday(due_at) >= julianday(?1)",
 			[now],
@@ -140,7 +143,8 @@ fn load_deadlines(
 				a.submitted
 			 FROM assignments a
 			 JOIN courses c ON c.id = a.course_id
-			 WHERE (?1 IS NULL OR a.course_id = ?1)
+			 WHERE a.removed_at IS NULL
+				AND (?1 IS NULL OR a.course_id = ?1)
 				AND (?2 = 0 OR a.due_at_status = 'needs_review')
 				AND (
 					?3 = 1

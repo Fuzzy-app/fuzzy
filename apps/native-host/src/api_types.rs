@@ -10,10 +10,10 @@ use engine_core::folder_names::{
 	CourseFolderNameWarningCode as EngineCourseFolderNameWarningCode,
 };
 use engine_core::types::{
-	AssignmentRecord, CourseDashboardRecord, CourseRuleOverrideRecord, DashboardRecord,
-	DeadlineFilter as EngineDeadlineFilter, DuplicateGroupRecord,
-	NotificationRuleInput as EngineNotificationRuleInput, NotificationRuleRecord, RuleSetRecord,
-	RuleViolationRecord,
+	AssignmentChangeRecord, AssignmentRecord, CourseDashboardRecord, CourseRuleOverrideRecord,
+	DashboardRecord, DataSyncEventRecord, DeadlineFilter as EngineDeadlineFilter,
+	DuplicateGroupRecord, NotificationRuleInput as EngineNotificationRuleInput,
+	NotificationRuleRecord, RuleSetRecord, RuleViolationRecord,
 };
 use engine_core::{EngineError, EngineResult};
 use serde::{Deserialize, Serialize};
@@ -126,6 +126,82 @@ impl TryFrom<AssignmentRecord> for Assignment {
 				_ => return Err(invalid_stored_value("提出状況の更新方式")),
 			},
 			submitted: value.submitted,
+		})
+	}
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetAssignmentChangesRequest {
+	pub since_sync_event_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSyncEvent {
+	pub id: i64,
+	pub synced_at: String,
+	pub trigger: String,
+	pub new_assignment_count: i64,
+	pub changed_assignment_count: i64,
+	pub removed_assignment_count: i64,
+}
+
+impl From<DataSyncEventRecord> for DataSyncEvent {
+	fn from(value: DataSyncEventRecord) -> Self {
+		Self {
+			id: value.id,
+			synced_at: value.synced_at,
+			trigger: value.trigger,
+			new_assignment_count: value.new_assignment_count,
+			changed_assignment_count: value.changed_assignment_count,
+			removed_assignment_count: value.removed_assignment_count,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AssignmentChangeField {
+	DueAt,
+	Title,
+	SubmissionMode,
+	DueAtStatus,
+	Submitted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssignmentChange {
+	pub assignment_id: i64,
+	pub course_name: String,
+	pub title: String,
+	pub field: AssignmentChangeField,
+	pub old_value: Option<String>,
+	pub new_value: Option<String>,
+	pub detected_at: String,
+}
+
+impl TryFrom<AssignmentChangeRecord> for AssignmentChange {
+	type Error = EngineError;
+
+	fn try_from(value: AssignmentChangeRecord) -> Result<Self, Self::Error> {
+		let field = match value.field.as_str() {
+			"due_at" => AssignmentChangeField::DueAt,
+			"title" => AssignmentChangeField::Title,
+			"submission_mode" => AssignmentChangeField::SubmissionMode,
+			"due_at_status" => AssignmentChangeField::DueAtStatus,
+			"submitted" => AssignmentChangeField::Submitted,
+			_ => return Err(invalid_stored_value("assignment_changes.field")),
+		};
+		Ok(Self {
+			assignment_id: value.assignment_id,
+			course_name: value.course_name,
+			title: value.title,
+			field,
+			old_value: value.old_value,
+			new_value: value.new_value,
+			detected_at: value.detected_at,
 		})
 	}
 }
@@ -285,7 +361,6 @@ pub struct NotificationRuleUpdateResult {
 	pub ok: bool,
 	pub rules: Vec<NotificationRule>,
 }
-
 /// 保存用コースフォルダ名の編集要求。`None`は自動提案へ戻す。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

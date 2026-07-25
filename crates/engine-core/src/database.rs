@@ -20,13 +20,17 @@ mod duplicates;
 mod learning;
 mod notifications;
 mod rules;
+mod sync;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
+const SCHEMA_VERSION: i64 = 3;
 const EXTENSION_RUNTIME_MIGRATION_SQL: &str =
 	include_str!("../fixtures/migrations/0001_extension_runtime_observations.sql");
 const COURSE_FOLDER_NAMES_MIGRATION_SQL: &str =
 	include_str!("../fixtures/migrations/0002_course_folder_names.sql");
+const ASSIGNMENT_SYNC_MIGRATION_SQL: &str =
+	include_str!("../fixtures/migrations/0003_assignment_sync.sql");
 
 /// SQLite接続。接続時にFK有効化、スキーマ適用、マイグレーションを保証する。
 pub struct Database {
@@ -68,6 +72,15 @@ impl Database {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		}
 
+		let version = schema_version(&conn)?;
+		if version > SCHEMA_VERSION {
+			return Err(EngineError::Database {
+				message: format!(
+					"未対応のSQLiteスキーマ世代です（対応上限: {SCHEMA_VERSION}, 実際: {version}）。新しいバージョンのFuzzyで作成されたDBか確認してください"
+				),
+			});
+		}
+
 		// schema.sql適用済みの既存DBにも新しいテーブルを追加する。
 		conn.execute_batch(EXTENSION_RUNTIME_MIGRATION_SQL)
 			.map_err(db_err)?;
@@ -86,6 +99,9 @@ impl Database {
 					});
 				}
 			}
+		}
+		if table_exists(&conn, "assignments")? && schema_version(&conn)? < 3 {
+			apply_schema(&mut conn, ASSIGNMENT_SYNC_MIGRATION_SQL)?;
 		}
 
 		Ok(Self { conn, path })
@@ -469,6 +485,46 @@ mod tests {
 	}
 
 	#[test]
+	fn completed_schema_uses_current_version_and_enforces_duplicate_similarity() {
+		let database = Database::open_in_memory().unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
+		database
+			.conn()
+			.execute_batch(
+				"INSERT INTO files (
+					id, original_name, saved_path, size_bytes, hash_blake3
+				 ) VALUES (1, '資料.pdf', 'C:\\資料.pdf', 1, 'b3:test');
+				 INSERT INTO duplicate_groups (id, method) VALUES (1, 'similar');
+				 INSERT INTO duplicate_members (group_id, file_id, similarity)
+				 VALUES (1, 1, 0.75);",
+			)
+			.unwrap();
+
+		assert!(database
+			.conn()
+			.execute(
+				"UPDATE duplicate_members SET similarity = 1.1 WHERE file_id = 1",
+				[],
+			)
+			.is_err());
+	}
+
+	#[test]
+	fn unsupported_schema_version_is_rejected() {
+		let conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			 PRAGMA user_version = 99;",
+		)
+		.unwrap();
+
+		assert!(matches!(
+			Database::from_connection(conn, None),
+			Err(EngineError::Database { .. })
+		));
+	}
+
+	#[test]
 	fn migration_adds_extension_table_to_existing_database() {
 		let conn = Connection::open_in_memory().unwrap();
 		conn.execute_batch(
@@ -539,6 +595,36 @@ mod tests {
 
 		let database = Database::from_connection(conn, None).unwrap();
 		assert_eq!(schema_version(database.conn()).unwrap(), 2);
+	}
+
+	#[test]
+	fn version_two_database_is_migrated_without_losing_assignments() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		let version_two_schema = SCHEMA_SQL
+			.lines()
+			.filter(|line| !line.contains("removed_at") && !line.contains("idx_assignments_active"))
+			.collect::<Vec<_>>()
+			.join("\n")
+			.replace("PRAGMA user_version = 3;", "PRAGMA user_version = 2;");
+		apply_schema(&mut conn, &version_two_schema).unwrap();
+		conn.execute_batch(
+			"INSERT INTO courses (id, moodle_course_id, name) VALUES (1, 'course-1', 'Course');
+			 INSERT INTO assignments (id, course_id, title, source)
+			 VALUES (1, 1, 'Task', 'moodle_dashboard');",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn, None).unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
+		let assignment: (String, Option<String>) = database
+			.conn()
+			.query_row(
+				"SELECT title, removed_at FROM assignments WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(assignment, ("Task".to_string(), None));
 	}
 
 	#[test]

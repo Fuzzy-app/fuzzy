@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use engine_core::index::{DefaultIndexEngine, IndexEngine};
 use engine_core::{Database, EngineError, ExtensionRuntimeReport};
 use native_host::api_types::{
-	CourseFolderNameResolution, ExportDataRequest, ExportDataResult, ImportDataRequest,
-	ImportDataResult, SearchRequest, SearchResult, UpdateCourseFolderNameRequest,
-	UpdateCourseFolderNameResult,
+	AssignmentChange, CourseFolderNameResolution, DataSyncEvent, ExportDataRequest,
+	ExportDataResult, GetAssignmentChangesRequest, ImportDataRequest, ImportDataResult,
+	SearchRequest, SearchResult, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
 };
 use protocol::{Request, Response};
 
@@ -69,6 +69,8 @@ fn dispatch(
 		"ping" => ping(request.id),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
 		"updateCourseFolderName" => update_course_folder_name(database, request),
+		"getLatestSyncEvent" => get_latest_sync_event(database, request),
+		"getAssignmentChanges" => get_assignment_changes(database, request),
 		"search" => search(database, index_engine, request),
 		"exportData" => export_data(database, request),
 		"importData" => import_data(database, index_engine, request),
@@ -77,6 +79,50 @@ fn dispatch(
 }
 
 /// 全文索引を検索し、表示用メタデータをSQLiteの正本から付与する。
+fn get_latest_sync_event(database: &Database, request: Request) -> Response {
+	let payload_is_empty = request.payload.is_null()
+		|| matches!(&request.payload, serde_json::Value::Object(value) if value.is_empty());
+	if !payload_is_empty {
+		return Response::err(
+			Some(request.id),
+			"INVALID_REQUEST",
+			"同期履歴の取得条件を解釈できません",
+		);
+	}
+
+	match database.latest_sync_event() {
+		Ok(event) => serialize_response(request.id, event.map(DataSyncEvent::from)),
+		Err(error) => engine_error_response(request.id, error),
+	}
+}
+
+fn get_assignment_changes(database: &Database, request: Request) -> Response {
+	let payload = match serde_json::from_value::<GetAssignmentChangesRequest>(request.payload) {
+		Ok(payload) => payload,
+		Err(_) => {
+			return Response::err(
+				Some(request.id),
+				"INVALID_REQUEST",
+				"課題変更履歴の取得条件を解釈できません",
+			);
+		}
+	};
+
+	let changes = match database.assignment_changes(payload.since_sync_event_id) {
+		Ok(changes) => changes,
+		Err(error) => return engine_error_response(request.id, error),
+	};
+	let changes = match changes
+		.into_iter()
+		.map(AssignmentChange::try_from)
+		.collect::<Result<Vec<_>, _>>()
+	{
+		Ok(changes) => changes,
+		Err(error) => return engine_error_response(request.id, error),
+	};
+	serialize_response(request.id, changes)
+}
+
 fn search(database: &Database, index_engine: &dyn IndexEngine, request: Request) -> Response {
 	let search = match serde_json::from_value::<SearchRequest>(request.payload) {
 		Ok(search) => search,
@@ -336,6 +382,38 @@ mod tests {
 		assert!(response.ok);
 		let data = response.data.expect("data があること");
 		assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
+	}
+
+	#[test]
+	fn issue_43_commands_return_seeded_sync_event_and_changes() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.sync_assignments("auto", &[]).unwrap();
+		database.sync_assignments("manual", &[]).unwrap();
+		let mut index = TestIndexEngine::default();
+
+		let latest = dispatch(
+			&mut database,
+			&mut index,
+			Request {
+				id: "req-latest-sync".to_string(),
+				command: "getLatestSyncEvent".to_string(),
+				payload: serde_json::json!({}),
+			},
+		);
+		assert!(latest.ok, "{:?}", latest.error);
+		assert_eq!(latest.data.unwrap()["id"], 2);
+
+		let changes = dispatch(
+			&mut database,
+			&mut index,
+			Request {
+				id: "req-assignment-changes".to_string(),
+				command: "getAssignmentChanges".to_string(),
+				payload: serde_json::json!({}),
+			},
+		);
+		assert!(changes.ok, "{:?}", changes.error);
+		assert!(changes.data.unwrap().as_array().unwrap().is_empty());
 	}
 
 	#[test]
