@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-22
+最終更新: 2026-07-25
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はnative-hostのAPI DTOを正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期のRust DTOは `apps/native-host/src/api_types.rs`、暫定TS型は `packages/shared/src/types.ts` に定義する。`crates/engine-core` の絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -47,7 +47,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `updateNotificationRules`  | 通知タイミング設定更新             | `{ rules: NotificationRuleInput[] }` → `{ ok, rules: NotificationRule[] }` |
 | `getLatestSyncEvent`       | 直近の同期結果取得（データ取得通知用）     | `{}` → `DataSyncEvent \| null`                      |
 | `getAssignmentChanges`     | 同期で検出された課題の変更点一覧（変更点表示用） | `{ sinceSyncEventId? }` → `AssignmentChange[]`      |
-| `exportData`               | バックアップ用エクスポート           | `{}` → `{ filePath }`                               |
+| `exportData`               | バックアップ用エクスポート           | `{ filePath }` → `{ filePath }`                     |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 
 `suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。backendは`moodleCourseId`でSQLiteのコースを解決し、省略時は同名候補が一意な場合だけ既存コースへ結び付ける。曖昧な場合は`RULE_CONFLICT`を返し、同じフォルダへの混在を許可しない。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
@@ -85,6 +85,21 @@ interface SaveSuggestion {
 `updateCourseFolderName.folderName`はユーザーが選んだ単一フォルダ名、`null`は自動提案へ戻す操作を表す。backendはNFKC後にWindows名と80 UTF-16コード単位の上限を検証し、全コースをトランザクション内で再解決する。別コースが現在使用中の実効名と同じ編集名、および再解決後に異なるコースの実効名が大文字・小文字を区別しない比較で同一になる更新は`RULE_CONFLICT`としてロールバックする。編集によって別コースの現在の保存名を暗黙に変更しない。
 
 クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
+
+`search`は次の`SearchResult[]`をスコア降順で返す。PDFは1始まりのページ番号、PowerPointはスライド番号を`page`へ設定し、ページ概念を持たないWord・Excel・テキスト文書は`null`とする。`fileName`と`courseName`は索引へ重複保存せず、検索時にSQLiteの`files`・`courses`から取得する。
+
+```ts
+interface SearchResult {
+	fileId: number;
+	fileName: string;
+	courseName: string | null;
+	snippet: string;
+	page: number | null;
+	score: number;
+}
+```
+
+`exportData` / `importData`のファイル形式は生SQLiteファイルとする。`exportData.filePath`はユーザーが選択した未作成の出力先とし、既存ファイルを暗黙に上書きしない。SQLite Online Backup APIで書き出し、Tantivy索引、IndexedDB、`browser.storage.local`は含めない。`importData`はSQLiteの整合性とFuzzyの必須テーブルを検証してから置き換え、`search_index_meta`と既存Tantivy索引を無効化して`{ ok: true, reindexRequired: true }`を返す。クライアントはこの値を受けて再スキャンを案内する。
 
 #### 1.2.1 ルール違反・重複一覧の型と安全境界
 
@@ -210,4 +225,3 @@ type ExtensionSetupStatus =
 ## 4. 未決事項
 
 - `saveFiles` のレスポンスに保存後の `SaveSuggestion` 形式を含めるか
-- `exportData` / `importData` のファイル形式（生SQLiteファイル vs 専用アーカイブ）
