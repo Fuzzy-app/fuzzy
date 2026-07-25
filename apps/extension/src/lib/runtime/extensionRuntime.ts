@@ -6,10 +6,38 @@ import {
 } from "@fuzzy/shared";
 
 const INSTALLATION_ID_STORAGE_KEY = "fuzzy.extension.installationId";
+export const EXTENSION_RUNTIME_REPORT_REQUEST = "fuzzy:reportExtensionRuntime";
 
 export interface InstallationIdStorage {
 	get(key: string): Promise<Record<string, unknown>>;
 	set(values: Record<string, unknown>): Promise<void>;
+}
+
+export interface ExtensionRuntimeReportRequestMessage {
+	type: typeof EXTENSION_RUNTIME_REPORT_REQUEST;
+}
+
+export interface ExtensionRuntimeReportRequestTransport {
+	sendMessage(message: ExtensionRuntimeReportRequestMessage): Promise<unknown>;
+}
+
+export function isExtensionRuntimeReportRequestMessage(
+	message: unknown,
+): message is ExtensionRuntimeReportRequestMessage {
+	if (typeof message !== "object" || message === null) return false;
+	return (message as { type?: unknown }).type === EXTENSION_RUNTIME_REPORT_REQUEST;
+}
+
+/** MoodleのContent Script起動をbackgroundへ伝え、実行情報の再報告を要求する。 */
+export async function requestExtensionRuntimeReport(
+	transport: ExtensionRuntimeReportRequestTransport,
+): Promise<boolean> {
+	const response = await transport.sendMessage({
+		type: EXTENSION_RUNTIME_REPORT_REQUEST,
+	});
+	return (
+		typeof response === "object" && response !== null && (response as { ok?: unknown }).ok === true
+	);
 }
 
 /** 再インストールを区別できる、ブラウザプロファイル内だけの安定したIDを取得する。 */

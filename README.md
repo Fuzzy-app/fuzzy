@@ -7,7 +7,7 @@ Moodle の授業資料を自動整理し、課題・締切を一元化する学�
 ```
 apps/
 ├── extension/    ブラウザ拡張（WXT / Svelte / TS）。初期セットアップ以外のほぼ全画面
-├── desktop/      初期セットアップ専用 Tauri アプリ（src=UI、src-tauri=Tauri側Rust）
+├── desktop/      初期セットアップ・拡張機能復旧確認用 Tauri アプリ（src=UI、src-tauri=Tauri側Rust）
 └── native-host/  Native Messaging ホスト（Rust・GUIなし・常駐エンジン）
 crates/
 └── engine-core/  走査・ルール照合・全文索引・重複検出など、desktop/native-host 共有のRustロジック

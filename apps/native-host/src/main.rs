@@ -7,6 +7,7 @@
 //! 起動時に issue #36 でSQLiteへ接続しスキーマを適用する。issue #37 で `ping`
 //! を実装し疎通確認できるようにした。他コマンドは順次 `dispatch` に追加していく。
 
+mod commands;
 mod protocol;
 
 use std::io::{stdin, stdout};
@@ -45,7 +46,10 @@ fn main() -> std::io::Result<()> {
 		let response = match serde_json::from_slice::<Request>(&body) {
 			Ok(request) => dispatch(&mut database, &mut index_engine, request),
 			// envelope自体が壊れておりidも取れないため、id: null で返す。
-			Err(e) => Response::err(None, "INTERNAL", format!("リクエストを解釈できません: {e}")),
+			Err(error) => {
+				eprintln!("Native Messagingリクエストの解析に失敗しました: {error}");
+				Response::err(None, "INVALID_REQUEST", "リクエストの形式が不正です。")
+			}
 		};
 		protocol::write_message(&mut output, &response)?;
 	}
@@ -70,11 +74,7 @@ fn dispatch(
 		"search" => search(database, index_engine, request),
 		"exportData" => export_data(database, request),
 		"importData" => import_data(database, index_engine, request),
-		_ => Response::err(
-			Some(request.id),
-			"INTERNAL",
-			format!("コマンド '{}' は未実装です", request.command),
-		),
+		_ => commands::dispatch(database, request),
 	}
 }
 
@@ -460,6 +460,22 @@ mod tests {
 		let response = dispatch(&mut database, &mut TestIndexEngine::default(), request);
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+	}
+
+	#[test]
+	fn issue_42_commands_remain_reachable_from_union_dispatch() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.apply_development_seed().unwrap();
+		let request = Request {
+			id: "req-dashboard".to_string(),
+			command: "getDashboard".to_string(),
+			payload: serde_json::json!({}),
+		};
+
+		let response = dispatch(&mut database, &mut TestIndexEngine::default(), request);
+
+		assert!(response.ok, "{:?}", response.error);
+		assert!(response.data.unwrap().get("totalFiles").is_some());
 	}
 
 	#[test]

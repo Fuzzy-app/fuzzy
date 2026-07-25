@@ -10,6 +10,7 @@ CREATE TABLE app_settings (
 
 -- 拡張機能からNative Messagingで受信した、インストール・バージョン単位の実応答。
 -- 導入済みフラグは持たず、初回／最終応答日時からセットアップ状態を算出する。
+-- セットアップ後の復旧状態もインストール識別子ごとの最新行から算出し、状態フラグは保存しない。
 CREATE TABLE extension_runtime_observations (
 	installation_id   TEXT NOT NULL,
 	extension_version TEXT NOT NULL,

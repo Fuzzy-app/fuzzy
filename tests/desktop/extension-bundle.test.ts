@@ -67,6 +67,9 @@ describe("Tauri extension bundle", () => {
 			{
 				url: "https://microsoftedge.microsoft.com/addons/*",
 			},
+			{
+				url: "https://moodle*.wakayama-u.ac.jp/*",
+			},
 		]);
 	});
 
