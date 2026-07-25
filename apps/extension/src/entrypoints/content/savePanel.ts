@@ -10,6 +10,7 @@ import {
 	splitWindowsPath,
 } from "@fuzzy/shared";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
+import { transferFileId } from "../../lib/moodle/fileDownloader";
 import { displayFileTitle, fileTypeInfo, isZipFile } from "../../lib/moodle/fileType";
 import type { MoodleFileLink } from "../../lib/moodle/pageSnapshot";
 import {
@@ -167,12 +168,18 @@ export async function mountSavePanel(): Promise<void> {
 		let savedCount = 0;
 		let extractedCount = 0;
 		let failedDestinationCount = 0;
+		let failedFileCount = 0;
 		let failedZipCount = 0;
 		for (const group of groups) {
 			try {
 				const result = await api.saveFiles({ files: group.files, targetPath: group.path });
 				savedCount += result.savedFileIds.length;
-				const extraction = await extractSelectedZips(group);
+				failedFileCount += result.failedFiles.length;
+				const savedFileIds = new Set(result.savedFileIds);
+				const extraction = await extractSelectedZips({
+					...group,
+					files: group.files.filter((file) => savedFileIds.has(transferFileId(file))),
+				});
 				extractedCount += extraction.extractedCount;
 				failedZipCount += extraction.failedCount;
 			} catch (error) {
@@ -190,6 +197,8 @@ export async function mountSavePanel(): Promise<void> {
 		similarWarnings = [];
 		if (failedDestinationCount > 0) {
 			message = `${savedCount}件は保存しましたが、${failedDestinationCount}か所の保存に失敗しました。再試行してください。`;
+		} else if (failedFileCount > 0) {
+			message = `${savedCount}件は保存しましたが、${failedFileCount}件の取得または保存に失敗しました。再試行してください。`;
 		} else if (failedZipCount > 0) {
 			message = `${savedCount}件を保存しましたが、ZIP ${failedZipCount}件の展開に失敗しました。`;
 		} else {

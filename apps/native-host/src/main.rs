@@ -5,6 +5,7 @@
 
 pub mod api_types;
 mod commands;
+mod file_transfer;
 mod protocol;
 
 use std::io::{stdin, stdout};
@@ -17,12 +18,15 @@ fn main() -> std::io::Result<()> {
 		eprintln!("DB接続に失敗しました: {error}");
 		std::io::Error::other(error)
 	})?;
+	let mut file_transfers = file_transfer::FileTransferManager::default();
 	let mut input = stdin().lock();
 	let mut output = stdout().lock();
 
 	while let Some(body) = protocol::read_message(&mut input)? {
 		let response = match serde_json::from_slice::<Request>(&body) {
-			Ok(request) => commands::dispatch(&mut database, request),
+			Ok(request) => {
+				commands::dispatch_with_file_transfers(&mut database, &mut file_transfers, request)
+			}
 			// envelope自体が壊れておりidも取れないため、id: null で返す。
 			Err(error) => {
 				eprintln!("Native Messagingリクエストの解析に失敗しました: {error}");

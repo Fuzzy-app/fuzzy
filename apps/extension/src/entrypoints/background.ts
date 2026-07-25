@@ -1,4 +1,9 @@
-import { type DataSyncEvent, type FuzzyApiClient, createApiClient } from "@fuzzy/shared";
+import {
+	type DataSyncEvent,
+	type FuzzyApiClient,
+	type MoodleSaveFilesRequest,
+	createApiClient,
+} from "@fuzzy/shared";
 import {
 	type FuzzyApiRequestMessage,
 	type FuzzyApiResponseMessage,
@@ -6,6 +11,7 @@ import {
 	toBackgroundApiError,
 } from "../lib/api/backgroundApi";
 import { callBackgroundApi } from "../lib/api/backgroundDispatch";
+import { saveMoodleFilesFromBackground } from "../lib/api/backgroundFileSave";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
 	isRuleManagementRequestMessage,
@@ -91,14 +97,16 @@ export default defineBackground(() => {
 	});
 	startNotificationMonitoring();
 
-	browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+	browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		if (isRuleManagementRequestMessage(message)) {
 			void respondToRuleManagementRequest(getClient(), message).then(sendResponse);
 			return true;
 		}
 		if (!isFuzzyApiRequestMessage(message)) return false;
 
-		void respondToApiRequest(getClient(), message).then(sendResponse);
+		void respondToApiRequest(getClient(), message, sender.tab?.url ?? sender.url ?? "").then(
+			sendResponse,
+		);
 		return true; // sendResponse を非同期に呼ぶため、メッセージチャネルを維持する
 	});
 });
@@ -106,15 +114,31 @@ export default defineBackground(() => {
 async function respondToApiRequest(
 	clientPromise: Promise<FuzzyApiClient>,
 	message: FuzzyApiRequestMessage,
+	senderUrl = "",
 ): Promise<FuzzyApiResponseMessage> {
 	try {
 		const client = await clientPromise;
-		const data = await callBackgroundApi(client, message);
+		const data =
+			message.method === "saveFiles"
+				? await saveMoodleFilesFromBackground(
+						client,
+						message.request as MoodleSaveFilesRequest,
+						pageOrigin(senderUrl),
+					)
+				: await callBackgroundApi(client, message);
 		return { ok: true, data, mode: client.mode };
 	} catch (error) {
 		return {
 			ok: false,
 			error: toBackgroundApiError(error),
 		};
+	}
+}
+
+function pageOrigin(url: string): string {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return "";
 	}
 }

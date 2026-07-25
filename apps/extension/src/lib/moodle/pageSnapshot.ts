@@ -281,12 +281,10 @@ function isFileLikeLink(link: HTMLAnchorElement): boolean {
 	const mimeHint = extractMimeHint(link, href);
 
 	// Moodle resource URLs can point to a file or an HTML page. Only include them
-	// when the activity metadata identifies a non-page file type.
+	// when metadata identifies a non-page file type, or keep them temporarily so
+	// snapshotCollector can resolve the authenticated response headers.
 	if (MOODLE_RESOURCE_PATTERN.test(href)) {
-		return (
-			!WEB_PAGE_MIME_HINTS.has(mimeHint ?? "") &&
-			(mimeHint !== null || hasSupportedFileExtension(href) || hasSupportedFileExtension(label))
-		);
+		return !WEB_PAGE_MIME_HINTS.has(mimeHint ?? "");
 	}
 
 	return (

@@ -76,13 +76,35 @@ export interface CheckSimilarFilesRequest {
 	fileMeta: MoodleFileMeta;
 }
 
-export interface SaveFilesRequest {
+/** content scriptからbackgroundへ渡す、認証付き取得前の保存要求。 */
+export interface MoodleSaveFilesRequest {
 	files: MoodleFileMeta[];
 	targetPath: string;
 }
 
+/** backgroundがMoodleから取得し、native-hostへ分割転送する1ファイル。 */
+export interface SaveFilePayload {
+	fileId: string;
+	fileName: string;
+	mimeType: string | null;
+	byteLength: number;
+	contentBase64: string;
+}
+
+/** NativeApiClientへ渡す取得済みファイルの保存要求。 */
+export interface SaveFilesRequest {
+	files: SaveFilePayload[];
+	targetPath: string;
+}
+
+export interface SaveFileFailure {
+	fileId: string;
+	code: "DOWNLOAD_FAILED" | "INVALID_CONTENT" | "ALREADY_EXISTS" | "IO_ERROR";
+}
+
 export interface SaveFilesResult {
 	savedFileIds: string[];
+	failedFiles: SaveFileFailure[];
 }
 
 export interface ExtractZipRequest {

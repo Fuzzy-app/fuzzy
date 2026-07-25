@@ -6,19 +6,33 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::api_types::{
-	Assignment, CourseFolderNameResolution, DashboardSummary, DuplicateGroupListItem, EmptyRequest,
-	GetDeadlinesRequest, NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet,
-	RuleViolationListItem, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
-	UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest, UpdateNotificationRulesRequest,
-	UpdateSubmissionStatusRequest,
+	AppendSaveFileChunkRequest, Assignment, BeginSaveFilesRequest, CourseFolderNameResolution,
+	DashboardSummary, DuplicateGroupListItem, EmptyRequest, GetDeadlinesRequest, NotificationRule,
+	NotificationRuleUpdateResult, OkResult, RuleSet, RuleViolationListItem, SaveFilesRequest,
+	UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest, UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
 };
+use crate::file_transfer::FileTransferManager;
 use crate::protocol::{Request, Response};
 
 /// コマンド名に応じて処理を振り分ける。
+#[cfg(test)]
 pub fn dispatch(database: &mut Database, request: Request) -> Response {
+	let mut file_transfers = FileTransferManager::default();
+	dispatch_with_file_transfers(database, &mut file_transfers, request)
+}
+
+pub fn dispatch_with_file_transfers(
+	database: &mut Database,
+	file_transfers: &mut FileTransferManager,
+	request: Request,
+) -> Response {
 	match request.command.as_str() {
 		"ping" => ping(request.id),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
+		"beginSaveFiles" => begin_save_files(database, file_transfers, request),
+		"appendSaveFileChunk" => append_save_file_chunk(file_transfers, request),
+		"saveFiles" => save_files(database, file_transfers, request),
 		"updateCourseFolderName" => update_course_folder_name(database, request),
 		"getDashboard" => get_dashboard(database, request),
 		"getDeadlines" => get_deadlines(database, request),
@@ -42,6 +56,50 @@ pub fn dispatch(database: &mut Database, request: Request) -> Response {
 			)
 		}
 	}
+}
+
+fn begin_save_files(
+	database: &Database,
+	file_transfers: &mut FileTransferManager,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<BeginSaveFilesRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = database
+		.base_folder_path()
+		.and_then(|base_folder| file_transfers.begin(&base_folder, payload))
+		.map(|()| OkResult { ok: true });
+	respond(request.id, result)
+}
+
+fn append_save_file_chunk(file_transfers: &mut FileTransferManager, request: Request) -> Response {
+	let payload = match parse_payload::<AppendSaveFileChunkRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	respond(
+		request.id,
+		file_transfers
+			.append(payload)
+			.map(|()| OkResult { ok: true }),
+	)
+}
+
+fn save_files(
+	database: &Database,
+	file_transfers: &mut FileTransferManager,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<SaveFilesRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = database
+		.base_folder_path()
+		.and_then(|base_folder| file_transfers.commit(&base_folder, &payload.transfer_id));
+	respond(request.id, result)
 }
 
 fn get_dashboard(database: &Database, request: Request) -> Response {
@@ -383,10 +441,7 @@ mod tests {
 		let mut database = Database::open_in_memory().unwrap();
 		let response = dispatch(&mut database, request("ping", serde_json::json!({})));
 		assert!(response.ok);
-		assert_eq!(
-			response.data.unwrap()["version"],
-			env!("CARGO_PKG_VERSION")
-		);
+		assert_eq!(response.data.unwrap()["version"], env!("CARGO_PKG_VERSION"));
 	}
 
 	#[test]

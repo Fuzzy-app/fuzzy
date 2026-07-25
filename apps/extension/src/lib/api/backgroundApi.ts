@@ -11,10 +11,10 @@ import type {
 	ExtractZipRequest,
 	ExtractZipResult,
 	FuzzyApiClient,
+	MoodleSaveFilesRequest,
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
-	SaveFilesRequest,
 	SaveFilesResult,
 	SaveSuggestion,
 	SimilarFileMatch,
@@ -59,7 +59,9 @@ export function isFuzzyApiRequestMessage(message: unknown): message is FuzzyApiR
 }
 
 /** background経由で呼び出せるAPIの部分集合。 */
-type BackgroundApi = Pick<FuzzyApiClient, BackgroundApiMethod>;
+type BackgroundApi = Pick<FuzzyApiClient, Exclude<BackgroundApiMethod, "saveFiles">> & {
+	saveFiles(request: MoodleSaveFilesRequest): Promise<SaveFilesResult>;
+};
 
 /**
  * background経由で対象APIを呼ぶ、content script用のクライアント。
@@ -87,7 +89,7 @@ export class BackgroundApiClient implements BackgroundApi {
 		return this.#call("checkSimilarFiles", request);
 	}
 
-	saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
+	saveFiles(request: MoodleSaveFilesRequest): Promise<SaveFilesResult> {
 		return this.#call("saveFiles", request);
 	}
 

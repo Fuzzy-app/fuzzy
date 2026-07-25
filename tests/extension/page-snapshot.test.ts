@@ -58,15 +58,35 @@ describe("Moodle資料のDOM解析", () => {
 		).toBe("pdf");
 	});
 
-	test("周辺の説明文だけではresourceページをファイルと誤判定しない", () => {
+	test("空バッジ・汎用documentアイコンのresourceを未判定候補として保持する", () => {
 		const { document } = parseHTML(`
 			<main>
-				<div class="activity-item">
-					<a href="https://moodle.example/mod/resource/view.php?id=1">Wordで開く資料の説明</a>
+				<div class="activity-item" data-activityname="ガイダンス資料">
+					<img
+						src="https://moodle.example/theme/image.php/boost/core/1/f/document?filtericon=1"
+						class="activityicon"
+						data-region="activity-icon"
+						alt=""
+					/>
+					<a href="https://moodle.example/mod/resource/view.php?id=1">
+						<span class="instancename">
+							ガイダンス資料
+							<span class="accesshide">ファイル</span>
+						</span>
+					</a>
+					<span class="activitybadge badge rounded-pill"></span>
 				</div>
 			</main>
 		`);
-		expect(extractFileLinks(document)).toHaveLength(0);
+		expect(extractFileLinks(document)).toEqual([
+			{
+				title: "ガイダンス資料",
+				url: "https://moodle.example/mod/resource/view.php?id=1",
+				moodleFileId: null,
+				sectionTitle: null,
+				mimeHint: null,
+			},
+		]);
 	});
 
 	test("構造化MIME属性があるresourceページだけを資料として抽出する", () => {

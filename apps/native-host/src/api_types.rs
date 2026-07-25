@@ -24,6 +24,60 @@ use std::path::Path;
 #[serde(deny_unknown_fields)]
 pub struct EmptyRequest {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveFileDescriptor {
+	pub file_id: String,
+	pub file_name: String,
+	pub mime_type: Option<String>,
+	pub byte_length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BeginSaveFilesRequest {
+	pub transfer_id: String,
+	pub target_path: String,
+	pub files: Vec<SaveFileDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppendSaveFileChunkRequest {
+	pub transfer_id: String,
+	pub file_id: String,
+	pub chunk_index: u32,
+	pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveFilesRequest {
+	pub transfer_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SaveFileFailureCode {
+	InvalidContent,
+	AlreadyExists,
+	IoError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveFileFailure {
+	pub file_id: String,
+	pub code: SaveFileFailureCode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveFilesResult {
+	pub saved_file_ids: Vec<String>,
+	pub failed_files: Vec<SaveFileFailure>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeadlineFilter {
@@ -560,6 +614,33 @@ mod tests {
 		let value = serde_json::to_value(dashboard).unwrap();
 		assert_eq!(value["totalFiles"], 9);
 		assert_eq!(value["upcomingDeadlineCount"], 3);
+	}
+
+	#[test]
+	fn file_transfer_dtos_match_shared_contract() {
+		let begin: BeginSaveFilesRequest = serde_json::from_value(serde_json::json!({
+			"transferId": "transfer-1",
+			"targetPath": "C:\\save",
+			"files": [{
+				"fileId": "4376",
+				"fileName": "ガイダンス資料.docx",
+				"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+				"byteLength": 4
+			}]
+		}))
+		.unwrap();
+		assert_eq!(begin.files[0].file_id, "4376");
+
+		let result = SaveFilesResult {
+			saved_file_ids: vec!["4376".to_string()],
+			failed_files: vec![SaveFileFailure {
+				file_id: "9999".to_string(),
+				code: SaveFileFailureCode::InvalidContent,
+			}],
+		};
+		let value = serde_json::to_value(result).unwrap();
+		assert_eq!(value["savedFileIds"][0], "4376");
+		assert_eq!(value["failedFiles"][0]["code"], "INVALID_CONTENT");
 	}
 
 	#[test]

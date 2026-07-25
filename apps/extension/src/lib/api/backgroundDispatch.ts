@@ -3,7 +3,6 @@ import type {
 	ExtractZipRequest,
 	FuzzyApiClient,
 	NotificationRuleInput,
-	SaveFilesRequest,
 	SuggestSavePathRequest,
 	UpdateCourseFolderNameRequest,
 } from "@fuzzy/shared";
@@ -22,7 +21,7 @@ export async function callBackgroundApi(
 		case "checkSimilarFiles":
 			return client.checkSimilarFiles(message.request as CheckSimilarFilesRequest);
 		case "saveFiles":
-			return client.saveFiles(message.request as SaveFilesRequest);
+			throw new Error("saveFilesは認証付き取得を行うbackgroundの専用経路で処理してください");
 		case "extractZip":
 			return client.extractZip(message.request as ExtractZipRequest);
 		case "getNotificationRules":
