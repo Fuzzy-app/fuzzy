@@ -210,14 +210,7 @@ fn update_course_folder_name(database: &mut Database, request: Request) -> Respo
 				ok: true,
 				course_folder: CourseFolderNameResolution::from(course_folder),
 			};
-			match serde_json::to_value(result) {
-				Ok(data) => Response::ok(request.id, data),
-				Err(error) => Response::err(
-					Some(request.id),
-					"INTERNAL",
-					format!("応答を生成できません: {error}"),
-				),
-			}
+			serialize_response(request.id, result)
 		}
 		Err(error) => engine_error_response(request.id, error),
 	}
