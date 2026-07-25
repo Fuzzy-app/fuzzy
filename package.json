@@ -11,6 +11,7 @@
 		"check": "biome check --write . && prettier --plugin prettier-plugin-svelte --write \"**/*.svelte\"",
 		"check:ci": "biome ci . && prettier --plugin prettier-plugin-svelte --check \"**/*.svelte\"",
 		"test": "bun test",
+		"generate:types": "cargo test -p engine-core -p native-host export_bindings",
 		"typecheck:shared": "tsc --noEmit -p packages/shared/tsconfig.json",
 		"typecheck:extension": "tsc --noEmit -p apps/extension/tsconfig.json",
 		"typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",

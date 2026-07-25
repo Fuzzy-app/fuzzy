@@ -30,6 +30,7 @@
 
 	onMount(() => {
 		pollTimer = setInterval(() => {
+			if (status.state === "ready" && !recheckStartedAt) return;
 			nowMs = Date.now();
 			void refreshStatus();
 		}, pollIntervalMs);

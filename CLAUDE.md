@@ -16,12 +16,12 @@ Fuzzy は、Moodle の授業資料を自動整理し、課題・締切を一元�
 
 **Phase0（雛形生成）完了・Phase1（バックエンド実装）着手前** の段階。全アプリ・crateの実体は生成済みだが、中核ロジックは未実装。実装を追加する前に必ず現状を確認すること（雛形があることと実装済みであることを混同しない）。
 
-- `crates/engine-core` — 生成済み（#32）。`ScanEngine`／`RuleEngine`／`IndexEngine`／`DuplicateDetector` の4トレイト定義と `todo!()` スタブのみ。実装はPhase1の #38〜#41
+- `crates/engine-core` — `ScanEngine`（#38）、`RuleEngine`（#39）、`IndexEngine`（#41）を実装済み。`DuplicateDetector`は未実装
 - `apps/native-host` — 生成済み（#33）。Native MessagingのI/Oループ（4byte LE長プレフィックス＋envelope、`src/protocol.rs`）まで実装済み。コマンドは全て未実装で `INTERNAL` エラーを返す。SQLite接続は #36、pingは #37 以降で実装
 - `apps/extension` — 生成済み（#34、WXT＋Svelte 5）。popupは `createApiClient()` → `getDashboard()` の疎通確認画面のみ。Phase2の画面系issue（#46〜#58）で置き換える
 - `apps/desktop` — 生成済み（#35、Tauri 2＋SvelteKit）。初期セットアップ画面の土台のみ
 - 動くロジックの中心は依然 `packages/shared`（型定義 `src/types.ts`、APIクライアント `src/api/`、サンプルデータ `src/sample-data/`）。native-hostのコマンド未実装のため、実行時は `MockApiClient` がサンプルデータで疑似応答する
-- `packages/shared/src/generated/` はts-rsによるRust→TS自動生成物の予定地（#44）。**手編集禁止**（まだ生成されていない場合は何も置かない）
+- `packages/shared/src/generated/` はts-rsによるRust→TS自動生成物（#44）。**手編集禁止**。Rust API DTO変更時は`bun run generate:types`で更新する
 
 ## モノレポ構成と配置ルール
 

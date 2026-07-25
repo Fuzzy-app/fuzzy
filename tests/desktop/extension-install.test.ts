@@ -61,6 +61,7 @@ describe("browser-independent extension installation", () => {
 
 		expect(componentSource).toContain("ブラウザの種類を選ぶ必要はありません");
 		expect(componentSource).toContain("拡張機能からの応答を待っています");
+		expect(componentSource).toContain("拡張機能バージョンまたは通信仕様に互換性がありません");
 		expect(componentSource).not.toContain("detectSupportedBrowser");
 		expect(componentSource).not.toContain('type="checkbox"');
 		expect(componentSource).not.toContain("今回はスキップ");
