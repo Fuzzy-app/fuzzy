@@ -96,11 +96,13 @@ CREATE TABLE assignments (
 	submission_mode  TEXT NOT NULL DEFAULT 'unknown' CHECK (submission_mode IN ('moodle_auto', 'manual', 'notify_only', 'unknown')),
 	submitted        INTEGER NOT NULL DEFAULT 0,
 	related_file_id  INTEGER REFERENCES files(id) ON DELETE SET NULL,
+	removed_at       TEXT,
 	created_at       TEXT NOT NULL DEFAULT (datetime('now')),
 	updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_assignments_due ON assignments(due_at);
 CREATE INDEX idx_assignments_course ON assignments(course_id);
+CREATE INDEX idx_assignments_active ON assignments(removed_at);
 
 CREATE TABLE notification_rules (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,4 +141,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

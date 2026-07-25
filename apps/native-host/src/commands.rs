@@ -6,11 +6,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::api_types::{
-	Assignment, CourseFolderNameResolution, DashboardSummary, DuplicateGroupListItem, EmptyRequest,
-	GetDeadlinesRequest, NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet,
-	RuleViolationListItem, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
-	UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest, UpdateNotificationRulesRequest,
-	UpdateSubmissionStatusRequest,
+	Assignment, AssignmentChange, CourseFolderNameResolution, DashboardSummary, DataSyncEvent,
+	DuplicateGroupListItem, EmptyRequest, GetAssignmentChangesRequest, GetDeadlinesRequest,
+	NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet, RuleViolationListItem,
+	UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest, UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
 };
 use crate::protocol::{Request, Response};
 
@@ -22,6 +22,8 @@ pub fn dispatch(database: &mut Database, request: Request) -> Response {
 		"updateCourseFolderName" => update_course_folder_name(database, request),
 		"getDashboard" => get_dashboard(database, request),
 		"getDeadlines" => get_deadlines(database, request),
+		"getLatestSyncEvent" => get_latest_sync_event(database, request),
+		"getAssignmentChanges" => get_assignment_changes(database, request),
 		"updateSubmissionStatus" => update_submission_status(database, request),
 		"getRules" => get_rules(database, request),
 		"updateGlobalRule" => update_global_rule(database, request),
@@ -62,6 +64,34 @@ fn get_deadlines(database: &Database, request: Request) -> Response {
 			items
 				.into_iter()
 				.map(Assignment::try_from)
+				.collect::<EngineResult<Vec<_>>>()
+		});
+	respond(request.id, result)
+}
+
+fn get_latest_sync_event(database: &Database, request: Request) -> Response {
+	if let Err(response) = parse_payload::<EmptyRequest>(&request) {
+		return response;
+	}
+	respond(
+		request.id,
+		database
+			.latest_sync_event()
+			.map(|event| event.map(DataSyncEvent::from)),
+	)
+}
+
+fn get_assignment_changes(database: &Database, request: Request) -> Response {
+	let payload = match parse_payload::<GetAssignmentChangesRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = database
+		.assignment_changes(payload.since_sync_event_id)
+		.and_then(|changes| {
+			changes
+				.into_iter()
+				.map(AssignmentChange::try_from)
 				.collect::<EngineResult<Vec<_>>>()
 		});
 	respond(request.id, result)
@@ -315,6 +345,40 @@ mod tests {
 	}
 
 	#[test]
+	fn issue_43_sync_commands_return_latest_event_and_field_changes() {
+		let mut database = seeded_database();
+		let latest = dispatch(
+			&mut database,
+			request("getLatestSyncEvent", serde_json::json!({})),
+		);
+		assert!(latest.ok, "{:?}", latest.error);
+		let latest = latest.data.unwrap();
+		assert_eq!(latest["id"], 2);
+		assert_eq!(latest["changedAssignmentCount"], 2);
+		assert_eq!(latest["trigger"], "auto");
+
+		let changes = dispatch(
+			&mut database,
+			request("getAssignmentChanges", serde_json::json!({})),
+		);
+		assert!(changes.ok, "{:?}", changes.error);
+		let changes = changes.data.unwrap();
+		assert_eq!(changes.as_array().unwrap().len(), 2);
+		assert_eq!(changes[0]["field"], "dueAtStatus");
+		assert_eq!(changes[0]["oldValue"], "normal");
+		assert_eq!(changes[0]["newValue"], "needs_review");
+
+		let since_latest = dispatch(
+			&mut database,
+			request(
+				"getAssignmentChanges",
+				serde_json::json!({ "sinceSyncEventId": 2 }),
+			),
+		);
+		assert_eq!(since_latest.data.unwrap(), serde_json::json!([]));
+	}
+
+	#[test]
 	fn issue_42_write_commands_persist_and_validate_inputs() {
 		let mut database = seeded_database();
 		let submitted = dispatch(
@@ -383,10 +447,7 @@ mod tests {
 		let mut database = Database::open_in_memory().unwrap();
 		let response = dispatch(&mut database, request("ping", serde_json::json!({})));
 		assert!(response.ok);
-		assert_eq!(
-			response.data.unwrap()["version"],
-			env!("CARGO_PKG_VERSION")
-		);
+		assert_eq!(response.data.unwrap()["version"], env!("CARGO_PKG_VERSION"));
 	}
 
 	#[test]

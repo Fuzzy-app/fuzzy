@@ -16,10 +16,11 @@ mod duplicates;
 mod learning;
 mod notifications;
 mod rules;
+mod sync;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// SQLite接続。接続時にFK有効化と完成形スキーマの適用を保証する。
 pub struct Database {
@@ -60,7 +61,9 @@ impl Database {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		} else {
 			let version = schema_version(&conn)?;
-			if version != SCHEMA_VERSION {
+			if version == 1 {
+				migrate_v1_to_v2(&mut conn)?;
+			} else if version != SCHEMA_VERSION {
 				return Err(EngineError::Database {
 					message: format!(
 						"未対応のSQLiteスキーマ世代です（期待: {SCHEMA_VERSION}, 実際: {version}）。開発用DBを再作成してください"
@@ -225,6 +228,18 @@ fn apply_schema(conn: &mut Connection, schema_sql: &str) -> EngineResult<()> {
 	transaction.commit().map_err(db_err)
 }
 
+fn migrate_v1_to_v2(conn: &mut Connection) -> EngineResult<()> {
+	let transaction = conn.transaction().map_err(db_err)?;
+	transaction
+		.execute_batch(
+			"ALTER TABLE assignments ADD COLUMN removed_at TEXT;
+			 CREATE INDEX idx_assignments_active ON assignments(removed_at);
+			 PRAGMA user_version = 2;",
+		)
+		.map_err(db_err)?;
+	transaction.commit().map_err(db_err)
+}
+
 /// DBファイルの実パスを決定する。
 ///
 /// 1. 環境変数 `FUZZY_DB_PATH`
@@ -308,7 +323,7 @@ mod tests {
 	}
 
 	#[test]
-	fn completed_schema_is_version_one_and_enforces_duplicate_similarity() {
+	fn completed_schema_uses_current_version_and_enforces_duplicate_similarity() {
 		let database = Database::open_in_memory().unwrap();
 		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
 		database
@@ -337,7 +352,7 @@ mod tests {
 		let conn = Connection::open_in_memory().unwrap();
 		conn.execute_batch(
 			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-			 PRAGMA user_version = 2;",
+			 PRAGMA user_version = 99;",
 		)
 		.unwrap();
 
@@ -346,6 +361,37 @@ mod tests {
 			Err(error) => error,
 		};
 		assert!(matches!(error, EngineError::Database { .. }));
+	}
+
+	#[test]
+	fn version_one_database_is_migrated_without_losing_assignments() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		let version_one_schema = SCHEMA_SQL
+			.replace("\n\tremoved_at       TEXT,", "")
+			.replace(
+				"CREATE INDEX idx_assignments_active ON assignments(removed_at);\n",
+				"",
+			)
+			.replace("PRAGMA user_version = 2;", "PRAGMA user_version = 1;");
+		apply_schema(&mut conn, &version_one_schema).unwrap();
+		conn.execute_batch(
+			"INSERT INTO courses (id, moodle_course_id, name) VALUES (1, 'course-1', 'Course');
+			 INSERT INTO assignments (id, course_id, title, source)
+			 VALUES (1, 1, 'Task', 'moodle_dashboard');",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn).unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
+		let assignment: (String, Option<String>) = database
+			.conn()
+			.query_row(
+				"SELECT title, removed_at FROM assignments WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(assignment, ("Task".to_string(), None));
 	}
 
 	#[test]
