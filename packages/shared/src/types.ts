@@ -1,7 +1,26 @@
-// 暫定の型定義。
-// 将来的に Rust 側の構造体に `#[derive(TS)]` を付与し、ts-rs で
-// `packages/shared/src/generated/` 以下に自動生成する予定（docs/api/contract.md 参照）。
-// それまでの間、API契約に合わせてここで手書きしている。生成後はこのファイルを置き換える。
+// Rust DTOが存在するAPI型はts-rs生成物を使用する。
+// packages/shared/src/generated/ は `bun run generate:types` で再生成し、手編集しない。
+import type { CourseFolderNameResolution } from "./generated/CourseFolderNameResolution";
+
+export type { CourseFolderNameResolution } from "./generated/CourseFolderNameResolution";
+export type { CourseFolderNameWarning } from "./generated/CourseFolderNameWarning";
+export type { CourseFolderNameWarningCode } from "./generated/CourseFolderNameWarningCode";
+export type { DuplicateFileListItem } from "./generated/DuplicateFileListItem";
+export type { DuplicateGroupListItem } from "./generated/DuplicateGroupListItem";
+export type { DuplicateMethod } from "./generated/DuplicateMethod";
+export type { ExportDataRequest } from "./generated/ExportDataRequest";
+export type { ExportDataResult } from "./generated/ExportDataResult";
+export type { ExtensionRuntimeObservation } from "./generated/ExtensionRuntimeObservation";
+export type { ExtensionRuntimeReport } from "./generated/ExtensionRuntimeReport";
+export type { ExtensionSetupState } from "./generated/ExtensionSetupState";
+export type { ExtensionSetupStatus } from "./generated/ExtensionSetupStatus";
+export type { ImportDataRequest } from "./generated/ImportDataRequest";
+export type { ImportDataResult } from "./generated/ImportDataResult";
+export type { RuleViolationListItem } from "./generated/RuleViolationListItem";
+export type { SearchRequest } from "./generated/SearchRequest";
+export type { SearchResult } from "./generated/SearchResult";
+export type { UpdateCourseFolderNameRequest } from "./generated/UpdateCourseFolderNameRequest";
+export type { UpdateCourseFolderNameResult } from "./generated/UpdateCourseFolderNameResult";
 
 export interface Course {
 	id: number;
@@ -29,22 +48,6 @@ export interface SaveSuggestion {
 	similarMatches?: SimilarFileMatch[];
 	/** 保存先に使用したコースフォルダ名と、確認が必要な警告。 */
 	courseFolder: CourseFolderNameResolution;
-}
-
-export type CourseFolderNameWarningCode = "name_conflict" | "name_shortened";
-
-export interface CourseFolderNameWarning {
-	code: CourseFolderNameWarningCode;
-	message: string;
-	/** backendが衝突回避・短縮後に提案した編集可能なフォルダ名。 */
-	suggestedFolderName: string;
-}
-
-export interface CourseFolderNameResolution {
-	/** SQLiteへ登録済みの場合のコースID。未登録のMoodleコースではnull。 */
-	courseId: number | null;
-	folderName: string;
-	warnings: CourseFolderNameWarning[];
 }
 
 export interface MoodleCourseContext {
@@ -118,15 +121,6 @@ export interface ExtractZipResult {
 	extractedPaths: string[];
 }
 
-export interface SearchResult {
-	fileId: number;
-	fileName: string;
-	courseName: string | null;
-	snippet: string;
-	page: number | null;
-	score: number;
-}
-
 export type DueAtStatus = "normal" | "needs_review";
 export type SubmissionMode = "moodle_auto" | "manual" | "notify_only" | "unknown";
 
@@ -185,44 +179,8 @@ export interface UpdateCourseRuleOverrideRequest {
 	override: CourseRuleOverrideInput;
 }
 
-/** backendが保持するコースフォルダ名を変更する。nullは自動提案へ戻す。 */
-export interface UpdateCourseFolderNameRequest {
-	courseId: number;
-	folderName: string | null;
-}
-
-export interface UpdateCourseFolderNameResult {
-	ok: true;
-	courseFolder: CourseFolderNameResolution;
-}
-
 export interface RuleUpdateResult {
 	ok: true;
-}
-
-/** ルール違反一覧に表示する1件。パスは保存ルートからの相対パスに限定する。 */
-export interface RuleViolationListItem {
-	fileId: number;
-	fileName: string;
-	courseId: number | null;
-	courseName: string | null;
-	relativePath: string;
-	reason: string;
-}
-
-/** 重複グループに含まれる1ファイル。パスは保存ルートからの相対パスに限定する。 */
-export interface DuplicateFileListItem {
-	fileId: number;
-	fileName: string;
-	relativePath: string;
-	/** 0.0〜1.0。完全一致の場合は1.0。 */
-	similarity: number;
-}
-
-export interface DuplicateGroupListItem {
-	groupId: number;
-	method: "exact" | "similar";
-	members: DuplicateFileListItem[];
 }
 
 export interface NotificationRule {
@@ -280,24 +238,3 @@ export interface AssignmentChange {
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
 export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 1 as const;
-
-/** 拡張機能がnative-hostへ報告する、ブラウザ名に依存しない実行情報。 */
-export interface ExtensionRuntimeReport {
-	installationId: string;
-	extensionVersion: string;
-	protocolVersion: number;
-}
-
-/** SQLiteに保存された、インストール・バージョン単位の初回／最終応答。 */
-export interface ExtensionRuntimeObservation extends ExtensionRuntimeReport {
-	firstSeenAt: string;
-	lastSeenAt: string;
-}
-
-export type ExtensionSetupState = "waiting" | "ready" | "incompatible";
-
-/** 初期セットアップ画面がSQLiteから読み取る拡張機能の応答状態。 */
-export interface ExtensionSetupStatus {
-	state: ExtensionSetupState;
-	observation: ExtensionRuntimeObservation | null;
-}

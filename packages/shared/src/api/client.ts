@@ -6,8 +6,12 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroupListItem,
+	ExportDataRequest,
+	ExportDataResult,
 	ExtractZipRequest,
 	ExtractZipResult,
+	ImportDataRequest,
+	ImportDataResult,
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
@@ -79,6 +83,12 @@ export interface FuzzyApiClient {
 
 	/** 同期で検出された課題の変更点一覧。sinceSyncEventId省略時は直近の同期分を返す */
 	getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]>;
+
+	/** SQLite正本を生SQLiteバックアップとして書き出す。全文索引は含めない */
+	exportData(request: ExportDataRequest): Promise<ExportDataResult>;
+
+	/** SQLiteバックアップを読み込み、再スキャンが必要なことを返す */
+	importData(request: ImportDataRequest): Promise<ImportDataResult>;
 }
 
 export class ApiError extends Error {

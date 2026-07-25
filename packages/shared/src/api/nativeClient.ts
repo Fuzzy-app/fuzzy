@@ -6,10 +6,14 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroupListItem,
+	ExportDataRequest,
+	ExportDataResult,
 	ExtensionRuntimeObservation,
 	ExtensionRuntimeReport,
 	ExtractZipRequest,
 	ExtractZipResult,
+	ImportDataRequest,
+	ImportDataResult,
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
@@ -264,5 +268,13 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]> {
 		return this.send("getAssignmentChanges", { sinceSyncEventId });
+	}
+
+	exportData(request: ExportDataRequest): Promise<ExportDataResult> {
+		return this.send("exportData", request);
+	}
+
+	importData(request: ImportDataRequest): Promise<ImportDataResult> {
+		return this.send("importData", request);
 	}
 }
