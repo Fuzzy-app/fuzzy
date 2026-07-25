@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	EXTENSION_RUNTIME_REPORT_REQUEST,
 	createExtensionRuntimeReport,
 	getOrCreateInstallationId,
+	isExtensionRuntimeReportRequestMessage,
 	reportCurrentExtensionRuntime,
+	requestExtensionRuntimeReport,
 } from "../../apps/extension/src/lib/runtime/extensionRuntime";
 import type { InstallationIdStorage } from "../../apps/extension/src/lib/runtime/extensionRuntime";
 
@@ -44,6 +47,44 @@ describe("extension runtime report", () => {
 			extensionVersion: "0.1.0",
 			protocolVersion: 1,
 		});
+	});
+
+	test("Moodle表示時にbackgroundへ再報告を要求する", async () => {
+		const messages: unknown[] = [];
+		await expect(
+			requestExtensionRuntimeReport({
+				sendMessage: async (message) => {
+					messages.push(message);
+					return { ok: true };
+				},
+			}),
+		).resolves.toBe(true);
+		expect(messages).toEqual([{ type: EXTENSION_RUNTIME_REPORT_REQUEST }]);
+		expect(
+			isExtensionRuntimeReportRequestMessage({
+				type: EXTENSION_RUNTIME_REPORT_REQUEST,
+			}),
+		).toBe(true);
+		expect(isExtensionRuntimeReportRequestMessage({ type: "fuzzy:other" })).toBe(false);
+
+		await expect(
+			requestExtensionRuntimeReport({
+				sendMessage: async () => ({ ok: false }),
+			}),
+		).resolves.toBe(false);
+	});
+
+	test("Content Scriptの要求をbackgroundが実行情報報告へ接続する", async () => {
+		const contentSource = await Bun.file(
+			new URL("../../apps/extension/src/entrypoints/content/index.ts", import.meta.url),
+		).text();
+		const backgroundSource = await Bun.file(
+			new URL("../../apps/extension/src/entrypoints/background.ts", import.meta.url),
+		).text();
+
+		expect(contentSource).toContain("requestExtensionRuntimeReport");
+		expect(backgroundSource).toContain("isExtensionRuntimeReportRequestMessage");
+		expect(backgroundSource).toContain("reportExtensionRuntimeOnce");
 	});
 
 	test("native-hostが保存した観測情報を返す", async () => {

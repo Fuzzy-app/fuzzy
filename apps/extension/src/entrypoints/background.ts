@@ -18,7 +18,10 @@ import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
 } from "../lib/rules/backgroundApi";
-import { reportCurrentExtensionRuntime } from "../lib/runtime/extensionRuntime";
+import {
+	isExtensionRuntimeReportRequestMessage,
+	reportCurrentExtensionRuntime,
+} from "../lib/runtime/extensionRuntime";
 import { buildSyncResultNotificationMessage } from "../lib/ui/screenCopy";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
@@ -64,6 +67,23 @@ export default defineBackground(() => {
 		return clientPromise;
 	};
 	const deadlineNotificationMonitor = createDeadlineNotificationMonitor(getClient);
+	let runtimeReportPromise: Promise<boolean> | null = null;
+
+	const reportExtensionRuntimeOnce = (): Promise<boolean> => {
+		if (runtimeReportPromise) return runtimeReportPromise;
+
+		const reportPromise = reportCurrentExtensionRuntime()
+			.then(() => true)
+			.catch((error) => {
+				console.warn("[fuzzy] 拡張機能の実行情報をnative-hostへ保存できませんでした", error);
+				return false;
+			})
+			.finally(() => {
+				if (runtimeReportPromise === reportPromise) runtimeReportPromise = null;
+			});
+		runtimeReportPromise = reportPromise;
+		return reportPromise;
+	};
 
 	const checkLatestSyncEvent = async () => {
 		try {
@@ -83,9 +103,7 @@ export default defineBackground(() => {
 	const startNotificationMonitoring = () => {
 		startSyncNotificationMonitoring();
 		deadlineNotificationMonitor.start();
-		void reportCurrentExtensionRuntime().catch((error) => {
-			console.warn("[fuzzy] 拡張機能の実行情報をnative-hostへ保存できませんでした", error);
-		});
+		void reportExtensionRuntimeOnce();
 	};
 
 	browser.runtime.onInstalled.addListener(startNotificationMonitoring);
@@ -99,6 +117,10 @@ export default defineBackground(() => {
 	startNotificationMonitoring();
 
 	browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+		if (isExtensionRuntimeReportRequestMessage(message)) {
+			void reportExtensionRuntimeOnce().then((ok) => sendResponse({ ok }));
+			return true;
+		}
 		if (isRuleManagementRequestMessage(message)) {
 			void respondToRuleManagementRequest(getClient(), message).then(sendResponse);
 			return true;
