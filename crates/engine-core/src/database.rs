@@ -9,8 +9,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::types::SearchDocumentMetadata;
 use crate::{
-	EngineError, EngineResult, ExtensionRuntimeObservation, ExtensionRuntimeReport,
-	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION, SCHEMA_SQL,
+	is_compatible_extension_version, EngineError, EngineResult, ExtensionRecoveryState,
+	ExtensionRecoveryStatus, ExtensionRuntimeObservation, ExtensionRuntimeReport,
+	ExtensionSetupState, ExtensionSetupStatus, EXTENSION_RUNTIME_PROTOCOL_VERSION,
+	EXTENSION_RUNTIME_RECENT_SECONDS, SCHEMA_SQL,
 };
 
 mod backup;
@@ -19,13 +21,17 @@ mod learning;
 mod notifications;
 mod rules;
 mod saved_files;
+mod sync;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
+const SCHEMA_VERSION: i64 = 3;
 const EXTENSION_RUNTIME_MIGRATION_SQL: &str =
 	include_str!("../fixtures/migrations/0001_extension_runtime_observations.sql");
 const COURSE_FOLDER_NAMES_MIGRATION_SQL: &str =
 	include_str!("../fixtures/migrations/0002_course_folder_names.sql");
+const ASSIGNMENT_SYNC_MIGRATION_SQL: &str =
+	include_str!("../fixtures/migrations/0003_assignment_sync.sql");
 
 /// SQLite接続。接続時にFK有効化、スキーマ適用、マイグレーションを保証する。
 pub struct Database {
@@ -67,11 +73,36 @@ impl Database {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		}
 
+		let version = schema_version(&conn)?;
+		if version > SCHEMA_VERSION {
+			return Err(EngineError::Database {
+				message: format!(
+					"未対応のSQLiteスキーマ世代です（対応上限: {SCHEMA_VERSION}, 実際: {version}）。新しいバージョンのFuzzyで作成されたDBか確認してください"
+				),
+			});
+		}
+
 		// schema.sql適用済みの既存DBにも新しいテーブルを追加する。
 		conn.execute_batch(EXTENSION_RUNTIME_MIGRATION_SQL)
 			.map_err(db_err)?;
 		if table_exists(&conn, "courses")? && schema_version(&conn)? < 2 {
-			apply_schema(&mut conn, COURSE_FOLDER_NAMES_MIGRATION_SQL)?;
+			let has_academic_year = column_exists(&conn, "courses", "academic_year")?;
+			let has_folder_name_override = column_exists(&conn, "courses", "folder_name_override")?;
+			match (has_academic_year, has_folder_name_override) {
+				(false, false) => apply_schema(&mut conn, COURSE_FOLDER_NAMES_MIGRATION_SQL)?,
+				(true, true) => conn
+					.execute_batch("PRAGMA user_version = 2;")
+					.map_err(db_err)?,
+				_ => {
+					return Err(EngineError::Database {
+						message: "coursesテーブルの移行状態が不完全なため、安全に更新できません"
+							.to_string(),
+					});
+				}
+			}
+		}
+		if table_exists(&conn, "assignments")? && schema_version(&conn)? < 3 {
+			apply_schema(&mut conn, ASSIGNMENT_SYNC_MIGRATION_SQL)?;
 		}
 
 		Ok(Self { conn, path })
@@ -168,7 +199,7 @@ impl Database {
 		let Some(observation) = observation else {
 			return Ok(ExtensionSetupStatus::waiting());
 		};
-		let state = if observation.protocol_version == EXTENSION_RUNTIME_PROTOCOL_VERSION {
+		let state = if is_compatible_observation(&observation) {
 			ExtensionSetupState::Ready
 		} else {
 			ExtensionSetupState::Incompatible
@@ -177,6 +208,71 @@ impl Database {
 		Ok(ExtensionSetupStatus {
 			state,
 			observation: Some(observation),
+		})
+	}
+
+	/// 最新の保存済み応答から、セットアップ完了後の復旧状態を算出する。
+	pub fn extension_recovery_status(&self) -> EngineResult<ExtensionRecoveryStatus> {
+		let recent_modifier = format!("-{EXTENSION_RUNTIME_RECENT_SECONDS} seconds");
+		let mut statement = self
+			.conn
+			.prepare(
+				"WITH ranked_observations AS (
+					SELECT
+						installation_id,
+						extension_version,
+						protocol_version,
+						first_seen_at,
+						last_seen_at,
+						rowid AS source_rowid,
+						ROW_NUMBER() OVER (
+							PARTITION BY installation_id
+							ORDER BY julianday(last_seen_at) DESC, rowid DESC
+						) AS installation_rank
+					FROM extension_runtime_observations
+				)
+				SELECT
+					installation_id,
+					extension_version,
+					protocol_version,
+					first_seen_at,
+					last_seen_at,
+					julianday(last_seen_at) >= julianday('now', ?1)
+				FROM ranked_observations
+				WHERE installation_rank = 1
+				ORDER BY julianday(last_seen_at) DESC, source_rowid DESC",
+			)
+			.map_err(db_err)?;
+		let rows = statement
+			.query_map([recent_modifier], |row| {
+				Ok((observation_from_row(row)?, row.get::<_, bool>(5)?))
+			})
+			.map_err(db_err)?;
+		let observations = rows.collect::<Result<Vec<_>, _>>().map_err(db_err)?;
+		let Some((latest_observation, _)) = observations.first() else {
+			return Ok(ExtensionRecoveryStatus::missing());
+		};
+		if let Some((observation, _)) = observations
+			.iter()
+			.find(|(observation, recent)| is_compatible_observation(observation) && *recent)
+		{
+			return Ok(ExtensionRecoveryStatus {
+				state: ExtensionRecoveryState::Ready,
+				observation: Some(observation.clone()),
+				recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
+			});
+		}
+
+		let state = if !is_compatible_observation(latest_observation) {
+			ExtensionRecoveryState::Incompatible
+		} else {
+			ExtensionRecoveryState::Stale
+		};
+
+		Ok(ExtensionRecoveryStatus {
+			state,
+			observation: Some(latest_observation.clone()),
+			recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
 		})
 	}
 
@@ -239,17 +335,17 @@ impl Database {
 			.map_err(db_err)
 	}
 
-	/// 内部接続への参照。DB実装の結合テストで使用する。
-	#[cfg(test)]
-	pub(crate) fn conn(&self) -> &Connection {
-		&self.conn
-	}
-
 	/// 開発・テスト用のサンプルデータを投入する。
 	/// リリースビルドには含めず、実利用DBへ誤って投入できないようにする。
 	#[cfg(debug_assertions)]
 	pub fn apply_development_seed(&self) -> EngineResult<()> {
 		self.conn.execute_batch(crate::SEED_SQL).map_err(db_err)
+	}
+
+	/// 内部接続への参照。DB実装の結合テストで使用する。
+	#[cfg(test)]
+	pub(crate) fn conn(&self) -> &Connection {
+		&self.conn
 	}
 }
 
@@ -263,6 +359,11 @@ fn observation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtensionRu
 	})
 }
 
+fn is_compatible_observation(observation: &ExtensionRuntimeObservation) -> bool {
+	observation.protocol_version == EXTENSION_RUNTIME_PROTOCOL_VERSION
+		&& is_compatible_extension_version(&observation.extension_version)
+}
+
 fn schema_applied(conn: &Connection) -> EngineResult<bool> {
 	table_exists(conn, "app_settings")
 }
@@ -272,6 +373,19 @@ fn table_exists(conn: &Connection, table_name: &str) -> EngineResult<bool> {
 		.query_row(
 			"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
 			[table_name],
+			|row| row.get(0),
+		)
+		.map_err(db_err)?;
+	Ok(count > 0)
+}
+
+fn column_exists(conn: &Connection, table_name: &str, column_name: &str) -> EngineResult<bool> {
+	let count: i64 = conn
+		.query_row(
+			"SELECT count(*)
+			 FROM pragma_table_info(?1)
+			 WHERE name = ?2",
+			params![table_name, column_name],
 			|row| row.get(0),
 		)
 		.map_err(db_err)?;
@@ -372,6 +486,46 @@ mod tests {
 	}
 
 	#[test]
+	fn completed_schema_uses_current_version_and_enforces_duplicate_similarity() {
+		let database = Database::open_in_memory().unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
+		database
+			.conn()
+			.execute_batch(
+				"INSERT INTO files (
+					id, original_name, saved_path, size_bytes, hash_blake3
+				 ) VALUES (1, '資料.pdf', 'C:\\資料.pdf', 1, 'b3:test');
+				 INSERT INTO duplicate_groups (id, method) VALUES (1, 'similar');
+				 INSERT INTO duplicate_members (group_id, file_id, similarity)
+				 VALUES (1, 1, 0.75);",
+			)
+			.unwrap();
+
+		assert!(database
+			.conn()
+			.execute(
+				"UPDATE duplicate_members SET similarity = 1.1 WHERE file_id = 1",
+				[],
+			)
+			.is_err());
+	}
+
+	#[test]
+	fn unsupported_schema_version_is_rejected() {
+		let conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			 PRAGMA user_version = 99;",
+		)
+		.unwrap();
+
+		assert!(matches!(
+			Database::from_connection(conn, None),
+			Err(EngineError::Database { .. })
+		));
+	}
+
+	#[test]
 	fn migration_adds_extension_table_to_existing_database() {
 		let conn = Connection::open_in_memory().unwrap();
 		conn.execute_batch(
@@ -421,6 +575,57 @@ mod tests {
 
 		assert_eq!(values, (Some(2026), None));
 		assert_eq!(schema_version(database.conn()).unwrap(), 2);
+	}
+
+	#[test]
+	fn migration_accepts_version_one_database_that_already_has_course_folder_fields() {
+		let conn = Connection::open_in_memory().unwrap();
+		conn.execute_batch(
+			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			 CREATE TABLE courses (
+				id INTEGER PRIMARY KEY,
+				moodle_course_id TEXT NOT NULL UNIQUE,
+				name TEXT NOT NULL,
+				academic_year INTEGER,
+				term TEXT,
+				folder_name_override TEXT
+			 );
+			 PRAGMA user_version = 1;",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn, None).unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), 2);
+	}
+
+	#[test]
+	fn version_two_database_is_migrated_without_losing_assignments() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		let version_two_schema = SCHEMA_SQL
+			.lines()
+			.filter(|line| !line.contains("removed_at") && !line.contains("idx_assignments_active"))
+			.collect::<Vec<_>>()
+			.join("\n")
+			.replace("PRAGMA user_version = 3;", "PRAGMA user_version = 2;");
+		apply_schema(&mut conn, &version_two_schema).unwrap();
+		conn.execute_batch(
+			"INSERT INTO courses (id, moodle_course_id, name) VALUES (1, 'course-1', 'Course');
+			 INSERT INTO assignments (id, course_id, title, source)
+			 VALUES (1, 1, 'Task', 'moodle_dashboard');",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn, None).unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
+		let assignment: (String, Option<String>) = database
+			.conn()
+			.query_row(
+				"SELECT title, removed_at FROM assignments WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(assignment, ("Task".to_string(), None));
 	}
 
 	#[test]
@@ -523,8 +728,20 @@ mod tests {
 	}
 
 	#[test]
-	fn setup_status_reports_incompatible_protocol() {
+	fn setup_status_reports_incompatible_version_or_protocol() {
 		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.0.9", 1))
+			.unwrap();
+
+		assert_eq!(
+			database
+				.extension_setup_status_since("2000-01-01T00:00:00.000Z")
+				.unwrap()
+				.state,
+			ExtensionSetupState::Incompatible
+		);
+
 		database
 			.record_extension_runtime(&report("2.0.0", 99))
 			.unwrap();
@@ -562,6 +779,110 @@ mod tests {
 		drop(native_host_database);
 		drop(desktop_database);
 		let _ = std::fs::remove_dir_all(&directory);
+	}
+
+	#[test]
+	fn recovery_status_distinguishes_missing_recent_and_stale_observations() {
+		let database = Database::open_in_memory().unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Missing
+		);
+
+		database
+			.record_extension_runtime(&report("0.1.0", 1))
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Ready
+		);
+
+		database
+			.conn()
+			.execute(
+				"UPDATE extension_runtime_observations
+				 SET last_seen_at = '2000-01-01T00:00:00.000Z'",
+				[],
+			)
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Stale
+		);
+	}
+
+	#[test]
+	fn recovery_status_rejects_old_extension_or_protocol_version() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.0.9", 1))
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Incompatible
+		);
+
+		database
+			.record_extension_runtime(&report("0.2.0", 99))
+			.unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Incompatible
+		);
+	}
+
+	#[test]
+	fn compatible_update_or_reinstall_returns_recovery_to_ready() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.0.9", 1))
+			.unwrap();
+
+		let mut updated = report("0.2.0", 1);
+		database.record_extension_runtime(&updated).unwrap();
+		assert_eq!(
+			database.extension_recovery_status().unwrap().state,
+			ExtensionRecoveryState::Ready
+		);
+
+		updated.installation_id = "replacement-installation".to_string();
+		database.record_extension_runtime(&updated).unwrap();
+		let status = database.extension_recovery_status().unwrap();
+		assert_eq!(status.state, ExtensionRecoveryState::Ready);
+		assert_eq!(
+			status.observation.unwrap().installation_id,
+			"replacement-installation"
+		);
+	}
+
+	#[test]
+	fn recent_compatible_observation_wins_across_installations() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.1.0", 1))
+			.unwrap();
+		let mut incompatible = report("0.0.9", 1);
+		incompatible.installation_id = "other-browser-installation".to_string();
+		database.record_extension_runtime(&incompatible).unwrap();
+
+		let status = database.extension_recovery_status().unwrap();
+		assert_eq!(status.state, ExtensionRecoveryState::Ready);
+		assert_eq!(status.observation.unwrap().extension_version, "0.1.0");
+	}
+
+	#[test]
+	fn latest_observation_supersedes_older_version_for_the_same_installation() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.1.0", 1))
+			.unwrap();
+		database
+			.record_extension_runtime(&report("0.0.9", 1))
+			.unwrap();
+
+		let status = database.extension_recovery_status().unwrap();
+		assert_eq!(status.state, ExtensionRecoveryState::Incompatible);
+		assert_eq!(status.observation.unwrap().extension_version, "0.0.9");
 	}
 
 	#[test]

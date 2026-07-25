@@ -59,6 +59,42 @@ pub struct AssignmentRecord {
 	pub submitted: bool,
 }
 
+/// One assignment received from the Moodle acquisition pipeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignmentSyncInput {
+	pub id: i64,
+	pub course_id: i64,
+	pub title: String,
+	pub source: String,
+	pub due_at: Option<String>,
+	pub due_at_status: String,
+	pub submission_mode: String,
+	pub submitted: bool,
+}
+
+/// Aggregate result of one assignment synchronization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataSyncEventRecord {
+	pub id: i64,
+	pub synced_at: String,
+	pub trigger: String,
+	pub new_assignment_count: i64,
+	pub changed_assignment_count: i64,
+	pub removed_assignment_count: i64,
+}
+
+/// One changed field detected during assignment synchronization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignmentChangeRecord {
+	pub assignment_id: i64,
+	pub course_name: String,
+	pub title: String,
+	pub field: String,
+	pub old_value: Option<String>,
+	pub new_value: Option<String>,
+	pub detected_at: String,
+}
+
 /// ダッシュボードに表示する1コース分の集計。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CourseDashboardRecord {

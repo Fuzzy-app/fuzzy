@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use engine_core::{Database, ExtensionSetupStatus};
+use engine_core::{Database, ExtensionRecoveryStatus, ExtensionSetupStatus};
 use tauri::State;
 
 struct AppState {
@@ -21,6 +21,19 @@ fn get_extension_setup_status(
 		.map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_extension_recovery_status(
+	state: State<'_, AppState>,
+) -> Result<ExtensionRecoveryStatus, String> {
+	let database = state
+		.database
+		.lock()
+		.map_err(|_| "SQLiteの状態ロックを取得できませんでした".to_string())?;
+	database
+		.extension_recovery_status()
+		.map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 	let database = Database::open_default().expect("SQLiteデータベースを開けませんでした");
@@ -30,7 +43,10 @@ pub fn run() {
 			database: Mutex::new(database),
 		})
 		.plugin(tauri_plugin_opener::init())
-		.invoke_handler(tauri::generate_handler![get_extension_setup_status])
+		.invoke_handler(tauri::generate_handler![
+			get_extension_setup_status,
+			get_extension_recovery_status
+		])
 		.run(tauri::generate_context!())
 		.expect("error while running tauri application");
 }

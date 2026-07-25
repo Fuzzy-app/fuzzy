@@ -6,6 +6,7 @@ import "@fuzzy/shared/theme.css";
 import { classifyMoodlePage, resolveMoodleUiMode } from "../../lib/moodle/pageClassification";
 import { MOODLE_PAGE_SNAPSHOT_MESSAGE } from "../../lib/moodle/pageSnapshot";
 import { collectMoodlePageSnapshotWithNestedFolders } from "../../lib/moodle/snapshotCollector";
+import { requestExtensionRuntimeReport } from "../../lib/runtime/extensionRuntime";
 import { handleMoodleLoginPage, setupMoodleLogoutTracking } from "./loginAutomation";
 import { mountSavePanel } from "./savePanel";
 import { mountFuzzyShell } from "./shell";
@@ -23,6 +24,18 @@ export default defineContentScript({
 });
 
 function initializeMoodleContent(): void {
+	void requestExtensionRuntimeReport({
+		sendMessage: (message) => browser.runtime.sendMessage(message),
+	})
+		.then((reported) => {
+			if (!reported) {
+				console.warn("[fuzzy] Moodle表示時の拡張機能実行情報を保存できませんでした");
+			}
+		})
+		.catch((error) => {
+			console.warn("[fuzzy] backgroundへ拡張機能実行情報の再報告を要求できませんでした", error);
+		});
+
 	const pageKind = classifyMoodlePage(document, location.href);
 	const uiMode = resolveMoodleUiMode(pageKind);
 

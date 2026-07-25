@@ -9,8 +9,8 @@
 //! - [`index::IndexEngine`] — Tantivy を用いた全文索引の構築・検索
 //! - [`duplicate::DuplicateDetector`] — blake3 / simhash による重複・類似ファイル検出
 //!
-//! Phase1 の #38 でScanEngine、#39 でRuleEngine、#41でIndexEngineを実装済み。
-//! DuplicateDetector（#40）は後続issueで実装する。
+//! Phase1 の #38 でScanEngine、#39 でRuleEngine、#40でDuplicateDetector、
+//! #41でIndexEngineを実装済み。
 //!
 //! 【重要な設計制約】このクレートはファイルの自動移動・自動削除を一切行わない。
 //! すべて推薦・提示・警告のためのデータを返すに留め、実行はユーザー操作のみとする。
@@ -33,8 +33,10 @@ mod windows_names;
 pub use database::{resolve_db_path, Database};
 pub use error::{EngineError, EngineResult};
 pub use extension_runtime::{
+	is_compatible_extension_version, ExtensionRecoveryState, ExtensionRecoveryStatus,
 	ExtensionRuntimeObservation, ExtensionRuntimeReport, ExtensionSetupState, ExtensionSetupStatus,
-	EXTENSION_RUNTIME_PROTOCOL_VERSION,
+	EXTENSION_RUNTIME_PROTOCOL_VERSION, EXTENSION_RUNTIME_RECENT_SECONDS,
+	MINIMUM_COMPATIBLE_EXTENSION_VERSION,
 };
 
 /// SQLiteスキーマ定義（DDL）の正本。native-host が初回起動時に適用する（issue #36）。

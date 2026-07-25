@@ -10,6 +10,8 @@ export type { DuplicateGroupListItem } from "./generated/DuplicateGroupListItem"
 export type { DuplicateMethod } from "./generated/DuplicateMethod";
 export type { ExportDataRequest } from "./generated/ExportDataRequest";
 export type { ExportDataResult } from "./generated/ExportDataResult";
+export type { ExtensionRecoveryState } from "./generated/ExtensionRecoveryState";
+export type { ExtensionRecoveryStatus } from "./generated/ExtensionRecoveryStatus";
 export type { ExtensionRuntimeObservation } from "./generated/ExtensionRuntimeObservation";
 export type { ExtensionRuntimeReport } from "./generated/ExtensionRuntimeReport";
 export type { ExtensionSetupState } from "./generated/ExtensionSetupState";

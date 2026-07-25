@@ -258,10 +258,11 @@
 			<div class="response-icon error" aria-hidden="true">!</div>
 			<div>
 				<p class="section-label">更新が必要です</p>
-				<h2>拡張機能のバージョンに互換性がありません</h2>
+				<h2>現在の拡張機能はこのアプリに対応していません</h2>
 				<p>
-					バージョン {setupStatus.observation.extensionVersion} から応答がありましたが、通信仕様
-					{setupStatus.observation.protocolVersion} には対応していません。最新版を導入してください。
+					バージョン {setupStatus.observation.extensionVersion}（通信仕様
+					{setupStatus.observation
+						.protocolVersion}）から応答がありましたが、拡張機能バージョンまたは通信仕様に互換性がありません。最新版を導入してください。
 				</p>
 			</div>
 		{:else}

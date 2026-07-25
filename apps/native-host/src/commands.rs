@@ -17,11 +17,12 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::api_types::{
-	AppendSaveFileChunkRequest, Assignment, BeginSaveFilesRequest, CheckSimilarFilesRequest,
-	CourseFolderNameResolution, DashboardSummary, DuplicateGroupListItem, EmptyRequest,
-	ExportDataRequest, ExportDataResult, ExtractZipRequest, ExtractZipResult, GetDeadlinesRequest,
-	ImportDataRequest, ImportDataResult, NotificationRule, NotificationRuleUpdateResult, OkResult,
-	RuleSet, RuleViolationListItem, SaveFilesRequest, SaveSuggestion, SearchRequest, SearchResult,
+	AppendSaveFileChunkRequest, Assignment, AssignmentChange, BeginSaveFilesRequest,
+	CheckSimilarFilesRequest, CourseFolderNameResolution, DashboardSummary, DataSyncEvent,
+	DuplicateGroupListItem, EmptyRequest, ExportDataRequest, ExportDataResult, ExtractZipRequest,
+	ExtractZipResult, GetAssignmentChangesRequest, GetDeadlinesRequest, ImportDataRequest,
+	ImportDataResult, NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet,
+	RuleViolationListItem, SaveFilesRequest, SaveSuggestion, SearchRequest, SearchResult,
 	SimilarFileMatch, SuggestSavePathRequest, UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest,
 	UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
@@ -38,6 +39,8 @@ pub fn dispatch_with_services(
 	request: Request,
 ) -> Response {
 	match request.command.as_str() {
+		"getLatestSyncEvent" => get_latest_sync_event(database, request),
+		"getAssignmentChanges" => get_assignment_changes(database, request),
 		"search" => search(database, index_engine, request),
 		"exportData" => export_data(database, request),
 		"importData" => import_data(database, index_engine, request),
@@ -89,6 +92,50 @@ pub fn dispatch_with_file_transfers(
 			)
 		}
 	}
+}
+
+fn get_latest_sync_event(database: &Database, request: Request) -> Response {
+	let payload_is_empty = request.payload.is_null()
+		|| matches!(&request.payload, serde_json::Value::Object(value) if value.is_empty());
+	if !payload_is_empty {
+		return Response::err(
+			Some(request.id),
+			"INVALID_REQUEST",
+			"同期履歴の取得条件を解釈できません",
+		);
+	}
+
+	match database.latest_sync_event() {
+		Ok(event) => respond(request.id, Ok(event.map(DataSyncEvent::from))),
+		Err(error) => engine_error_response(request.id, error),
+	}
+}
+
+fn get_assignment_changes(database: &Database, request: Request) -> Response {
+	let payload = match serde_json::from_value::<GetAssignmentChangesRequest>(request.payload) {
+		Ok(payload) => payload,
+		Err(_) => {
+			return Response::err(
+				Some(request.id),
+				"INVALID_REQUEST",
+				"課題変更履歴の取得条件を解釈できません",
+			);
+		}
+	};
+
+	let changes = match database.assignment_changes(payload.since_sync_event_id) {
+		Ok(changes) => changes,
+		Err(error) => return engine_error_response(request.id, error),
+	};
+	let changes = match changes
+		.into_iter()
+		.map(AssignmentChange::try_from)
+		.collect::<Result<Vec<_>, _>>()
+	{
+		Ok(changes) => changes,
+		Err(error) => return engine_error_response(request.id, error),
+	};
+	respond(request.id, Ok(changes))
 }
 
 fn search(database: &Database, index_engine: &dyn IndexEngine, request: Request) -> Response {
@@ -827,6 +874,34 @@ mod tests {
 
 		drop(database);
 		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn service_dispatcher_preserves_sync_commands_after_merge() {
+		let mut database = seeded_database();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let latest = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request("getLatestSyncEvent", serde_json::json!({})),
+		);
+		assert!(latest.ok, "{:?}", latest.error);
+		assert!(latest.data.unwrap()["id"].as_i64().is_some());
+
+		let changes = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"getAssignmentChanges",
+				serde_json::json!({ "sinceSyncEventId": null }),
+			),
+		);
+		assert!(changes.ok, "{:?}", changes.error);
+		assert!(changes.data.unwrap().as_array().is_some());
 	}
 
 	#[test]
