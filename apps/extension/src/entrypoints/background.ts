@@ -1,18 +1,11 @@
-import {
-	type CheckSimilarFilesRequest,
-	type DataSyncEvent,
-	type ExtractZipRequest,
-	type FuzzyApiClient,
-	type NotificationRuleInput,
-	type SaveFilesRequest,
-	type SuggestSavePathRequest,
-	createApiClient,
-} from "@fuzzy/shared";
+import { type DataSyncEvent, type FuzzyApiClient, createApiClient } from "@fuzzy/shared";
 import {
 	type FuzzyApiRequestMessage,
 	type FuzzyApiResponseMessage,
 	isFuzzyApiRequestMessage,
+	toBackgroundApiError,
 } from "../lib/api/backgroundApi";
+import { callBackgroundApi } from "../lib/api/backgroundDispatch";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
 	isRuleManagementRequestMessage,
@@ -121,29 +114,7 @@ async function respondToApiRequest(
 	} catch (error) {
 		return {
 			ok: false,
-			error: error instanceof Error ? error.message : "APIの呼び出しに失敗しました",
+			error: toBackgroundApiError(error),
 		};
-	}
-}
-
-// リクエスト本文はメッセージ境界を越えるため実行時には型情報が失われている。
-// メソッド名で分岐し、各APIの想定型として渡す（内容の検証はnative-host側の契約に委ねる）。
-async function callBackgroundApi(
-	client: FuzzyApiClient,
-	message: FuzzyApiRequestMessage,
-): Promise<unknown> {
-	switch (message.method) {
-		case "suggestSavePath":
-			return client.suggestSavePath(message.request as SuggestSavePathRequest);
-		case "checkSimilarFiles":
-			return client.checkSimilarFiles(message.request as CheckSimilarFilesRequest);
-		case "saveFiles":
-			return client.saveFiles(message.request as SaveFilesRequest);
-		case "extractZip":
-			return client.extractZip(message.request as ExtractZipRequest);
-		case "getNotificationRules":
-			return client.getNotificationRules();
-		case "updateNotificationRules":
-			return client.updateNotificationRules(message.request as NotificationRuleInput[]);
 	}
 }

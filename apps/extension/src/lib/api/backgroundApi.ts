@@ -19,12 +19,16 @@ import type {
 	SaveSuggestion,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	UpdateCourseFolderNameRequest,
+	UpdateCourseFolderNameResult,
 } from "@fuzzy/shared";
+import { ApiError } from "@fuzzy/shared";
 
 export const FUZZY_API_MESSAGE_TYPE = "fuzzy:apiRequest";
 
 const BACKGROUND_API_METHODS = [
 	"suggestSavePath",
+	"updateCourseFolderName",
 	"checkSimilarFiles",
 	"saveFiles",
 	"extractZip",
@@ -42,7 +46,7 @@ export interface FuzzyApiRequestMessage {
 
 export type FuzzyApiResponseMessage<T = unknown> =
 	| { ok: true; data: T; mode: FuzzyApiClient["mode"] }
-	| { ok: false; error: string };
+	| { ok: false; error: { code: string; message: string } };
 
 export function isFuzzyApiRequestMessage(message: unknown): message is FuzzyApiRequestMessage {
 	if (typeof message !== "object" || message === null) return false;
@@ -73,6 +77,12 @@ export class BackgroundApiClient implements BackgroundApi {
 		return this.#call("suggestSavePath", request);
 	}
 
+	updateCourseFolderName(
+		request: UpdateCourseFolderNameRequest,
+	): Promise<UpdateCourseFolderNameResult> {
+		return this.#call("updateCourseFolderName", request);
+	}
+
 	checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {
 		return this.#call("checkSimilarFiles", request);
 	}
@@ -100,9 +110,20 @@ export class BackgroundApiClient implements BackgroundApi {
 			| undefined;
 
 		if (!response) throw new Error("backgroundからの応答がありません");
-		if (!response.ok) throw new Error(response.error);
+		if (!response.ok) throw new ApiError(response.error.code, response.error.message);
 
 		this.#mode = response.mode;
 		return response.data;
 	}
+}
+
+/**
+ * background境界で内部例外の生文字列をcontent scriptへ返さない。
+ * ApiErrorの公開コードだけを保ち、それ以外は固定文言へ畳み込む。
+ */
+export function toBackgroundApiError(error: unknown): { code: string; message: string } {
+	if (error instanceof ApiError) {
+		return { code: error.code, message: error.message };
+	}
+	return { code: "INTERNAL", message: "APIの呼び出しに失敗しました" };
 }

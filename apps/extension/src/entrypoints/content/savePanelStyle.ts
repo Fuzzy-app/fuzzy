@@ -560,6 +560,44 @@ export const SAVE_PANEL_STYLE = `
 			font-size: 11px;
 		}
 
+		.fuzzy-course-folder-editor,
+		.fuzzy-course-folder-warnings {
+			display: grid;
+			gap: 7px;
+		}
+
+		.fuzzy-course-folder-warnings p {
+			margin: 0;
+			border-radius: 8px;
+			background: var(--fuzzy-color-warning-soft);
+			padding: 7px 8px;
+			color: var(--fuzzy-color-warning);
+			font-size: 11px;
+			font-weight: 700;
+			line-height: 1.45;
+		}
+
+		.fuzzy-course-folder-input {
+			display: grid;
+			gap: 4px;
+		}
+
+		.fuzzy-course-folder-actions {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 8px;
+		}
+
+		.fuzzy-course-folder-actions button {
+			min-height: 32px;
+			font-size: 11px;
+		}
+
+		.fuzzy-course-folder-help {
+			color: var(--fuzzy-color-text-muted);
+			font-size: 10px;
+		}
+
 		/* 類似ファイル確認（issue51） */
 		.fuzzy-similar-list { display: grid; gap: 7px; }
 		.fuzzy-similar-row {

@@ -26,7 +26,10 @@ export interface MoodleAssignmentHint {
 }
 
 export interface MoodlePageSnapshot {
+	moodleCourseId: string | null;
 	courseName: string | null;
+	academicYear: number | null;
+	term: string | null;
 	sectionTitle: string | null;
 	breadcrumbs: string[];
 	files: MoodleFileLink[];
@@ -90,7 +93,10 @@ export function collectMoodlePageSnapshot(root: Document | Element = document): 
 	const dashboardText = extractDashboardText(root);
 
 	return {
+		moodleCourseId: extractMoodleCourseId(root),
 		courseName: extractCourseName(root),
+		academicYear: extractAcademicYear(root),
+		term: extractAcademicTerm(root),
 		sectionTitle: extractSectionTitle(root),
 		breadcrumbs: extractBreadcrumbs(root),
 		files: extractFileLinks(root),
@@ -102,6 +108,53 @@ export function collectMoodlePageSnapshot(root: Document | Element = document): 
 		],
 		collectedAt: new Date().toISOString(),
 	};
+}
+
+/** MoodleのDOM・course/view.php URLから、年度をまたいでも安定したコースIDを取得する。 */
+export function extractMoodleCourseId(root: Document | Element = document): string | null {
+	for (const element of [
+		isDocumentRoot(root) ? root.documentElement : root,
+		isDocumentRoot(root) ? root.body : root.ownerDocument.body,
+		root.querySelector("[data-courseid], [data-course-id]"),
+	]) {
+		const value =
+			element?.getAttribute("data-courseid") ?? element?.getAttribute("data-course-id") ?? null;
+		if (value && /^[A-Za-z0-9._:-]{1,128}$/.test(value)) return value;
+	}
+
+	const baseUrl = safeUrl(getBaseUri(root));
+	if (baseUrl && /\/course\/view\.php$/i.test(baseUrl.pathname)) {
+		const value = baseUrl.searchParams.get("id");
+		if (value && /^[A-Za-z0-9._:-]{1,128}$/.test(value)) return value;
+	}
+	return null;
+}
+
+/** 年度はMoodle文脈から独立して読み取り、term文字列の派生値として扱わない。 */
+export function extractAcademicYear(root: Document | Element = document): number | null {
+	const structured = root.querySelector("[data-academic-year]")?.getAttribute("data-academic-year");
+	const candidates = [structured, ...extractBreadcrumbs(root), extractCourseName(root)];
+	for (const candidate of candidates) {
+		const year = Number.parseInt(
+			candidate?.match(/(?:^|\D)((?:19|20)\d{2})(?:\D|$)/)?.[1] ?? "",
+			10,
+		);
+		if (year >= 1900 && year <= 9999) return year;
+	}
+	return null;
+}
+
+/** Moodleが表示する学期ラベルを加工せず、年度とは別フィールドで返す。 */
+export function extractAcademicTerm(root: Document | Element = document): string | null {
+	const structured = normalizeText(
+		root.querySelector("[data-academic-term]")?.getAttribute("data-academic-term"),
+	);
+	if (structured) return structured;
+	return (
+		[...extractBreadcrumbs(root), extractCourseName(root) ?? ""].find((value) =>
+			/(?:前期|後期|通年|第[12一二]学期|spring|fall|autumn|semester)/i.test(value),
+		) ?? null
+	);
 }
 
 export function extractCourseName(root: Document | Element = document): string | null {
@@ -476,7 +529,11 @@ function safeUrl(url: string): URL | null {
 }
 
 function getBaseUri(root: Document | Element): string {
-	return root instanceof Document ? root.baseURI : root.ownerDocument.baseURI;
+	return isDocumentRoot(root) ? root.baseURI : root.ownerDocument.baseURI;
+}
+
+function isDocumentRoot(root: Document | Element): root is Document {
+	return root.nodeType === 9;
 }
 
 function textOf(element: Element | null): string {

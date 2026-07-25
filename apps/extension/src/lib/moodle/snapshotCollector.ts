@@ -35,7 +35,10 @@ export interface MimeHintResolutionOptions {
 
 export function createEmptyMoodlePageSnapshot(): MoodlePageSnapshot {
 	return {
+		moodleCourseId: null,
 		courseName: null,
+		academicYear: null,
+		term: null,
 		sectionTitle: null,
 		breadcrumbs: [],
 		files: [],

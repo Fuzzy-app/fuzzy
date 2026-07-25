@@ -1,4 +1,5 @@
 import {
+	type CourseFolderNameResolution,
 	type FuzzyApiClient,
 	type SaveSuggestion,
 	canonicalWindowsPath,
@@ -32,7 +33,10 @@ export async function loadFileSuggestions(
 		snapshot.files.map(async (file) => {
 			const suggestions = await api.suggestSavePath({
 				course: {
+					moodleCourseId: snapshot.moodleCourseId,
 					name: snapshot.courseName,
+					academicYear: snapshot.academicYear,
+					term: snapshot.term,
 					sectionTitle: snapshot.sectionTitle,
 					breadcrumbs: snapshot.breadcrumbs,
 				},
@@ -98,6 +102,29 @@ export function saveRootFromSuggestions(suggestions: FileSuggestions): string | 
 		}
 	}
 	return null;
+}
+
+/**
+ * 全資料の提案が同じコース解決結果を参照している場合だけ編集対象として返す。
+ * 複数コースが混ざるページで誤ったコースIDを更新しないための境界。
+ */
+export function courseFolderFromSuggestions(
+	suggestions: FileSuggestions,
+): CourseFolderNameResolution | null {
+	const resolutions = [...suggestions.values()]
+		.map((items) => items[0]?.courseFolder)
+		.filter((item): item is CourseFolderNameResolution => Boolean(item));
+	if (resolutions.length === 0) return null;
+
+	const first = resolutions[0] as CourseFolderNameResolution;
+	if (
+		resolutions.some(
+			(item) => item.courseId !== first.courseId || item.folderName !== first.folderName,
+		)
+	) {
+		return null;
+	}
+	return first;
 }
 
 export function fileId(file: MoodleFileLink): string {

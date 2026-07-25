@@ -1,11 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import {
+	collectMoodlePageSnapshot,
 	extractFileLinks,
 	resolveMoodleActivityMimeHint,
 } from "../../apps/extension/src/lib/moodle/pageSnapshot";
 
 describe("Moodle資料のDOM解析", () => {
+	test("安定コースID・年度・学期・生のコース名を独立した文脈として収集する", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="course-412">
+				<body>
+					<nav><ol class="breadcrumb"><li class="breadcrumb-item">2026前期</li></ol></nav>
+					<main><div data-academic-year="2026" data-academic-term="2026前期"></div>
+						<h1>データベース（担当: 山田）</h1>
+					</main>
+				</body>
+			</html>
+		`);
+		const snapshot = collectMoodlePageSnapshot(document);
+		expect(snapshot.moodleCourseId).toBe("course-412");
+		expect(snapshot.courseName).toBe("データベース（担当: 山田）");
+		expect(snapshot.academicYear).toBe(2026);
+		expect(snapshot.term).toBe("2026前期");
+	});
+
 	test("未認識のバッジでもMP3・EXEアイコンから種別を推定する", () => {
 		expect(
 			resolveMoodleActivityMimeHint(
