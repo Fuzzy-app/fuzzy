@@ -27,6 +27,7 @@ pub mod scan;
 pub mod section;
 pub mod types;
 
+mod folder_name_notes;
 mod windows_names;
 
 pub use database::{resolve_db_path, Database};

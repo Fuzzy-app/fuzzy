@@ -71,7 +71,11 @@ describe("資料別の保存計画", () => {
 			selectedIds,
 			suggestions,
 			selectedPaths,
-			{ path: `${ROOT}\\${manualRelativePath}`, relativePath: manualRelativePath },
+			{
+				path: `${ROOT}\\${manualRelativePath}`,
+				relativePath: manualRelativePath,
+				courseId: 2,
+			},
 		);
 		expect(manualGroups).toHaveLength(1);
 		expect(manualGroups[0]?.files).toHaveLength(2);
@@ -141,6 +145,15 @@ describe("資料別の保存計画", () => {
 				new Map([
 					["1", [first]],
 					["2", [second]],
+				]),
+			),
+		).toBeNull();
+
+		expect(
+			courseFolderFromSuggestions(
+				new Map([
+					["1", [first]],
+					["2", []],
 				]),
 			),
 		).toBeNull();

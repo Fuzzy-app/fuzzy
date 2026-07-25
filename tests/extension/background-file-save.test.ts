@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { FuzzyApiClient, SaveFilesRequest } from "@fuzzy/shared";
-import { saveMoodleFilesFromBackground } from "../../apps/extension/src/lib/api/backgroundFileSave";
+import {
+	checkMoodleFileFromBackground,
+	saveMoodleFilesFromBackground,
+} from "../../apps/extension/src/lib/api/backgroundFileSave";
 
 describe("Moodle資料保存のbackground境界", () => {
 	test("取得成功分だけをnative clientへ渡し、失敗分を結果へ残す", async () => {
@@ -16,6 +19,7 @@ describe("Moodle資料保存のbackground境界", () => {
 			client,
 			{
 				targetPath: "C:\\save",
+				courseId: 2,
 				files: [
 					createFile("1", "https://moodle.example/mod/resource/view.php?id=1"),
 					createFile("2", "https://outside.example/mod/resource/view.php?id=2"),
@@ -51,7 +55,11 @@ describe("Moodle資料保存のbackground境界", () => {
 		} as Pick<FuzzyApiClient, "mode" | "saveFiles">;
 		const response = await saveMoodleFilesFromBackground(
 			client,
-			{ targetPath: "C:\\save", files: [createFile("1", "https://moodle.example/file.docx")] },
+			{
+				targetPath: "C:\\save",
+				courseId: 2,
+				files: [createFile("1", "https://moodle.example/file.docx")],
+			},
 			"https://moodle.example",
 			{
 				fetcher: (async () => {
@@ -64,6 +72,32 @@ describe("Moodle資料保存のbackground境界", () => {
 		expect(fetched).toBe(false);
 		expect(response.failedFiles).toEqual([]);
 		expect(response.savedFileIds).toEqual(["1"]);
+	});
+
+	test("downloads file content before asking the native host for similar files", async () => {
+		let capturedContent: string | undefined;
+		const client = {
+			mode: "native" as const,
+			async checkSimilarFiles(request: { contentBase64?: string }) {
+				capturedContent = request.contentBase64;
+				return [];
+			},
+		} as unknown as Pick<FuzzyApiClient, "mode" | "checkSimilarFiles">;
+
+		await checkMoodleFileFromBackground(
+			client,
+			{ fileMeta: createFile("1", "https://moodle.example/file.pdf") },
+			"https://moodle.example",
+			{
+				fetcher: (async () =>
+					new Response(new Uint8Array([1, 2, 3, 4]), {
+						status: 200,
+						headers: { "content-type": "application/pdf" },
+					})) as unknown as typeof fetch,
+			},
+		);
+
+		expect(capturedContent).toBe("AQIDBA==");
 	});
 });
 

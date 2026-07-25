@@ -16,12 +16,14 @@ export interface SaveDestinationGroup {
 	key: string;
 	path: string;
 	relativePath: string;
+	courseId: number | null;
 	files: MoodleFileLink[];
 }
 
 interface ManualDestination {
 	path: string;
 	relativePath: string;
+	courseId: number | null;
 }
 
 /** 資料ごとに保存先候補を取得する。先頭資料だけで全件を代表させない。 */
@@ -71,10 +73,18 @@ export function buildSaveDestinationGroups(
 		const destination = manualDestination ?? selectedDestination(file, suggestions, selectedPaths);
 		if (!destination) continue;
 		const path = normalizeWindowsPath(destination.path);
-		const key = canonicalWindowsPath(path);
+		const key = `${destination.courseId ?? "none"}:${canonicalWindowsPath(path)}`;
 		const existing = groups.get(key);
 		if (existing) existing.files.push(file);
-		else groups.set(key, { key, path, relativePath: destination.relativePath, files: [file] });
+		else {
+			groups.set(key, {
+				key,
+				path,
+				relativePath: destination.relativePath,
+				courseId: destination.courseId,
+				files: [file],
+			});
+		}
 	}
 	return [...groups.values()];
 }
@@ -114,7 +124,7 @@ export function courseFolderFromSuggestions(
 	const resolutions = [...suggestions.values()]
 		.map((items) => items[0]?.courseFolder)
 		.filter((item): item is CourseFolderNameResolution => Boolean(item));
-	if (resolutions.length === 0) return null;
+	if (resolutions.length === 0 || resolutions.length !== suggestions.size) return null;
 
 	const first = resolutions[0] as CourseFolderNameResolution;
 	if (
@@ -164,5 +174,6 @@ function selectedDestination(
 	return {
 		path,
 		relativePath: suggestion?.relativePath ?? normalizeWindowsPath(path),
+		courseId: suggestion?.courseFolder.courseId ?? null,
 	};
 }

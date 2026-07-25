@@ -1,19 +1,49 @@
 //! Native Messagingコマンドの入力検証・SQLite呼び出し・API DTO変換。
 
-use engine_core::rule::DefaultRuleEngine;
+use std::io::Write;
+use std::path::Path;
+
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use engine_core::duplicate::{
+	DefaultDuplicateDetector, DuplicateDetector, DEFAULT_SIMILARITY_THRESHOLD,
+};
+use engine_core::index::IndexEngine;
+use engine_core::rule::{DefaultRuleEngine, RuleEngine};
+use engine_core::section::parse_section_name;
+use engine_core::types::RuleContext;
 use engine_core::{Database, EngineError, EngineResult, ExtensionRuntimeReport};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::api_types::{
-	AppendSaveFileChunkRequest, Assignment, BeginSaveFilesRequest, CourseFolderNameResolution,
-	DashboardSummary, DuplicateGroupListItem, EmptyRequest, GetDeadlinesRequest, NotificationRule,
-	NotificationRuleUpdateResult, OkResult, RuleSet, RuleViolationListItem, SaveFilesRequest,
-	UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest,
-	UpdateGlobalRuleRequest, UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
+	AppendSaveFileChunkRequest, Assignment, BeginSaveFilesRequest, CheckSimilarFilesRequest,
+	CourseFolderNameResolution, DashboardSummary, DuplicateGroupListItem, EmptyRequest,
+	ExportDataRequest, ExportDataResult, ExtractZipRequest, ExtractZipResult, GetDeadlinesRequest,
+	ImportDataRequest, ImportDataResult, NotificationRule, NotificationRuleUpdateResult, OkResult,
+	RuleSet, RuleViolationListItem, SaveFilesRequest, SaveSuggestion, SearchRequest, SearchResult,
+	SimilarFileMatch, SuggestSavePathRequest, UpdateCourseFolderNameRequest,
+	UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest,
+	UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
 };
-use crate::file_transfer::FileTransferManager;
+use crate::file_transfer::{extract_zip_archive, FileTransferManager, MAX_FILE_BYTES};
 use crate::protocol::{Request, Response};
+
+const DEFAULT_SEARCH_LIMIT: usize = 50;
+
+pub fn dispatch_with_services(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	file_transfers: &mut FileTransferManager,
+	request: Request,
+) -> Response {
+	match request.command.as_str() {
+		"search" => search(database, index_engine, request),
+		"exportData" => export_data(database, request),
+		"importData" => import_data(database, index_engine, request),
+		_ => dispatch_with_file_transfers(database, file_transfers, request),
+	}
+}
 
 /// コマンド名に応じて処理を振り分ける。
 #[cfg(test)]
@@ -30,9 +60,12 @@ pub fn dispatch_with_file_transfers(
 	match request.command.as_str() {
 		"ping" => ping(request.id),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
+		"suggestSavePath" => suggest_save_path(database, request),
+		"checkSimilarFiles" => check_similar_files(database, request),
 		"beginSaveFiles" => begin_save_files(database, file_transfers, request),
 		"appendSaveFileChunk" => append_save_file_chunk(file_transfers, request),
 		"saveFiles" => save_files(database, file_transfers, request),
+		"extractZip" => extract_zip(database, request),
 		"updateCourseFolderName" => update_course_folder_name(database, request),
 		"getDashboard" => get_dashboard(database, request),
 		"getDeadlines" => get_deadlines(database, request),
@@ -56,6 +89,227 @@ pub fn dispatch_with_file_transfers(
 			)
 		}
 	}
+}
+
+fn search(database: &Database, index_engine: &dyn IndexEngine, request: Request) -> Response {
+	let payload = match parse_payload::<SearchRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = index_engine
+		.search(&payload.query, DEFAULT_SEARCH_LIMIT)
+		.and_then(|hits| {
+			hits.into_iter()
+				.filter_map(|hit| match database.search_document_metadata(hit.file_id) {
+					Ok(Some(metadata)) => Some(Ok(SearchResult {
+						file_id: metadata.file_id,
+						file_name: metadata.file_name,
+						course_name: metadata.course_name,
+						snippet: hit.snippet,
+						page: hit.page,
+						score: hit.score,
+					})),
+					Ok(None) => None,
+					Err(error) => Some(Err(error)),
+				})
+				.collect::<EngineResult<Vec<_>>>()
+		});
+	respond(request.id, result)
+}
+
+fn export_data(database: &Database, request: Request) -> Response {
+	let payload = match parse_payload::<ExportDataRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	if payload.file_path.trim().is_empty() {
+		return engine_error_response(
+			request.id,
+			EngineError::InvalidInput {
+				field: "filePath".to_string(),
+				reason: "エクスポート先を指定してください".to_string(),
+			},
+		);
+	}
+	respond(
+		request.id,
+		database
+			.export_to(Path::new(&payload.file_path))
+			.map(|()| ExportDataResult {
+				file_path: payload.file_path,
+			}),
+	)
+}
+
+fn import_data(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<ImportDataRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	if payload.file_path.trim().is_empty() {
+		return engine_error_response(
+			request.id,
+			EngineError::InvalidInput {
+				field: "filePath".to_string(),
+				reason: "インポート元を指定してください".to_string(),
+			},
+		);
+	}
+	let result = database
+		.import_from(Path::new(&payload.file_path))
+		.and_then(|()| {
+			index_engine.clear()?;
+			Ok(ImportDataResult {
+				ok: true,
+				reindex_required: true,
+			})
+		});
+	respond(request.id, result)
+}
+
+fn suggest_save_path(database: &mut Database, request: Request) -> Response {
+	let payload = match parse_payload::<SuggestSavePathRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = (|| {
+		let course = database.resolve_course_context(
+			payload.course.moodle_course_id.as_deref(),
+			payload.course.name.as_deref(),
+			payload.course.academic_year,
+			payload.course.term.as_deref(),
+		)?;
+		let course_folder = database
+			.load_course_folder_resolutions()?
+			.into_iter()
+			.find(|folder| folder.course_id == course.course_id)
+			.ok_or_else(|| EngineError::NotFound {
+				entity: "コース保存名".to_string(),
+				id: course.course_id.to_string(),
+			})?;
+		let rules = database.load_rule_set()?;
+		let base_folder = database.base_folder_path()?;
+		let file_name = payload
+			.file_meta
+			.as_ref()
+			.map(|file| file.title.trim())
+			.filter(|name| !name.is_empty())
+			.unwrap_or("資料");
+		let section_title = payload
+			.file_meta
+			.as_ref()
+			.and_then(|file| file.section_title.as_deref())
+			.or(payload.course.section_title.as_deref());
+		let context = RuleContext {
+			course_id: Some(course.course_id),
+			course_name: Some(course_folder.folder_name.clone()),
+			year: course.academic_year.map(|year| year.to_string()),
+			term: course.term,
+			assignment: None,
+			section: section_title
+				.and_then(parse_section_name)
+				.and_then(|section| section.number)
+				.map(|number| number.to_string()),
+		};
+		let relative_path = DefaultRuleEngine.suggest_save_path(file_name, &context, &rules)?;
+		let path = base_folder.join(&relative_path);
+		Ok(vec![SaveSuggestion {
+			path: path.to_string_lossy().into_owned(),
+			relative_path,
+			confidence: 0.92,
+			course_folder: course_folder.into(),
+		}])
+	})();
+	respond(request.id, result)
+}
+
+fn check_similar_files(database: &Database, request: Request) -> Response {
+	let payload = match parse_payload::<CheckSimilarFilesRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = (|| {
+		let content = payload
+			.content_base64
+			.ok_or_else(|| EngineError::InvalidInput {
+				field: "contentBase64".to_string(),
+				reason: "保存前照合には取得済みファイル内容が必要です".to_string(),
+			})?;
+		let bytes = STANDARD
+			.decode(content)
+			.map_err(|_| EngineError::InvalidInput {
+				field: "contentBase64".to_string(),
+				reason: "Base64データが不正です".to_string(),
+			})?;
+		if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
+			return Err(EngineError::InvalidInput {
+				field: "contentBase64".to_string(),
+				reason: "ファイルサイズが許容範囲外です".to_string(),
+			});
+		}
+		let mut temporary = tempfile::NamedTempFile::new().map_err(EngineError::Io)?;
+		temporary.write_all(&bytes).map_err(EngineError::Io)?;
+		let detector = DefaultDuplicateDetector::new(database.load_file_fingerprints()?);
+		let matches = detector.find_similar(temporary.path(), DEFAULT_SIMILARITY_THRESHOLD)?;
+		database.similar_file_records(&matches).map(|records| {
+			records
+				.into_iter()
+				.map(|record| SimilarFileMatch {
+					file_id: record.file_id,
+					original_name: record.original_name,
+					similarity: record.similarity,
+				})
+				.collect::<Vec<_>>()
+		})
+	})();
+	respond(request.id, result)
+}
+
+fn extract_zip(database: &Database, request: Request) -> Response {
+	let payload = match parse_payload::<ExtractZipRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = (|| {
+		let file_id = payload
+			.file_meta
+			.moodle_file_id
+			.as_deref()
+			.unwrap_or(&payload.file_meta.url);
+		let source = database.saved_file_path_by_moodle_id(file_id)?;
+		let target = std::fs::canonicalize(Path::new(&payload.target_path)).map_err(|_| {
+			EngineError::InvalidInput {
+				field: "targetPath".to_string(),
+				reason: "保存先を確認できません".to_string(),
+			}
+		})?;
+		let source_parent = source
+			.parent()
+			.and_then(|parent| std::fs::canonicalize(parent).ok())
+			.ok_or_else(|| EngineError::InvalidInput {
+				field: "fileMeta".to_string(),
+				reason: "保存済みZIPの場所を確認できません".to_string(),
+			})?;
+		if source_parent != target {
+			return Err(EngineError::InvalidInput {
+				field: "fileMeta".to_string(),
+				reason: "指定した保存先にZIPがありません".to_string(),
+			});
+		}
+		let base_folder = database.base_folder_path()?;
+		extract_zip_archive(
+			&base_folder,
+			&source,
+			&payload.destination_path,
+			payload.flatten,
+		)
+		.map(|extracted_paths| ExtractZipResult { extracted_paths })
+	})();
+	respond(request.id, result)
 }
 
 fn begin_save_files(
@@ -96,9 +350,9 @@ fn save_files(
 		Ok(payload) => payload,
 		Err(response) => return response,
 	};
-	let result = database
-		.base_folder_path()
-		.and_then(|base_folder| file_transfers.commit(&base_folder, &payload.transfer_id));
+	let result = database.base_folder_path().and_then(|base_folder| {
+		file_transfers.commit(database, &base_folder, &payload.transfer_id)
+	});
 	respond(request.id, result)
 }
 
@@ -321,6 +575,37 @@ fn ping(id: String) -> Response {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use engine_core::types::SearchHit;
+	use std::time::{SystemTime, UNIX_EPOCH};
+
+	#[derive(Default)]
+	struct TestIndexEngine {
+		clear_count: usize,
+	}
+
+	impl IndexEngine for TestIndexEngine {
+		fn index_file(
+			&mut self,
+			_database: &Database,
+			_file_id: i64,
+			_path: &Path,
+		) -> EngineResult<()> {
+			Ok(())
+		}
+
+		fn remove_file(&mut self, _database: &Database, _file_id: i64) -> EngineResult<()> {
+			Ok(())
+		}
+
+		fn clear(&mut self) -> EngineResult<()> {
+			self.clear_count += 1;
+			Ok(())
+		}
+
+		fn search(&self, _query: &str, _limit: usize) -> EngineResult<Vec<SearchHit>> {
+			Ok(Vec::new())
+		}
+	}
 
 	fn request(command: &str, payload: serde_json::Value) -> Request {
 		Request {
@@ -445,6 +730,106 @@ mod tests {
 	}
 
 	#[test]
+	fn suggest_save_path_registers_a_new_course_by_moodle_id() {
+		let mut database = seeded_database();
+		let response = dispatch(
+			&mut database,
+			request(
+				"suggestSavePath",
+				serde_json::json!({
+					"course": {
+						"moodleCourseId": "course-412",
+						"name": "Data Science",
+						"academicYear": 2026,
+						"term": "Spring",
+						"sectionTitle": "Section 2",
+						"breadcrumbs": []
+					},
+					"fileMeta": {
+						"title": "guide.pdf",
+						"url": "https://moodle.example/pluginfile.php/4376/guide.pdf",
+						"moodleFileId": "4376",
+						"sectionTitle": "Section 2",
+						"mimeHint": "pdf"
+					}
+				}),
+			),
+		);
+
+		assert!(response.ok, "{:?}", response.error);
+		let suggestion = &response.data.unwrap()[0];
+		assert!(suggestion["courseFolder"]["courseId"]
+			.as_i64()
+			.is_some_and(|course_id| course_id > 0));
+		assert!(suggestion["relativePath"]
+			.as_str()
+			.is_some_and(|path| path.contains("Data Science")));
+	}
+
+	#[test]
+	fn check_similar_files_requires_downloaded_content() {
+		let mut database = seeded_database();
+		let response = dispatch(
+			&mut database,
+			request(
+				"checkSimilarFiles",
+				serde_json::json!({
+					"fileMeta": {
+						"title": "guide.pdf",
+						"url": "https://moodle.example/pluginfile.php/4376/guide.pdf",
+						"moodleFileId": "4376",
+						"sectionTitle": null,
+						"mimeHint": "pdf"
+					}
+				}),
+			),
+		);
+
+		assert!(!response.ok);
+		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+	}
+
+	#[test]
+	fn service_dispatcher_exports_and_imports_without_duplicating_io_logic() {
+		let root = unique_temp_dir();
+		std::fs::create_dir_all(&root).unwrap();
+		let backup_path = root.join("backup.sqlite3");
+		let backup_path_text = backup_path.to_string_lossy().into_owned();
+		let mut database = Database::open(&root.join("current.sqlite3")).unwrap();
+		database.apply_development_seed().unwrap();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let exported = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"exportData",
+				serde_json::json!({ "filePath": backup_path_text }),
+			),
+		);
+		assert!(exported.ok, "{:?}", exported.error);
+		assert!(backup_path.exists());
+
+		let imported = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"importData",
+				serde_json::json!({ "filePath": backup_path.to_string_lossy() }),
+			),
+		);
+		assert!(imported.ok, "{:?}", imported.error);
+		assert_eq!(imported.data.unwrap()["reindexRequired"], true);
+		assert_eq!(index.clear_count, 1);
+
+		drop(database);
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
 	fn report_extension_runtime_persists_observation() {
 		let mut database = Database::open_in_memory().unwrap();
 		let response = dispatch(
@@ -535,5 +920,16 @@ mod tests {
 				"{command} leaked an absolute Windows path: {serialized}"
 			);
 		}
+	}
+
+	fn unique_temp_dir() -> std::path::PathBuf {
+		let suffix = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		std::env::temp_dir().join(format!(
+			"fuzzy-command-tests-{}-{suffix}",
+			std::process::id()
+		))
 	}
 }

@@ -86,11 +86,56 @@ describe("Moodle資料本体の取得", () => {
 		const file = { ...original, moodleFileId: null };
 		expect(transferFileId(file)).toBe(file.url);
 	});
+
+	test("rejects a streamed response that exceeds the per-file limit without Content-Length", async () => {
+		const [original] = createRequest().files;
+		if (!original) throw new Error("missing test file");
+		const file = { ...original, title: "guide.pdf", mimeHint: "pdf" };
+		const fetcher = (async () =>
+			new Response(new Uint8Array([1, 2, 3, 4, 5]), {
+				status: 200,
+				headers: { "content-type": "application/pdf" },
+			})) as unknown as typeof fetch;
+
+		const result = await downloadMoodleFiles({ ...createRequest(), files: [file] }, ORIGIN, {
+			fetcher,
+			maxFileBytes: 4,
+		});
+
+		expect(result.request.files).toEqual([]);
+		expect(result.failedFiles).toEqual([{ fileId: "4376", code: "DOWNLOAD_FAILED" }]);
+	});
+
+	test("enforces the aggregate transfer limit across concurrent downloads", async () => {
+		const [original] = createRequest().files;
+		if (!original) throw new Error("missing test file");
+		const files = [
+			{ ...original, title: "first.pdf", moodleFileId: "first", mimeHint: "pdf" },
+			{ ...original, title: "second.pdf", moodleFileId: "second", mimeHint: "pdf" },
+		];
+		const fetcher = (async () =>
+			new Response(new Uint8Array([1, 2, 3, 4]), {
+				status: 200,
+				headers: { "content-type": "application/pdf" },
+			})) as unknown as typeof fetch;
+
+		const result = await downloadMoodleFiles({ ...createRequest(), files }, ORIGIN, {
+			fetcher,
+			maxFileBytes: 4,
+			maxTransferBytes: 6,
+			concurrency: 2,
+		});
+
+		expect(result.request.files).toHaveLength(1);
+		expect(result.failedFiles).toHaveLength(1);
+		expect(result.request.files[0]?.byteLength).toBe(4);
+	});
 });
 
 function createRequest() {
 	return {
 		targetPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース",
+		courseId: 2,
 		files: [
 			{
 				title: "ガイダンス資料.docx",

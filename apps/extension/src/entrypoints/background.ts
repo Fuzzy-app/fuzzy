@@ -1,4 +1,5 @@
 import {
+	type CheckSimilarFilesRequest,
 	type DataSyncEvent,
 	type FuzzyApiClient,
 	type MoodleSaveFilesRequest,
@@ -7,11 +8,15 @@ import {
 import {
 	type FuzzyApiRequestMessage,
 	type FuzzyApiResponseMessage,
+	hasValidFuzzyApiRequestPayload,
 	isFuzzyApiRequestMessage,
 	toBackgroundApiError,
 } from "../lib/api/backgroundApi";
 import { callBackgroundApi } from "../lib/api/backgroundDispatch";
-import { saveMoodleFilesFromBackground } from "../lib/api/backgroundFileSave";
+import {
+	checkMoodleFileFromBackground,
+	saveMoodleFilesFromBackground,
+} from "../lib/api/backgroundFileSave";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
 	isRuleManagementRequestMessage,
@@ -116,6 +121,12 @@ async function respondToApiRequest(
 	message: FuzzyApiRequestMessage,
 	senderUrl = "",
 ): Promise<FuzzyApiResponseMessage> {
+	if (!hasValidFuzzyApiRequestPayload(message)) {
+		return {
+			ok: false,
+			error: { code: "INVALID_REQUEST", message: "リクエストの内容が不正です。" },
+		};
+	}
 	try {
 		const client = await clientPromise;
 		const data =
@@ -125,7 +136,13 @@ async function respondToApiRequest(
 						message.request as MoodleSaveFilesRequest,
 						pageOrigin(senderUrl),
 					)
-				: await callBackgroundApi(client, message);
+				: message.method === "checkSimilarFiles"
+					? await checkMoodleFileFromBackground(
+							client,
+							message.request as CheckSimilarFilesRequest,
+							pageOrigin(senderUrl),
+						)
+					: await callBackgroundApi(client, message);
 		return { ok: true, data, mode: client.mode };
 	} catch (error) {
 		return {

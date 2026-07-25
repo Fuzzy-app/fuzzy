@@ -147,6 +147,7 @@ describe("MockApiClient（サンプルデータ）", () => {
 	test("saveFiles: ユーザーが選んだファイルの保存結果を返す", async () => {
 		const result = await client.saveFiles({
 			targetPath: "C:\\Users\\sample\\Documents\\大学\\2026前期\\データベース\\第4回",
+			courseId: 2,
 			files: [
 				{
 					fileId: "1234",

@@ -22,5 +22,7 @@
 - Windowsファイル名、宣言サイズ、HTML先頭、DOCXのZIPシグネチャを再検証
 - 既存ファイルを上書きせず、成功したファイルだけを`savedFileIds`へ返す
 - 失敗分は`DOWNLOAD_FAILED`、`INVALID_CONTENT`、`ALREADY_EXISTS`、`IO_ERROR`で個別に返す
+- 保存成功時にコースID、MoodleファイルID、BLAKE3、SimHashを`files`テーブルへ登録
+- 保存前の類似照合と、パストラバーサル・ZIP bomb対策付きのZIP展開をnative-hostで実装
 
-DBスキーマ変更はない。保存後メタデータの`files`テーブル登録は、コースID・ハッシュ・索引更新を含む別API設計が必要なため本Issueでは行わない。
+DBスキーマ変更はない。既存の`files`テーブルを正本として利用し、ファイル作成とDB登録の両方に成功した場合だけ保存成功として返す。

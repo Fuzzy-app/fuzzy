@@ -14,7 +14,11 @@ use crate::{
 };
 
 mod backup;
+mod duplicates;
+mod learning;
+mod notifications;
 mod rules;
+mod saved_files;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
@@ -239,6 +243,13 @@ impl Database {
 	#[cfg(test)]
 	pub(crate) fn conn(&self) -> &Connection {
 		&self.conn
+	}
+
+	/// 開発・テスト用のサンプルデータを投入する。
+	/// リリースビルドには含めず、実利用DBへ誤って投入できないようにする。
+	#[cfg(debug_assertions)]
+	pub fn apply_development_seed(&self) -> EngineResult<()> {
+		self.conn.execute_batch(crate::SEED_SQL).map_err(db_err)
 	}
 }
 

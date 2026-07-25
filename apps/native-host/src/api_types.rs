@@ -9,6 +9,13 @@ use engine_core::folder_names::{
 	CourseFolderNameWarning as EngineCourseFolderNameWarning,
 	CourseFolderNameWarningCode as EngineCourseFolderNameWarningCode,
 };
+use engine_core::types::{
+	AssignmentRecord, CourseDashboardRecord, CourseRuleOverrideRecord, DashboardRecord,
+	DeadlineFilter as EngineDeadlineFilter, DuplicateGroupRecord,
+	NotificationRuleInput as EngineNotificationRuleInput, NotificationRuleRecord, RuleSetRecord,
+	RuleViolationRecord,
+};
+use engine_core::{EngineError, EngineResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use ts_rs::TS;
@@ -32,6 +39,7 @@ pub struct SaveFileDescriptor {
 pub struct BeginSaveFilesRequest {
 	pub transfer_id: String,
 	pub target_path: String,
+	pub course_id: Option<i64>,
 	pub files: Vec<SaveFileDescriptor>,
 }
 
@@ -70,6 +78,73 @@ pub struct SaveFileFailure {
 pub struct SaveFilesResult {
 	pub saved_file_ids: Vec<String>,
 	pub failed_files: Vec<SaveFileFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoodleCourseContext {
+	pub moodle_course_id: Option<String>,
+	pub name: Option<String>,
+	pub academic_year: Option<i64>,
+	pub term: Option<String>,
+	pub section_title: Option<String>,
+	pub breadcrumbs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoodleFileMeta {
+	pub title: String,
+	pub url: String,
+	pub moodle_file_id: Option<String>,
+	pub section_title: Option<String>,
+	pub mime_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SuggestSavePathRequest {
+	pub course: MoodleCourseContext,
+	pub file_meta: Option<MoodleFileMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSuggestion {
+	pub path: String,
+	pub relative_path: String,
+	pub confidence: f64,
+	pub course_folder: CourseFolderNameResolution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckSimilarFilesRequest {
+	pub file_meta: MoodleFileMeta,
+	pub content_base64: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarFileMatch {
+	pub file_id: i64,
+	pub original_name: String,
+	pub similarity: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtractZipRequest {
+	pub file_meta: MoodleFileMeta,
+	pub target_path: String,
+	pub destination_path: String,
+	pub flatten: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractZipResult {
+	pub extracted_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -455,6 +530,46 @@ pub struct DuplicateGroupListItem {
 	pub members: Vec<DuplicateFileListItem>,
 }
 
+impl RuleViolationListItem {
+	pub fn from_record(record: RuleViolationRecord, base_folder: &Path) -> EngineResult<Self> {
+		Ok(Self {
+			file_id: record.file_id,
+			file_name: record.file_name,
+			course_id: record.course_id,
+			course_name: record.course_name,
+			relative_path: safe_relative_windows_path(base_folder, &record.saved_path)?,
+			reason: record.reason,
+		})
+	}
+}
+
+impl DuplicateGroupListItem {
+	pub fn from_record(record: DuplicateGroupRecord, base_folder: &Path) -> EngineResult<Self> {
+		let method = match record.method.as_str() {
+			"exact" => DuplicateMethod::Exact,
+			"similar" => DuplicateMethod::Similar,
+			_ => return Err(invalid_stored_value("重複判定方式")),
+		};
+		let members = record
+			.members
+			.into_iter()
+			.map(|member| {
+				Ok(DuplicateFileListItem {
+					file_id: member.file_id,
+					file_name: member.file_name,
+					relative_path: safe_relative_windows_path(base_folder, &member.saved_path)?,
+					similarity: member.similarity,
+				})
+			})
+			.collect::<EngineResult<Vec<_>>>()?;
+		Ok(Self {
+			group_id: record.group_id,
+			method,
+			members,
+		})
+	}
+}
+
 /// 全文検索要求。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -509,6 +624,45 @@ pub struct ImportDataResult {
 	pub reindex_required: bool,
 }
 
+/// SQLiteの絶対パスを、保存ルート以下の正規化済みWindows相対パスへ変換する。
+/// 保存ルート外の値はパスをエラー文へ含めず拒否する。
+fn safe_relative_windows_path(base_folder: &Path, saved_path: &Path) -> EngineResult<String> {
+	let base = base_folder.to_string_lossy().replace('/', "\\");
+	let saved = saved_path.to_string_lossy().replace('/', "\\");
+	let base = base.trim_end_matches('\\');
+	let prefix_matches = saved
+		.get(..base.len())
+		.is_some_and(|prefix| prefix.eq_ignore_ascii_case(base));
+	let boundary_matches = saved
+		.as_bytes()
+		.get(base.len())
+		.is_some_and(|byte| *byte == b'\\');
+	if base.is_empty() || !prefix_matches || !boundary_matches {
+		return Err(unsafe_stored_path());
+	}
+	let relative = saved.get(base.len() + 1..).ok_or_else(unsafe_stored_path)?;
+	let segments = relative.split('\\').collect::<Vec<_>>();
+	if segments.is_empty()
+		|| segments.iter().any(|segment| {
+			segment.is_empty() || matches!(*segment, "." | "..") || segment.contains(':')
+		}) {
+		return Err(unsafe_stored_path());
+	}
+	Ok(segments.join("\\"))
+}
+
+fn unsafe_stored_path() -> EngineError {
+	EngineError::Internal {
+		message: "保存ルート外または不正な保存済みパスを検出しました".to_string(),
+	}
+}
+
+fn invalid_stored_value(name: &str) -> EngineError {
+	EngineError::Database {
+		message: format!("SQLiteに保存された{name}が不正です"),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -557,11 +711,11 @@ mod tests {
 		assert_eq!(value["method"], "exact");
 		assert_eq!(value["members"][0]["similarity"], 1.0);
 
- 	assert_eq!(
- 		serde_json::to_value(DuplicateMethod::Similar).unwrap(),
- 		"similar"
- 	);
- 	}
+		assert_eq!(
+			serde_json::to_value(DuplicateMethod::Similar).unwrap(),
+			"similar"
+		);
+	}
 
 	#[test]
 	fn issue_42_dtos_match_shared_camel_case_fields() {

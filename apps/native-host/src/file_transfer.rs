@@ -2,12 +2,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use engine_core::{EngineError, EngineResult};
+use engine_core::duplicate::{DefaultDuplicateDetector, DuplicateDetector};
+use engine_core::section::parse_section_file_prefix;
+use engine_core::types::SavedFileRegistration;
+use engine_core::{Database, EngineError, EngineResult};
 
 use crate::api_types::{
 	AppendSaveFileChunkRequest, BeginSaveFilesRequest, SaveFileDescriptor, SaveFileFailure,
@@ -16,9 +19,11 @@ use crate::api_types::{
 
 const MAX_ACTIVE_TRANSFERS: usize = 4;
 const MAX_FILES_PER_TRANSFER: usize = 20;
-const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TRANSFER_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODED_CHUNK_BYTES: usize = 256 * 1024;
+const MAX_ZIP_ENTRIES: usize = 1_000;
+const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct FileTransferManager {
@@ -27,7 +32,90 @@ pub struct FileTransferManager {
 
 struct PendingTransfer {
 	target_path: PathBuf,
+	course_id: Option<i64>,
 	files: HashMap<String, PendingFile>,
+}
+
+pub fn extract_zip_archive(
+	base_folder: &Path,
+	source: &Path,
+	destination_path: &str,
+	flatten: bool,
+) -> EngineResult<Vec<String>> {
+	let destination = validate_target_path(base_folder, destination_path)?;
+	let source = std::fs::canonicalize(source).map_err(EngineError::Io)?;
+	let canonical_base = std::fs::canonicalize(base_folder).map_err(EngineError::Io)?;
+	if !path_starts_with(&source, &canonical_base) {
+		return Err(invalid("fileMeta", "保存ルート外のZIPは展開できません"));
+	}
+	let input = std::fs::File::open(&source).map_err(EngineError::Io)?;
+	let mut archive = zip::ZipArchive::new(input)
+		.map_err(|_| invalid("fileMeta", "ZIPファイルを読み込めません"))?;
+	if archive.len() > MAX_ZIP_ENTRIES {
+		return Err(invalid("fileMeta", "ZIP内の項目数が上限を超えています"));
+	}
+	std::fs::create_dir_all(&destination).map_err(EngineError::Io)?;
+
+	let mut extracted_paths = Vec::new();
+	let mut extracted_bytes = 0_u64;
+	for index in 0..archive.len() {
+		let mut entry = archive
+			.by_index(index)
+			.map_err(|_| invalid("fileMeta", "ZIP項目を読み込めません"))?;
+		if entry.is_dir() {
+			continue;
+		}
+		if entry
+			.unix_mode()
+			.is_some_and(|mode| mode & 0o170000 == 0o120000)
+		{
+			return Err(invalid(
+				"fileMeta",
+				"ZIP内のシンボリックリンクは展開できません",
+			));
+		}
+		let enclosed = entry
+			.enclosed_name()
+			.ok_or_else(|| invalid("fileMeta", "ZIP内に不正なパスがあります"))?
+			.to_path_buf();
+		for component in enclosed.components() {
+			if let Component::Normal(value) = component {
+				validate_file_name(&value.to_string_lossy())?;
+			}
+		}
+		let relative = if flatten {
+			PathBuf::from(
+				enclosed
+					.file_name()
+					.ok_or_else(|| invalid("fileMeta", "ZIP項目名が不正です"))?,
+			)
+		} else {
+			enclosed
+		};
+		let output_path = destination.join(relative);
+		if let Some(parent) = output_path.parent() {
+			std::fs::create_dir_all(parent).map_err(EngineError::Io)?;
+		}
+		let mut output = OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&output_path)
+			.map_err(EngineError::Io)?;
+		let remaining = MAX_EXTRACTED_BYTES.saturating_sub(extracted_bytes);
+		let copied = std::io::copy(&mut entry.by_ref().take(remaining + 1), &mut output)
+			.map_err(EngineError::Io)?;
+		if copied > remaining {
+			drop(output);
+			let _ = std::fs::remove_file(&output_path);
+			return Err(invalid(
+				"fileMeta",
+				"ZIP展開後の合計サイズが上限を超えています",
+			));
+		}
+		extracted_bytes += copied;
+		extracted_paths.push(output_path.to_string_lossy().into_owned());
+	}
+	Ok(extracted_paths)
 }
 
 struct PendingFile {
@@ -51,6 +139,9 @@ impl FileTransferManager {
 		}
 		if request.files.is_empty() || request.files.len() > MAX_FILES_PER_TRANSFER {
 			return Err(invalid("files", "保存ファイル数が許容範囲外です"));
+		}
+		if request.course_id.is_some_and(|course_id| course_id <= 0) {
+			return Err(invalid("courseId", "正の整数またはnullを指定してください"));
 		}
 		let total_bytes = request
 			.files
@@ -78,8 +169,14 @@ impl FileTransferManager {
 				},
 			);
 		}
-		self.transfers
-			.insert(request.transfer_id, PendingTransfer { target_path, files });
+		self.transfers.insert(
+			request.transfer_id,
+			PendingTransfer {
+				target_path,
+				course_id: request.course_id,
+				files,
+			},
+		);
 		Ok(())
 	}
 
@@ -111,6 +208,7 @@ impl FileTransferManager {
 
 	pub fn commit(
 		&mut self,
+		database: &Database,
 		base_folder: &Path,
 		transfer_id: &str,
 	) -> EngineResult<SaveFilesResult> {
@@ -142,20 +240,63 @@ impl FileTransferManager {
 				});
 				continue;
 			}
-			let result = OpenOptions::new()
+			let mut output = match OpenOptions::new()
 				.write(true)
 				.create_new(true)
 				.open(&destination)
-				.and_then(|mut output| output.write_all(&file.bytes));
-			if result.is_ok() {
-				saved_file_ids.push(file_id);
-			} else {
+			{
+				Ok(output) => output,
+				Err(error) => {
+					failed_files.push(SaveFileFailure {
+						file_id,
+						code: if error.kind() == std::io::ErrorKind::AlreadyExists {
+							SaveFileFailureCode::AlreadyExists
+						} else {
+							SaveFileFailureCode::IoError
+						},
+					});
+					continue;
+				}
+			};
+			if output.write_all(&file.bytes).is_err() {
+				drop(output);
 				let _ = std::fs::remove_file(&destination);
 				failed_files.push(SaveFileFailure {
 					file_id,
 					code: SaveFileFailureCode::IoError,
 				});
+				continue;
 			}
+			drop(output);
+
+			let fingerprint = DefaultDuplicateDetector::default().fingerprint(&destination);
+			let registration = fingerprint.and_then(|fingerprint| {
+				database.register_saved_file(&SavedFileRegistration {
+					course_id: transfer.course_id,
+					section_no: parse_section_file_prefix(&file.descriptor.file_name)
+						.and_then(|section| section.number)
+						.map(i64::from),
+					moodle_file_id: Some(file.descriptor.file_id.clone()),
+					original_name: file.descriptor.file_name.clone(),
+					saved_path: destination.clone(),
+					size_bytes: i64::try_from(file.descriptor.byte_length).map_err(|_| {
+						invalid("byteLength", "ファイルサイズをSQLiteへ保存できません")
+					})?,
+					mime_type: file.descriptor.mime_type.clone(),
+					hash_blake3: fingerprint.hash_blake3,
+					simhash: fingerprint.simhash,
+				})
+			});
+			if let Err(error) = registration {
+				eprintln!("保存ファイルのメタデータ登録に失敗しました: {error}");
+				let _ = std::fs::remove_file(&destination);
+				failed_files.push(SaveFileFailure {
+					file_id,
+					code: SaveFileFailureCode::IoError,
+				});
+				continue;
+			}
+			saved_file_ids.push(file_id);
 		}
 		Ok(SaveFilesResult {
 			saved_file_ids,
@@ -306,12 +447,14 @@ mod tests {
 	use super::*;
 	use crate::api_types::{AppendSaveFileChunkRequest, BeginSaveFilesRequest, SaveFileDescriptor};
 	use std::time::{SystemTime, UNIX_EPOCH};
+	use zip::write::SimpleFileOptions;
 
 	#[test]
 	fn saves_valid_docx_and_rejects_html_without_overwriting() {
 		let root = unique_temp_dir();
 		let target = root.join("course");
 		std::fs::create_dir_all(&root).unwrap();
+		let database = Database::open_in_memory().unwrap();
 		let mut manager = FileTransferManager::default();
 		manager
 			.begin(&root, begin_request(&target, "transfer-1", "guide.docx", 5))
@@ -324,11 +467,15 @@ mod tests {
 				data_base64: STANDARD.encode([0x50, 0x4b, 0x03, 0x04, 0x01]),
 			})
 			.unwrap();
-		let result = manager.commit(&root, "transfer-1").unwrap();
+		let result = manager.commit(&database, &root, "transfer-1").unwrap();
 		assert_eq!(result.saved_file_ids, vec!["file-1"]);
 		assert_eq!(
 			std::fs::read(target.join("guide.docx")).unwrap(),
 			vec![0x50, 0x4b, 0x03, 0x04, 0x01]
+		);
+		assert_eq!(
+			database.saved_file_path_by_moodle_id("file-1").unwrap(),
+			target.join("guide.docx")
 		);
 
 		let mut invalid_manager = FileTransferManager::default();
@@ -347,13 +494,86 @@ mod tests {
 				data_base64: STANDARD.encode(html),
 			})
 			.unwrap();
-		let result = invalid_manager.commit(&root, "transfer-2").unwrap();
+		let result = invalid_manager
+			.commit(&database, &root, "transfer-2")
+			.unwrap();
 		assert!(result.saved_file_ids.is_empty());
 		assert_eq!(
 			result.failed_files[0].code,
 			SaveFileFailureCode::InvalidContent
 		);
 		assert!(!target.join("login.docx").exists());
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn keeps_an_existing_file_when_the_destination_appears_before_commit() {
+		let root = unique_temp_dir();
+		let target = root.join("course");
+		std::fs::create_dir_all(&target).unwrap();
+		let database = Database::open_in_memory().unwrap();
+		let mut manager = FileTransferManager::default();
+		manager
+			.begin(
+				&root,
+				begin_request(&target, "transfer-race", "existing.pdf", 4),
+			)
+			.unwrap();
+		manager
+			.append(AppendSaveFileChunkRequest {
+				transfer_id: "transfer-race".to_string(),
+				file_id: "file-1".to_string(),
+				chunk_index: 0,
+				data_base64: STANDARD.encode([0x50, 0x4b, 0x03, 0x04]),
+			})
+			.unwrap();
+
+		let existing_path = target.join("existing.pdf");
+		std::fs::write(&existing_path, b"original").unwrap();
+		let result = manager.commit(&database, &root, "transfer-race").unwrap();
+
+		assert!(result.saved_file_ids.is_empty());
+		assert_eq!(
+			result.failed_files[0].code,
+			SaveFileFailureCode::AlreadyExists
+		);
+		assert_eq!(std::fs::read(existing_path).unwrap(), b"original");
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn extracts_safe_zip_entries_and_rejects_parent_traversal() {
+		let root = unique_temp_dir();
+		std::fs::create_dir_all(&root).unwrap();
+		let safe_zip = root.join("safe.zip");
+		write_zip(&safe_zip, "folder/guide.txt", b"guide");
+		let destination = root.join("safe-output");
+
+		let extracted =
+			extract_zip_archive(&root, &safe_zip, &destination.to_string_lossy(), false).unwrap();
+		assert_eq!(
+			extracted,
+			vec![destination
+				.join("folder/guide.txt")
+				.to_string_lossy()
+				.into_owned()]
+		);
+		assert_eq!(
+			std::fs::read(destination.join("folder/guide.txt")).unwrap(),
+			b"guide"
+		);
+
+		let unsafe_zip = root.join("unsafe.zip");
+		write_zip(&unsafe_zip, "../escaped.txt", b"escape");
+		let unsafe_destination = root.join("unsafe-output");
+		assert!(extract_zip_archive(
+			&root,
+			&unsafe_zip,
+			&unsafe_destination.to_string_lossy(),
+			false,
+		)
+		.is_err());
+		assert!(!root.join("escaped.txt").exists());
 		std::fs::remove_dir_all(root).unwrap();
 	}
 
@@ -379,6 +599,7 @@ mod tests {
 		BeginSaveFilesRequest {
 			transfer_id: transfer_id.to_string(),
 			target_path: target.to_string_lossy().into_owned(),
+			course_id: None,
 			files: vec![SaveFileDescriptor {
 				file_id: "file-1".to_string(),
 				file_name: file_name.to_string(),
@@ -400,5 +621,15 @@ mod tests {
 			"fuzzy-file-transfer-{}-{suffix}",
 			std::process::id()
 		))
+	}
+
+	fn write_zip(path: &Path, entry_name: &str, contents: &[u8]) {
+		let file = std::fs::File::create(path).unwrap();
+		let mut archive = zip::ZipWriter::new(file);
+		archive
+			.start_file(entry_name, SimpleFileOptions::default())
+			.unwrap();
+		archive.write_all(contents).unwrap();
+		archive.finish().unwrap();
 	}
 }

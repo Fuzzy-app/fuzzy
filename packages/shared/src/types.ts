@@ -77,12 +77,15 @@ export interface SuggestSavePathRequest {
 
 export interface CheckSimilarFilesRequest {
 	fileMeta: MoodleFileMeta;
+	/** backgroundが認証付き取得後にnative-hostへ渡す。content scriptからは指定しない。 */
+	contentBase64?: string;
 }
 
 /** content scriptからbackgroundへ渡す、認証付き取得前の保存要求。 */
 export interface MoodleSaveFilesRequest {
 	files: MoodleFileMeta[];
 	targetPath: string;
+	courseId: number | null;
 }
 
 /** backgroundがMoodleから取得し、native-hostへ分割転送する1ファイル。 */
@@ -98,6 +101,7 @@ export interface SaveFilePayload {
 export interface SaveFilesRequest {
 	files: SaveFilePayload[];
 	targetPath: string;
+	courseId: number | null;
 }
 
 export interface SaveFileFailure {

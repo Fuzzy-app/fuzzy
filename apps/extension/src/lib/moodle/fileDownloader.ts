@@ -5,14 +5,13 @@ import type {
 	SaveFilePayload,
 	SaveFilesRequest,
 } from "@fuzzy/shared";
+import { FILE_TRANSFER_LIMITS } from "@fuzzy/shared";
 import {
 	fileExtensionFromName,
 	fileNameFromContentDisposition,
 	normalizeFileTypeHint,
 } from "./fileType";
 
-const MAX_FILES_PER_REQUEST = 20;
-const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const DOWNLOAD_CONCURRENCY = 2;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429]);
@@ -21,6 +20,7 @@ export interface MoodleFileDownloadOptions {
 	fetcher?: typeof fetch;
 	timeoutMs?: number;
 	maxFileBytes?: number;
+	maxTransferBytes?: number;
 	concurrency?: number;
 }
 
@@ -38,12 +38,16 @@ export async function downloadMoodleFiles(
 	pageOrigin: string,
 	options: MoodleFileDownloadOptions = {},
 ): Promise<PreparedSaveFiles> {
-	const files = request.files.slice(0, MAX_FILES_PER_REQUEST);
+	const files = request.files.slice(0, FILE_TRANSFER_LIMITS.maxFiles);
 	const prepared: Array<SaveFilePayload | null> = Array.from({ length: files.length }, () => null);
 	const failedFiles: SaveFileFailure[] = [];
 	const fetcher = options.fetcher ?? fetch;
 	const timeoutMs = options.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;
-	const maxFileBytes = options.maxFileBytes ?? MAX_FILE_BYTES;
+	const maxFileBytes = options.maxFileBytes ?? FILE_TRANSFER_LIMITS.maxFileBytes;
+	const budget = {
+		used: 0,
+		maximum: options.maxTransferBytes ?? FILE_TRANSFER_LIMITS.maxTransferBytes,
+	};
 	let nextIndex = 0;
 
 	async function runWorker(): Promise<void> {
@@ -52,7 +56,14 @@ export async function downloadMoodleFiles(
 			const file = files[index];
 			if (!file) return;
 			const fileId = transferFileId(file);
-			const downloaded = await downloadFile(file, pageOrigin, fetcher, timeoutMs, maxFileBytes);
+			const downloaded = await downloadFile(
+				file,
+				pageOrigin,
+				fetcher,
+				timeoutMs,
+				maxFileBytes,
+				budget,
+			);
 			if (downloaded) prepared[index] = downloaded;
 			else failedFiles.push({ fileId, code: "DOWNLOAD_FAILED" });
 		}
@@ -64,16 +75,33 @@ export async function downloadMoodleFiles(
 	);
 	await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
 
-	for (const ignored of request.files.slice(MAX_FILES_PER_REQUEST)) {
+	for (const ignored of request.files.slice(FILE_TRANSFER_LIMITS.maxFiles)) {
 		failedFiles.push({ fileId: transferFileId(ignored), code: "DOWNLOAD_FAILED" });
 	}
 	return {
 		request: {
 			targetPath: request.targetPath,
+			courseId: request.courseId,
 			files: prepared.filter((file): file is SaveFilePayload => file !== null),
 		},
 		failedFiles,
 	};
+}
+
+export async function downloadMoodleFile(
+	file: MoodleFileMeta,
+	pageOrigin: string,
+	options: MoodleFileDownloadOptions = {},
+): Promise<SaveFilePayload | null> {
+	const maxFileBytes = options.maxFileBytes ?? FILE_TRANSFER_LIMITS.maxFileBytes;
+	return downloadFile(
+		file,
+		pageOrigin,
+		options.fetcher ?? fetch,
+		options.timeoutMs ?? DOWNLOAD_TIMEOUT_MS,
+		maxFileBytes,
+		{ used: 0, maximum: maxFileBytes },
+	);
 }
 
 export function transferFileId(file: MoodleFileMeta): string {
@@ -86,12 +114,15 @@ async function downloadFile(
 	fetcher: typeof fetch,
 	timeoutMs: number,
 	maxFileBytes: number,
+	budget: { used: number; maximum: number },
 ): Promise<SaveFilePayload | null> {
 	if (!isSameOrigin(file.url, pageOrigin)) return null;
 
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), timeoutMs);
+		let reservedBytes = 0;
+		let keepReservation = false;
 		try {
 			const response = await fetcher(file.url, {
 				method: "GET",
@@ -108,8 +139,13 @@ async function downloadFile(
 
 			const declaredLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
 			if (Number.isFinite(declaredLength) && declaredLength > maxFileBytes) return null;
-			const bytes = new Uint8Array(await response.arrayBuffer());
-			if (bytes.byteLength === 0 || bytes.byteLength > maxFileBytes) return null;
+			const bytes = await readLimitedBody(response, maxFileBytes, (length) => {
+				if (budget.used + length > budget.maximum) return false;
+				budget.used += length;
+				reservedBytes += length;
+				return true;
+			});
+			if (!bytes) return null;
 
 			const contentType = response.headers.get("content-type");
 			const dispositionName = fileNameFromContentDisposition(
@@ -122,6 +158,7 @@ async function downloadFile(
 				fileExtensionFromName(file.title);
 			if (!mimeHint || mimeHint === "html" || looksLikeHtml(bytes)) return null;
 			if (mimeHint === "docx" && !hasZipSignature(bytes)) return null;
+			keepReservation = true;
 
 			return {
 				fileId: transferFileId(file),
@@ -133,10 +170,45 @@ async function downloadFile(
 		} catch {
 			if (attempt === 1) return null;
 		} finally {
+			if (!keepReservation) budget.used -= reservedBytes;
 			clearTimeout(timeout);
 		}
 	}
 	return null;
+}
+
+async function readLimitedBody(
+	response: Response,
+	maxBytes: number,
+	reserve: (length: number) => boolean,
+): Promise<Uint8Array | null> {
+	const reader = response.body?.getReader();
+	if (!reader) return null;
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!value || value.byteLength === 0) continue;
+			if (length + value.byteLength > maxBytes || !reserve(value.byteLength)) {
+				await reader.cancel();
+				return null;
+			}
+			chunks.push(value);
+			length += value.byteLength;
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	if (length === 0) return null;
+	const bytes = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return bytes;
 }
 
 function resolvedFileName(title: string, dispositionName: string | null, mimeHint: string): string {

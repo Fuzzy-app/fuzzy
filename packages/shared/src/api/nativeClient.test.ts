@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { FILE_TRANSFER_LIMITS } from "../protocolLimits";
 import { NativeApiClient } from "./nativeClient";
 
 const originalChrome = (globalThis as { chrome?: unknown }).chrome;
@@ -49,6 +50,7 @@ describe("NativeApiClientのファイル分割転送", () => {
 
 		const result = await new NativeApiClient().saveFiles({
 			targetPath: "C:\\save",
+			courseId: 2,
 			files: [
 				{
 					fileId: "file-1",
@@ -75,5 +77,34 @@ describe("NativeApiClientのファイル分割転送", () => {
 		).toBe(true);
 		expect(result.savedFileIds).toEqual(["file-1"]);
 		expect(disconnected).toBe(true);
+	});
+
+	test("rejects an oversized aggregate transfer before opening the native connection", async () => {
+		let connectCount = 0;
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					connectCount += 1;
+					throw new Error("must not connect");
+				},
+			},
+		};
+
+		const files = Array.from({ length: 3 }, (_, index) => ({
+			fileId: `file-${index}`,
+			fileName: `file-${index}.pdf`,
+			mimeType: "application/pdf",
+			byteLength: FILE_TRANSFER_LIMITS.maxFileBytes,
+			contentBase64: "AA==",
+		}));
+
+		await expect(
+			new NativeApiClient().saveFiles({
+				targetPath: "C:\\save",
+				courseId: 2,
+				files,
+			}),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		expect(connectCount).toBe(0);
 	});
 });

@@ -172,7 +172,11 @@ export async function mountSavePanel(): Promise<void> {
 		let failedZipCount = 0;
 		for (const group of groups) {
 			try {
-				const result = await api.saveFiles({ files: group.files, targetPath: group.path });
+				const result = await api.saveFiles({
+					files: group.files,
+					targetPath: group.path,
+					courseId: group.courseId,
+				});
 				savedCount += result.savedFileIds.length;
 				failedFileCount += result.failedFiles.length;
 				const savedFileIds = new Set(result.savedFileIds);
@@ -295,6 +299,14 @@ export async function mountSavePanel(): Promise<void> {
 		render();
 		try {
 			await api.updateCourseFolderName({ courseId: courseFolder.courseId, folderName });
+		} catch (error) {
+			courseFolderError = courseFolderNameUpdateError(error);
+			courseFolderSaving = false;
+			render();
+			return;
+		}
+
+		try {
 			suggestions = await loadFileSuggestions(api, snapshot);
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
@@ -302,8 +314,9 @@ export async function mountSavePanel(): Promise<void> {
 				folderName === null
 					? "コース保存名を自動提案へ戻しました。"
 					: "コース保存名を更新し、保存先候補を再取得しました。";
-		} catch (error) {
-			courseFolderError = courseFolderNameUpdateError(error);
+		} catch {
+			message =
+				"コース保存名は更新済みですが、保存先候補を再取得できませんでした。再読み込みしてください。";
 		} finally {
 			courseFolderSaving = false;
 			render();
@@ -772,12 +785,17 @@ export async function mountSavePanel(): Promise<void> {
 		return buildSaveDestinationGroups(snapshot.files, selectedFileIds, suggestions, selectedPaths);
 	}
 
-	function currentManualDestination(): { path: string; relativePath: string } | null {
+	function currentManualDestination(): {
+		path: string;
+		relativePath: string;
+		courseId: number | null;
+	} | null {
 		const root = saveRootFromSuggestions(suggestions);
 		const relativePath = normalizeRelativeSavePath(manualRelativePath);
 		if (!root || relativePath === null || !relativePath) return null;
 		const path = resolveSavePathUnderRoot(root, relativePath);
-		return path ? { path, relativePath } : null;
+		const courseId = courseFolderFromSuggestions(suggestions)?.courseId ?? null;
+		return path ? { path, relativePath, courseId } : null;
 	}
 
 	function currentExtractDestinationPath(): string | null {

@@ -23,6 +23,7 @@ import type {
 	UpdateCourseFolderNameResult,
 } from "@fuzzy/shared";
 import { ApiError } from "@fuzzy/shared";
+import { FILE_TRANSFER_LIMITS } from "@fuzzy/shared";
 
 export const FUZZY_API_MESSAGE_TYPE = "fuzzy:apiRequest";
 
@@ -50,12 +51,109 @@ export type FuzzyApiResponseMessage<T = unknown> =
 
 export function isFuzzyApiRequestMessage(message: unknown): message is FuzzyApiRequestMessage {
 	if (typeof message !== "object" || message === null) return false;
-	const candidate = message as { type?: unknown; method?: unknown };
+	const candidate = message as { type?: unknown; method?: unknown; request?: unknown };
 	return (
 		candidate.type === FUZZY_API_MESSAGE_TYPE &&
 		typeof candidate.method === "string" &&
-		(BACKGROUND_API_METHODS as readonly string[]).includes(candidate.method)
+		(BACKGROUND_API_METHODS as readonly string[]).includes(candidate.method) &&
+		"request" in candidate
 	);
+}
+
+export function hasValidFuzzyApiRequestPayload(message: FuzzyApiRequestMessage): boolean {
+	return isRequestForMethod(message.method, message.request);
+}
+
+function isRequestForMethod(method: BackgroundApiMethod, request: unknown): boolean {
+	switch (method) {
+		case "suggestSavePath":
+			return (
+				isRecord(request) &&
+				isMoodleCourseContext(request.course) &&
+				(request.fileMeta === undefined ||
+					request.fileMeta === null ||
+					isMoodleFileMeta(request.fileMeta))
+			);
+		case "updateCourseFolderName":
+			return (
+				isRecord(request) &&
+				isPositiveInteger(request.courseId) &&
+				(request.folderName === null || typeof request.folderName === "string")
+			);
+		case "checkSimilarFiles":
+			return isRecord(request) && isMoodleFileMeta(request.fileMeta);
+		case "saveFiles":
+			return (
+				isRecord(request) &&
+				typeof request.targetPath === "string" &&
+				(request.courseId === null || isPositiveInteger(request.courseId)) &&
+				Array.isArray(request.files) &&
+				request.files.length > 0 &&
+				request.files.length <= FILE_TRANSFER_LIMITS.maxFiles &&
+				request.files.every(isMoodleFileMeta)
+			);
+		case "extractZip":
+			return (
+				isRecord(request) &&
+				isMoodleFileMeta(request.fileMeta) &&
+				typeof request.targetPath === "string" &&
+				typeof request.destinationPath === "string" &&
+				typeof request.flatten === "boolean"
+			);
+		case "getNotificationRules":
+			return isRecord(request);
+		case "updateNotificationRules":
+			return (
+				Array.isArray(request) &&
+				request.every(
+					(rule) =>
+						isRecord(rule) &&
+						(rule.id === undefined || isPositiveInteger(rule.id)) &&
+						Number.isSafeInteger(rule.offsetMinutes) &&
+						typeof rule.enabled === "boolean",
+				)
+			);
+	}
+}
+
+function isMoodleCourseContext(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		isNullableString(value.moodleCourseId) &&
+		isNullableString(value.name) &&
+		(value.academicYear === undefined ||
+			value.academicYear === null ||
+			(Number.isSafeInteger(value.academicYear) &&
+				Number(value.academicYear) >= 1900 &&
+				Number(value.academicYear) <= 9999)) &&
+		isNullableString(value.term) &&
+		isNullableString(value.sectionTitle) &&
+		Array.isArray(value.breadcrumbs) &&
+		value.breadcrumbs.every((item) => typeof item === "string")
+	);
+}
+
+function isMoodleFileMeta(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		typeof value.title === "string" &&
+		typeof value.url === "string" &&
+		isNullableString(value.moodleFileId) &&
+		isNullableString(value.sectionTitle) &&
+		isNullableString(value.mimeHint)
+	);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): boolean {
+	return value === undefined || value === null || typeof value === "string";
+}
+
+function isPositiveInteger(value: unknown): value is number {
+	return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
 /** background経由で呼び出せるAPIの部分集合。 */

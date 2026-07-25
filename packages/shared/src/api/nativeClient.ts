@@ -1,3 +1,4 @@
+import { FILE_TRANSFER_LIMITS } from "../protocolLimits";
 import type {
 	Assignment,
 	AssignmentChange,
@@ -36,7 +37,7 @@ import { ApiError } from "./client";
 
 const NATIVE_HOST_NAME = "jp.ac.wakayama_u.fuzzy.native_host";
 /** Firefox/Chrome双方のNative Messaging上限を十分下回るbase64チャンク長。 */
-const NATIVE_FILE_CHUNK_CHARACTERS = 192 * 1024;
+const NATIVE_FILE_CHUNK_CHARACTERS = FILE_TRANSFER_LIMITS.base64ChunkCharacters;
 
 type Envelope<T> =
 	| { id: string; ok: true; data: T }
@@ -188,6 +189,21 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	async saveFiles(request: SaveFilesRequest): Promise<SaveFilesResult> {
 		if (request.files.length === 0) return { savedFileIds: [], failedFiles: [] };
+		if (request.files.length > FILE_TRANSFER_LIMITS.maxFiles) {
+			throw new ApiError("INVALID_REQUEST", "一度に保存できるファイル数を超えています");
+		}
+		const totalBytes = request.files.reduce((total, file) => total + file.byteLength, 0);
+		if (
+			request.files.some(
+				(file) =>
+					!Number.isSafeInteger(file.byteLength) ||
+					file.byteLength <= 0 ||
+					file.byteLength > FILE_TRANSFER_LIMITS.maxFileBytes,
+			) ||
+			totalBytes > FILE_TRANSFER_LIMITS.maxTransferBytes
+		) {
+			throw new ApiError("INVALID_REQUEST", "ファイル転送サイズが許容範囲外です");
+		}
 
 		const transferId = crypto.randomUUID();
 		const session = this.openSession();
@@ -195,6 +211,7 @@ export class NativeApiClient implements FuzzyApiClient {
 			await session.send("beginSaveFiles", {
 				transferId,
 				targetPath: request.targetPath,
+				courseId: request.courseId,
 				files: request.files.map(({ fileId, fileName, mimeType, byteLength }) => ({
 					fileId,
 					fileName,
