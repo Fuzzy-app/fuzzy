@@ -15,6 +15,8 @@ use crate::{
 };
 
 mod duplicates;
+mod learning;
+mod notifications;
 mod rules;
 
 /// DBファイルパスのオーバーライドに使う環境変数。
@@ -229,6 +231,13 @@ impl Database {
 	#[cfg(test)]
 	fn conn(&self) -> &Connection {
 		&self.conn
+	}
+
+	/// 開発・テスト用のサンプルデータを投入する。
+	/// リリースビルドには含めず、実利用DBへ誤って投入できないようにする。
+	#[cfg(debug_assertions)]
+	pub fn apply_development_seed(&self) -> EngineResult<()> {
+		self.conn.execute_batch(crate::SEED_SQL).map_err(db_err)
 	}
 }
 
