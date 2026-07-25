@@ -29,7 +29,7 @@
 ### 入力検証と安全境界
 
 - API契約と同じ既知トークン、相対パス、`.` / `..`、Windows禁止文字・予約名の制約をRust側でも検証する
-- Moodle由来の生のコース名は共有RustエンジンだけでNFKC正規化し、括弧内補足・絵文字・Windows禁止文字を処理する。長い名前は単語／書記素境界で短縮し、簡略化後の衝突は識別語またはMoodle安定IDで一意な別名を提案する
+- Moodle由来の生のコース名は共有RustエンジンだけでNFKC正規化し、年度・学期・明示的な担当者・`配布資料`の括弧書きだけを補足として除去する。曖昧または壊れた括弧は識別情報として保持し、`/`・`\`、絵文字、Windows禁止文字・予約名を安全な単一フォルダ要素へ処理する。長い名前は単語／書記素境界で短縮し、簡略化後の衝突は識別語またはMoodle安定IDで一意な別名を提案する
 - 絶対パス・UNCパスをルールテンプレートとして受け付けない
 - 保存ルート外のファイルを違反扱いにするが、利用者向け理由文字列へ絶対パスを含めない
 - `RuleViolation` はengine-core内部型のまま絶対パスを保持し、Native Messaging用DTOへ直接シリアライズしない既存境界を維持する
@@ -46,7 +46,7 @@
 ## 型・API・DB・仕様の整合性
 
 - `SaveSuggestion`へ保存用コース名と警告を追加し、`updateCourseFolderName`をAPI契約・`packages/shared/src/types.ts`へ追加した
-- `courses.academic_year`と`courses.folder_name_override`をDBスキーマv2へ追加し、年度を`term`から実行時推測しない設計へ変更した
+- `courses.academic_year`と`courses.folder_name_override`を未リリース版の完成形DBスキーマv1へ統合し、年度を`term`から実行時推測しない設計へ変更した
 - 保存先提案を「ファイルのフルパス」ではなく `saveFiles.targetPath` に渡す「フォルダ」として扱い、既存の `SaveSuggestion` 契約・モック実装と揃えた
 - `RuleSet` のグローバルテンプレートとコース別例外、`files.rule_compliant` / `violation_reason`、コースID基準の上書きという既存設計を維持した
 - `PatternEstimator` が返す `{filename}` を含む候補は、現行APIで永続化できるルールテンプレートとは別の「推定結果」である。`docs/reports/issue38.md` にあるとおり、ファイル名規則を別ルールとして保持するかは未決事項のため、RuleEngineはAPI契約の既知5トークンだけを受け付ける

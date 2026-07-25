@@ -35,12 +35,12 @@ export function buildCourseRulePanel(options: CourseRulePanelOptions): HTMLEleme
 	const head = element("div", "fuzzy-rules-panel-head");
 	const title = element("div");
 	title.append(
-		element("p", "fuzzy-section-label", "コースごとに上書き"),
-		element("h2", "", "コース別例外ルール"),
+		element("p", "fuzzy-section-label", "一部の授業だけ保存方法を変更"),
+		element("h2", "", "授業ごとの保存設定"),
 		element(
 			"p",
 			"fuzzy-rules-panel-copy",
-			"「回ごとに保存しない」など、グローバルルールと違うコースだけを追加・編集します。",
+			"「講義回ごとに分けない」など、基本設定と異なる授業だけを追加します。",
 		),
 	);
 	head.append(
@@ -53,7 +53,7 @@ export function buildCourseRulePanel(options: CourseRulePanelOptions): HTMLEleme
 	if (options.rules.courseOverrides.length === 0) {
 		const empty = element("div", "fuzzy-rules-empty");
 		empty.append(
-			element("p", "", "例外ルールはありません。すべてのコースにグローバルルールを適用します。"),
+			element("p", "", "授業ごとの設定はありません。すべての授業に基本の保存設定を使います。"),
 		);
 		list.append(empty);
 	} else {
@@ -69,9 +69,9 @@ function buildAddRow(options: CourseRulePanelOptions): HTMLElement {
 	const row = element("div", "fuzzy-rules-add-row");
 	const available = getAvailableCourses(options.courses, options.rules.courseOverrides);
 	const field = element("label", "fuzzy-rules-field");
-	field.append(element("span", "", "例外に追加するコース"));
+	field.append(element("span", "", "保存方法を変更する授業"));
 	const select = element("select", "fuzzy-rules-select");
-	select.setAttribute("aria-label", "例外に追加するコース");
+	select.setAttribute("aria-label", "保存方法を変更する授業");
 
 	if (options.loadingCourses) {
 		select.append(optionElement("", "コースを読み込んでいます…"));
@@ -100,7 +100,7 @@ function buildAddRow(options: CourseRulePanelOptions): HTMLElement {
 			element(
 				"p",
 				"fuzzy-rules-help",
-				`コース一覧の取得に失敗しました: ${options.courseLoadError}`,
+				`授業情報を取得できませんでした: ${options.courseLoadError}`,
 			),
 		);
 	} else {
@@ -116,7 +116,11 @@ function buildAddRow(options: CourseRulePanelOptions): HTMLElement {
 	const addButton = element(
 		"button",
 		"fuzzy-rules-secondary-button",
-		options.savingTarget === "add" ? "追加中…" : options.isMock ? "サンプルへ追加" : "例外に追加",
+		options.savingTarget === "add"
+			? "追加中…"
+			: options.isMock
+				? "サンプルへ追加"
+				: "この授業を追加",
 	);
 	addButton.type = "button";
 	addButton.disabled =
@@ -161,20 +165,20 @@ function buildOverrideCard(
 	const patternInput = element("input", "fuzzy-rules-input");
 	patternInput.type = "text";
 	patternInput.value = draft.patternTemplate;
-	patternInput.placeholder = "空欄ならグローバルルールを継承";
+	patternInput.placeholder = "空欄なら基本の保存設定を使用";
 	patternInput.autocomplete = "off";
 	const validationText = element("p", "fuzzy-rules-validation");
 	patternField.append(
-		element("span", "", "このコースのテンプレート"),
+		element("span", "", "この授業の保存先の形式"),
 		patternInput,
-		element("p", "fuzzy-rules-help", "空欄にするとグローバルルールを継承します。"),
+		element("p", "fuzzy-rules-help", "空欄にすると基本の保存設定を使います。"),
 		validationText,
 	);
 
 	const noteField = element("label", "fuzzy-rules-field");
 	const noteInput = element("textarea", "fuzzy-rules-textarea");
 	noteInput.value = draft.note;
-	noteInput.placeholder = "例外にする理由（任意）";
+	noteInput.placeholder = "この授業だけ設定を変える理由（任意）";
 	noteField.append(element("span", "", "メモ"), noteInput);
 	grid.append(splitLabel, patternField, noteField);
 
@@ -197,7 +201,7 @@ function buildOverrideCard(
 			? "反映中…"
 			: options.isMock
 				? "サンプルに反映"
-				: "この例外を保存",
+				: "この授業の設定を保存",
 	);
 	saveButton.type = "button";
 	const updateCardState = () => {

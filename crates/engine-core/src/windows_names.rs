@@ -2,6 +2,8 @@
 
 use crate::error::{EngineError, EngineResult};
 
+pub(crate) const WINDOWS_COMPONENT_MAX_UTF16_UNITS: usize = 255;
+
 pub(crate) fn validate_windows_component(field: &str, value: &str) -> EngineResult<()> {
 	if value.is_empty() {
 		return Err(EngineError::InvalidInput {
@@ -35,6 +37,14 @@ pub(crate) fn validate_windows_component(field: &str, value: &str) -> EngineResu
 		return Err(EngineError::InvalidInput {
 			field: field.to_string(),
 			reason: format!("Windowsの予約名 {stem} は使用できません"),
+		});
+	}
+	if utf16_len(value) > WINDOWS_COMPONENT_MAX_UTF16_UNITS {
+		return Err(EngineError::InvalidInput {
+			field: field.to_string(),
+			reason: format!(
+				"Windowsの名前はUTF-16で{WINDOWS_COMPONENT_MAX_UTF16_UNITS}コード単位以内にしてください"
+			),
 		});
 	}
 	Ok(())

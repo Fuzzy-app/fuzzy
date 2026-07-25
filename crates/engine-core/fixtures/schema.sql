@@ -27,7 +27,7 @@ CREATE TABLE courses (
 	name                 TEXT NOT NULL,
 	academic_year        INTEGER CHECK (academic_year BETWEEN 1900 AND 9999),
 	term                 TEXT,
-	-- NULLならbackendがraw nameから正規化・衝突回避した名前を使用する。ユーザー変更時だけ保存する
+	-- NULLならbackendがraw nameを保守的に正規化・衝突回避した名前を使用する。ユーザー変更時だけ保存する
 	folder_name_override TEXT,
 	created_at           TEXT NOT NULL DEFAULT (datetime('now')),
 	updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
@@ -60,7 +60,9 @@ CREATE TABLE files (
 	saved_path       TEXT NOT NULL UNIQUE,
 	size_bytes       INTEGER NOT NULL,
 	mime_type        TEXT,
+	-- BLAKE3は b3:<64桁の小文字16進数> 形式。既存のseed値はデモ用の省略表記
 	hash_blake3      TEXT NOT NULL,
+	-- 64 bitのビット列をSQLiteの符号付きINTEGERへそのまま写像する
 	simhash          INTEGER,
 	text_extracted   INTEGER NOT NULL DEFAULT 0,
 	rule_compliant   INTEGER NOT NULL DEFAULT 1,
@@ -137,4 +139,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 1;

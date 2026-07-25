@@ -6,6 +6,109 @@
 
 use std::path::PathBuf;
 
+/// SQLiteに保存された課題の取得条件。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeadlineFilter {
+	pub course_id: Option<i64>,
+	pub include_past: bool,
+	pub needs_review_only: bool,
+}
+
+/// Moodle由来の課題・締切情報。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignmentRecord {
+	pub id: i64,
+	pub course_id: i64,
+	pub course_name: String,
+	pub title: String,
+	pub source: String,
+	pub due_at: Option<String>,
+	pub due_at_status: String,
+	pub submission_mode: String,
+	pub submitted: bool,
+}
+
+/// ダッシュボードに表示する1コース分の集計。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CourseDashboardRecord {
+	pub course_id: i64,
+	pub course_name: String,
+	pub file_count: i64,
+	pub violation_count: i64,
+	pub next_due_at: Option<String>,
+}
+
+/// SQLiteから算出したダッシュボード全体の集計。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardRecord {
+	pub courses: Vec<CourseDashboardRecord>,
+	pub total_files: i64,
+	pub total_violations: i64,
+	pub upcoming_deadline_count: i64,
+}
+
+/// コース名を結合済みの、画面表示用コース別ルール。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CourseRuleOverrideRecord {
+	pub course_id: i64,
+	pub course_name: String,
+	pub split_by_section: bool,
+	pub pattern_template: Option<String>,
+	pub note: Option<String>,
+}
+
+/// 画面表示用のルール一式。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSetRecord {
+	pub global_pattern_template: String,
+	pub course_overrides: Vec<CourseRuleOverrideRecord>,
+}
+
+/// SQLite上のルール違反。絶対パスはNative Messaging境界で相対化する。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleViolationRecord {
+	pub file_id: i64,
+	pub file_name: String,
+	pub course_id: Option<i64>,
+	pub course_name: Option<String>,
+	pub saved_path: PathBuf,
+	pub reason: String,
+}
+
+/// SQLite上の重複グループに属するファイル。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateFileRecord {
+	pub file_id: i64,
+	pub file_name: String,
+	pub saved_path: PathBuf,
+	pub similarity: f64,
+}
+
+/// SQLite上の重複グループ。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateGroupRecord {
+	pub group_id: i64,
+	pub method: String,
+	pub members: Vec<DuplicateFileRecord>,
+}
+
+/// 締切からの相対時間で表す通知ルール。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationRuleRecord {
+	pub id: i64,
+	pub offset_minutes: i64,
+	pub label: String,
+	pub enabled: bool,
+}
+
+/// 通知ルール一括更新の入力。`id = None`は新規追加を表す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationRuleInput {
+	pub id: Option<i64>,
+	pub offset_minutes: i64,
+	pub enabled: bool,
+}
+
 /// 再帰走査で発見された1ファイルのメタ情報。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileEntry {
@@ -85,7 +188,7 @@ pub struct CourseRuleOverride {
 pub struct RuleContext {
 	/// SQLite上のコースID。コース別例外ルールの選択に使う。
 	pub course_id: Option<i64>,
-	/// 括弧内補足・絵文字・同名衝突を処理した、保存フォルダ用のコース名。
+	/// 明確な括弧内補足・絵文字・同名衝突を処理した、保存フォルダ用のコース名。
 	pub course_name: Option<String>,
 	/// 年度（例: `2026`）。
 	pub year: Option<String>,
@@ -171,4 +274,65 @@ pub struct DuplicateMatch {
 	pub exact: bool,
 	/// 類似度（0.0〜1.0。`exact == true` なら 1.0）。
 	pub similarity: f64,
+}
+
+/// 1ファイルの重複検出用フィンガープリント。
+///
+/// `simhash` はSQLiteの符号付き`INTEGER`へ保存する際にビット列を保ったまま`i64`へ
+/// キャストし、読み込み時に`u64`へ戻す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFingerprint {
+	/// `b3:<64桁の小文字16進数>`形式のBLAKE3ハッシュ。
+	pub hash_blake3: String,
+	/// ファイル内容から計算した64 bit SimHash。
+	pub simhash: u64,
+}
+
+/// SQLiteへ登録済みのファイルとフィンガープリント。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredFileFingerprint {
+	/// SQLite上のファイルID。
+	pub file_id: i64,
+	/// BLAKE3ハッシュ。過去データとの比較のためDB上の文字列をそのまま保持する。
+	pub hash_blake3: String,
+	/// 64 bit SimHash。未計算の既存行は`None`。
+	pub simhash: Option<u64>,
+}
+
+/// 重複グループの検出方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DuplicateMethod {
+	/// BLAKE3が完全一致するファイル。
+	Exact,
+	/// SimHashのハミング距離が閾値以内のファイル。
+	Similar,
+}
+
+/// 検出した重複グループに属する1ファイル。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetectedDuplicateMember {
+	/// SQLite上のファイルID。
+	pub file_id: i64,
+	/// 0.0〜1.0の類似度。完全一致グループでは常に1.0。
+	pub similarity: f64,
+}
+
+/// SQLiteへ登録する前の重複グループ。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetectedDuplicateGroup {
+	/// 完全一致または類似検出。
+	pub method: DuplicateMethod,
+	/// 2件以上のメンバー。ファイルID順で保持する。
+	pub members: Vec<DetectedDuplicateMember>,
+}
+
+/// 重複グループの再計算・再登録結果。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DuplicateRefreshSummary {
+	/// BLAKE3完全一致グループ数。
+	pub exact_group_count: usize,
+	/// SimHash類似グループ数。
+	pub similar_group_count: usize,
+	/// 全グループの延べメンバー数。
+	pub member_count: usize,
 }

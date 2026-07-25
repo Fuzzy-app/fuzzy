@@ -240,16 +240,16 @@ describe("ルール管理画面", () => {
 		document.body.append(screen.root);
 		await screen.activate();
 
-		expect(screen.root.querySelector("h1")?.textContent).toBe("保存ルールを管理");
+		expect(screen.root.querySelector("h1")?.textContent).toBe("資料の保存方法を設定");
 		expect(screen.root.querySelector(".fuzzy-rules-message.is-mock")?.textContent).toContain(
 			"再起動後にリセット",
 		);
 		expect(screen.root.querySelectorAll(".fuzzy-rules-preset")).toHaveLength(RULE_PRESETS.length);
 
 		const input = screen.root.querySelector<HTMLInputElement>(
-			'input[aria-label="グローバルルールのテンプレート"]',
+			'input[aria-label="基本の保存先の形式"]',
 		);
-		if (!input) throw new Error("グローバルルール入力欄がありません。");
+		if (!input) throw new Error("基本の保存先の形式を入力する欄がありません。");
 		input.value = "{course}/../Windows";
 		input.dispatchEvent(new window.Event("input"));
 

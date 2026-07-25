@@ -313,7 +313,7 @@ export function ensureRulesScreenStyle(): void {
 			border-radius: 12px;
 			padding: 11px 12px;
 			background: var(--fuzzy-color-success-soft);
-			color: var(--fuzzy-color-success);
+			color: var(--fuzzy-color-success-strong);
 			font-size: var(--fuzzy-font-size-small);
 			font-weight: 800;
 			line-height: 1.6;
