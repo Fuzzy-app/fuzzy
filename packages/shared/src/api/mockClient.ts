@@ -373,17 +373,11 @@ export class MockApiClient implements FuzzyApiClient {
 	}
 
 	async exportData(_request: ExportDataRequest): Promise<ExportDataResult> {
-		throw new ApiError(
-			"NO_NATIVE_HOST",
-			"データのエクスポートにはnative-hostへの接続が必要です。",
-		);
+		throw new ApiError("NO_NATIVE_HOST", "データのエクスポートにはnative-hostへの接続が必要です。");
 	}
 
 	async importData(_request: ImportDataRequest): Promise<ImportDataResult> {
-		throw new ApiError(
-			"NO_NATIVE_HOST",
-			"データのインポートにはnative-hostへの接続が必要です。",
-		);
+		throw new ApiError("NO_NATIVE_HOST", "データのインポートにはnative-hostへの接続が必要です。");
 	}
 
 	private async enqueueRuleMutation(mutate: () => void): Promise<RuleUpdateResult> {

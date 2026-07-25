@@ -2,7 +2,7 @@
 
 最終更新: 2026-07-25
 
-DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。型はnative-hostのAPI DTOを正とし、`ts-rs` で `packages/shared/src/generated/` にTS型を自動生成する想定（生成物は手編集しない）。実装初期のRust DTOは `apps/native-host/src/api_types.rs`、暫定TS型は `packages/shared/src/types.ts` に定義する。`crates/engine-core` の絶対パスを含む内部型をそのままwire形式にしない。
+DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。wire型の正本は用途に応じて`crates/engine-core`または`apps/native-host/src/api_types.rs`のRust DTOとし、`ts-rs`で`packages/shared/src/generated/`へTS型を自動生成する（生成物は手編集しない）。`packages/shared/src/types.ts`は生成型の再exportを基本とし、未移行の暫定TS型だけを直接定義する。絶対パスを含む内部型をそのままwire形式にしない。
 
 ---
 
@@ -163,9 +163,9 @@ Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issue
 
 ### 1.3 起動・接続方針
 
-`docs/仕様書.md` 3.3節のとおり、Moodleドメインのタブが存在する間 `connectNative` で接続を維持する。拡張機能側は `ping` にタイムアウト（目安800ms）を設定し、応答がなければサンプルデータへのモック動作にフォールバックする（`packages/shared/src/api/`）。単発のコマンド（ルール更新など）は `sendNativeMessage` でも構わない。
+`docs/仕様書.md` 3.4節のとおり、Moodleドメインのタブが存在する間 `connectNative` で接続を維持する。拡張機能側は `ping` にタイムアウト（目安800ms）を設定し、応答がなければサンプルデータへのモック動作にフォールバックする（`packages/shared/src/api/`）。単発のコマンド（ルール更新など）は `sendNativeMessage` でも構わない。
 
-初期セットアップ確認のため、拡張機能のインストール・更新・ブラウザ起動時には`reportExtensionRuntime`を1回送信する。この報告に対してはモックへフォールバックせず、native-hostがSQLiteへ保存した成功応答だけを実応答として扱う。
+初期セットアップ確認のため、拡張機能のインストール・更新・ブラウザ起動時には`reportExtensionRuntime`を1回送信する。セットアップ後の再確認では、MoodleのContent Script起動時にもbackgroundへ再報告を要求し、既にService Workerが動作中でも新しい応答を即時に保存する。この報告に対してはモックへフォールバックせず、native-hostがSQLiteへ保存した成功応答だけを実応答として扱う。
 
 ルール更新時のコース名はクライアントから受け取らず、`courseId` を使ってSQLiteの `courses` から解決する。保存パターンは相対パスのみを許可し、既知のトークン（`{year}` / `{term}` / `{course}` / `{assignment}` / `{section}`）以外、絶対パス、UNCパス、`.` / `..`、Windowsの禁止文字・予約名を拒否する。拡張機能側の検証は入力支援であり、native-host側でも同じ制約を再検証する。
 
@@ -188,21 +188,39 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 | `save_initial_setup`      | 選んだパターン／ルールをSQLiteに保存           | `{ path, pattern, courseOverrides? }` → `{ ok }` |
 | `get_setup_status`        | 初期セットアップ済みかどうか確認                | `()` → `{ done: boolean }`                       |
 | `get_extension_setup_status` | 確認開始後の拡張機能実応答をSQLiteから取得 | `{ since: string }` → `ExtensionSetupStatus` |
+| `get_extension_recovery_status` | セットアップ後の最新応答・互換性・鮮度をSQLiteから取得 | `()` → `ExtensionRecoveryStatus` |
 
 `pick_base_folder` 等の実体は `crates/engine-core` の `ScanEngine` を呼び出す（`apps/desktop/src-tauri` と `apps/native-host` の両方が同じ `crates/engine-core` に依存する設計。`docs/仕様書.md` 3.3節）。
 
-`get_extension_setup_status`の`since`はTauriアプリが今回起動した日時（ISO 8601）とし、それより前の応答記録だけでは完了にしない。戻り値は次のいずれかとする。状態自体はSQLiteへ保存せず、応答記録と現在の通信仕様バージョンから算出する。
+`get_extension_setup_status`の`since`はTauriアプリが今回起動した日時（ISO 8601）とし、それより前の応答記録だけでは完了にしない。戻り値は次のいずれかとする。状態自体はSQLiteへ保存せず、応答記録、最低対応拡張機能バージョン（`0.1.0`）、現在の通信仕様バージョンから算出する。
 
 ```ts
-type ExtensionSetupStatus =
-	| { state: "waiting"; observation: null }
-	| { state: "ready"; observation: ExtensionRuntimeObservation }
-	| { state: "incompatible"; observation: ExtensionRuntimeObservation };
+interface ExtensionSetupStatus {
+	state: "waiting" | "ready" | "incompatible";
+	observation: ExtensionRuntimeObservation | null;
+}
 ```
 
-- `waiting`：`since`以降の応答がない
-- `ready`：`since`以降に現在の通信仕様バージョンと一致する応答がある
-- `incompatible`：`since`以降に応答はあるが通信仕様バージョンが一致しない
+- `waiting`：`since`以降の応答がなく、`observation`は`null`
+- `ready`：`since`以降に最低対応拡張機能バージョン以上かつ現在の通信仕様バージョンと一致する応答があり、`observation`は非`null`
+- `incompatible`：`since`以降に応答はあるが、拡張機能バージョンまたは通信仕様バージョンに互換性がなく、`observation`は非`null`
+
+`get_extension_recovery_status`はSQLiteの応答履歴を読み取り、状態を保存せずに次の形で返す。最近の応答とみなす期間は24時間、最低対応拡張機能バージョンは`0.1.0`とする。各`installationId`では最新の応答だけを現在状態の候補とし、その中に最近の互換応答が1件でもあれば`ready`とする。これにより、同じインストールの古い互換版を更新後の非互換版より優先せず、別のインストールから届いた最近の互換応答は正常状態の根拠にできる。互換候補がない場合は、候補全体の最新応答から`stale`または`incompatible`を算出する。
+
+```ts
+interface ExtensionRecoveryStatus {
+	state: "missing" | "ready" | "stale" | "incompatible";
+	observation: ExtensionRuntimeObservation | null;
+	recentWithinSeconds: number;
+}
+```
+
+- `missing`：応答履歴がない。拡張機能の実応答を確認済みとは扱わず、初回導入の応答待機と導入案内を表示する
+- `ready`：24時間以内に、拡張機能・通信仕様の両方に互換性がある応答がある
+- `stale`：最新応答に互換性はあるが24時間より古い。削除とは断定せず、Moodleを開いて再確認する
+- `incompatible`：拡張機能バージョンまたは通信仕様バージョンに互換性がない
+
+復旧画面は`stale`からユーザーが再確認を開始した間だけ表示上の`checking`へ遷移し、15秒以内に新しい互換応答がなければ`timed-out`として再導入案内を表示する。`checking`と`timed-out`はUIの一時状態であり、SQLiteやブラウザストレージには保存しない。
 
 ---
 

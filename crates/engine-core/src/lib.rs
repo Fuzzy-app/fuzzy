@@ -27,13 +27,16 @@ pub mod scan;
 pub mod section;
 pub mod types;
 
+mod folder_name_notes;
 mod windows_names;
 
 pub use database::{resolve_db_path, Database};
 pub use error::{EngineError, EngineResult};
 pub use extension_runtime::{
+	is_compatible_extension_version, ExtensionRecoveryState, ExtensionRecoveryStatus,
 	ExtensionRuntimeObservation, ExtensionRuntimeReport, ExtensionSetupState, ExtensionSetupStatus,
-	EXTENSION_RUNTIME_PROTOCOL_VERSION,
+	EXTENSION_RUNTIME_PROTOCOL_VERSION, EXTENSION_RUNTIME_RECENT_SECONDS,
+	MINIMUM_COMPATIBLE_EXTENSION_VERSION,
 };
 
 /// SQLiteスキーマ定義（DDL）の正本。native-host が初回起動時に適用する（issue #36）。

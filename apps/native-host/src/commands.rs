@@ -1,25 +1,23 @@
 //! Native Messagingコマンドの入力検証・SQLite呼び出し・API DTO変換。
 
 use engine_core::rule::DefaultRuleEngine;
-use engine_core::{Database, EngineError, EngineResult, ExtensionRuntimeReport};
+use engine_core::{Database, EngineError, EngineResult};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::api_types::{
-	Assignment, CourseFolderNameResolution, DashboardSummary, DuplicateGroupListItem, EmptyRequest,
-	GetDeadlinesRequest, NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet,
-	RuleViolationListItem, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
+use crate::protocol::{Request, Response};
+use native_host::api_types::{
+	Assignment, DashboardSummary, DuplicateGroupListItem, EmptyRequest, GetDeadlinesRequest,
+	NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet, RuleViolationListItem,
 	UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest, UpdateNotificationRulesRequest,
 	UpdateSubmissionStatusRequest,
 };
-use crate::protocol::{Request, Response};
 
-/// コマンド名に応じて処理を振り分ける。
+/// Issue #42のコマンド名に応じて処理を振り分ける。
+///
+/// `ping` などの共通コマンドと検索・バックアップは呼び出し元で先に処理される。
 pub fn dispatch(database: &mut Database, request: Request) -> Response {
 	match request.command.as_str() {
-		"ping" => ping(request.id),
-		"reportExtensionRuntime" => report_extension_runtime(database, request),
-		"updateCourseFolderName" => update_course_folder_name(database, request),
 		"getDashboard" => get_dashboard(database, request),
 		"getDeadlines" => get_deadlines(database, request),
 		"updateSubmissionStatus" => update_submission_status(database, request),
@@ -186,32 +184,6 @@ fn update_notification_rules(database: &mut Database, request: Request) -> Respo
 	)
 }
 
-/// 利用者が編集した保存用コースフォルダ名をSQLiteへ保存する。
-fn update_course_folder_name(database: &mut Database, request: Request) -> Response {
-	let update = match parse_payload::<UpdateCourseFolderNameRequest>(&request) {
-		Ok(update) => update,
-		Err(response) => return response,
-	};
-	respond(
-		request.id,
-		database
-			.update_course_folder_name(update.course_id, update.folder_name.as_deref())
-			.map(|course_folder| UpdateCourseFolderNameResult {
-				ok: true,
-				course_folder: CourseFolderNameResolution::from(course_folder),
-			}),
-	)
-}
-
-/// 拡張機能の実応答を、native-hostの受信時刻・バージョン付きでSQLiteへ保存する。
-fn report_extension_runtime(database: &Database, request: Request) -> Response {
-	let report = match parse_payload::<ExtensionRuntimeReport>(&request) {
-		Ok(report) => report,
-		Err(response) => return response,
-	};
-	respond(request.id, database.record_extension_runtime(&report))
-}
-
 fn parse_payload<T: DeserializeOwned>(request: &Request) -> Result<T, Response> {
 	serde_json::from_value(request.payload.clone()).map_err(|error| {
 		eprintln!(
@@ -250,14 +222,6 @@ fn engine_error_response(id: String, error: EngineError) -> Response {
 	};
 	eprintln!("エンジン処理に失敗しました（{code}）: {error}");
 	Response::err(Some(id), code, error.user_message())
-}
-
-/// `ping`：疎通確認（docs/api/contract.md 1.2節）。`{}` → `{ version }`。
-fn ping(id: String) -> Response {
-	Response::ok(
-		id,
-		serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
-	)
 }
 
 #[cfg(test)]
@@ -376,80 +340,6 @@ mod tests {
 		);
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
-	}
-
-	#[test]
-	fn ping_returns_version() {
-		let mut database = Database::open_in_memory().unwrap();
-		let response = dispatch(&mut database, request("ping", serde_json::json!({})));
-		assert!(response.ok);
-		assert_eq!(
-			response.data.unwrap()["version"],
-			env!("CARGO_PKG_VERSION")
-		);
-	}
-
-	#[test]
-	fn report_extension_runtime_persists_observation() {
-		let mut database = Database::open_in_memory().unwrap();
-		let response = dispatch(
-			&mut database,
-			request(
-				"reportExtensionRuntime",
-				serde_json::json!({
-					"installationId": "550e8400-e29b-41d4-a716-446655440000",
-					"extensionVersion": "0.1.0",
-					"protocolVersion": 1
-				}),
-			),
-		);
-		assert!(response.ok);
-		assert_eq!(
-			response.data.unwrap()["extensionVersion"],
-			serde_json::json!("0.1.0")
-		);
-		assert_eq!(
-			database
-				.extension_setup_status_since("2000-01-01T00:00:00.000Z")
-				.unwrap()
-				.state,
-			engine_core::ExtensionSetupState::Ready
-		);
-	}
-
-	#[test]
-	fn report_extension_runtime_rejects_invalid_payload() {
-		let mut database = Database::open_in_memory().unwrap();
-		let response = dispatch(
-			&mut database,
-			request(
-				"reportExtensionRuntime",
-				serde_json::json!({
-					"installationId": "../invalid",
-					"extensionVersion": "0.1.0",
-					"protocolVersion": 1
-				}),
-			),
-		);
-		assert!(!response.ok);
-		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
-	}
-
-	#[test]
-	fn update_course_folder_name_rejects_unknown_course() {
-		let mut database = Database::open_in_memory().unwrap();
-		let response = dispatch(
-			&mut database,
-			request(
-				"updateCourseFolderName",
-				serde_json::json!({
-					"courseId": 999,
-					"folderName": "別名"
-				}),
-			),
-		);
-		assert!(!response.ok);
-		assert_eq!(response.error.unwrap().code, "NOT_FOUND");
 	}
 
 	#[test]
