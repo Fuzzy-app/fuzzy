@@ -1,11 +1,20 @@
 name: Deploy Fuzzy site to GitHub Pages
 
 on:
+  pull_request:
+    paths:
+      - "apps/site/**"
+      - "tests/site/**"
+      - ".github/workflows/deploy-pages.yml"
+      - "package.json"
+      - "bun.lock"
   push:
     branches: [main]
     paths:
       - "apps/site/**"
+      - "tests/site/**"
       - ".github/workflows/deploy-pages.yml"
+      - "package.json"
       - "bun.lock"
   workflow_dispatch:
 
@@ -34,15 +43,21 @@ jobs:
       - name: Build site
         run: bun run build:site
 
+      - name: Test site
+        run: bun test tests/site/pages-site.test.ts
+
       - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
       - name: Upload GitHub Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4
         with:
           path: apps/site/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

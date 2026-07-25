@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { parseHTML } from "linkedom";
 
 const siteRoot = new URL("../../apps/site/", import.meta.url);
 
 describe("Fuzzy GitHub Pages site", () => {
-	test("主要な案内と導入フローを掲載している", async () => {
+	test("現在の開発配布と正式公開後の配布を区別している", async () => {
 		const html = await readFile(new URL("index.html", siteRoot), "utf8");
 
 		for (const id of ["features", "install", "privacy", "environment", "faq"]) {
@@ -12,23 +13,37 @@ describe("Fuzzy GitHub Pages site", () => {
 		}
 
 		expect(html).toContain("Fuzzy for Windows");
-		expect(html).toContain("現在は開発・レビュー段階です");
-		expect(html).toContain("Windowsアプリとブラウザ拡張機能は別々に導入します");
+		expect(html).toContain("現在は開発・レビュー段階のため");
+		expect(html).toContain("開発中の拡張機能はTauriアプリへ同梱しています");
+		expect(html).toContain("正式公開後は、Windowsアプリとブラウザ拡張機能");
 		expect(html).toContain("学習状況をひと目で確認");
 		expect(html).not.toContain("おかえりなさい");
 	});
 
-	test("アプリと拡張機能をGitHubの一覧画面を経由せず取得できる", async () => {
+	test("未公開中は存在しない配布ファイルへ遷移できない", async () => {
 		const html = await readFile(new URL("index.html", siteRoot), "utf8");
+		const { document } = parseHTML(html);
+		const disabledDownloads = [...document.querySelectorAll('[aria-disabled="true"]')];
 
-		expect(html).toContain(
-			'href="https://github.com/Fuzzy-app/fuzzy/releases/latest/download/Fuzzy-Setup.exe"',
-		);
-		expect(html).toContain(
-			'href="https://github.com/Fuzzy-app/fuzzy/releases/latest/download/Fuzzy-Extension.zip"',
-		);
+		expect(document.querySelectorAll('a[href*="/releases/latest/download/"]')).toHaveLength(0);
+		expect(disabledDownloads).toHaveLength(4);
+		expect(disabledDownloads.every((element) => element.tagName === "SPAN")).toBe(true);
+		expect(html).toContain("公開予定");
+		expect(html).toContain("Fuzzy-Setup.exe");
+		expect(html).toContain("Fuzzy-Extension.zip");
+		expect(html).toContain("Windows 11");
 		expect(html).toContain("Chrome以外も利用可能");
 		expect(html).toContain("Chrome限定ではありません");
+	});
+
+	test("正式公開後の拡張機能導入手順を最後まで掲載している", async () => {
+		const html = await readFile(new URL("index.html", siteRoot), "utf8");
+
+		expect(html).toContain("正式公開後の導入手順");
+		expect(html).toContain("ZIPをダウンロードして展開");
+		expect(html).toContain("デベロッパーモードを有効");
+		expect(html).toContain("パッケージ化されていない拡張機能を読み込む");
+		expect(html).toContain("拡張機能からFuzzyアプリへの実応答を確認");
 	});
 
 	test("公開リンクはHTTPSを使用する", async () => {
@@ -50,6 +65,10 @@ describe("Fuzzy GitHub Pages site", () => {
 		);
 
 		expect(workflow).toContain("bun run build:site");
+		expect(workflow).toContain("bun test tests/site/pages-site.test.ts");
+		expect(workflow).toContain("pull_request:");
+		expect(workflow).toContain('"package.json"');
+		expect(workflow).toContain("github.event_name != 'pull_request'");
 		expect(workflow).toContain("actions/configure-pages@v5");
 		expect(workflow).toContain("actions/upload-pages-artifact@v4");
 		expect(workflow).toContain("actions/deploy-pages@v4");

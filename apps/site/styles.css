@@ -146,6 +146,24 @@ img {
 	transform: translateY(-2px);
 }
 
+.button-disabled,
+.button-disabled:hover {
+	cursor: not-allowed;
+	transform: none;
+	box-shadow: none;
+	opacity: 0.7;
+}
+
+.button-disabled.button-primary {
+	background: #77738f;
+}
+
+.button-disabled.button-secondary {
+	border-color: #d5d6df;
+	background: #ececf2;
+	color: #67697a;
+}
+
 .button-small {
 	min-height: 44px;
 	padding-inline: 18px;

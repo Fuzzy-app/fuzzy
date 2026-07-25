@@ -19,7 +19,7 @@
 		"build:site": "bun run --cwd apps/site build",
 		"build:extension": "bun run --cwd apps/extension build",
 		"build": "bun run check && bun run typecheck && bun run test && bun run build:extension",
-		"verify": "bun run check:ci && bun run typecheck && bun run test && bun run build:extension && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --all-targets",
+		"verify": "bun run check:ci && bun run typecheck && bun run test && bun run build:site && bun run build:extension && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --all-targets",
 		"fmt:rust": "cargo fmt --all",
 		"lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
 	},
