@@ -10,3 +10,4 @@ description = "Fuzzy Native Messagingホスト：拡張機能と標準入出力�
 engine-core = { path = "../../crates/engine-core" }
 serde.workspace = true
 serde_json.workspace = true
+ts-rs.workspace = true

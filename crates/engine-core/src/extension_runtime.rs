@@ -4,6 +4,7 @@
 //! バージョン付きの応答を初期セットアップ完了の根拠にする。
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::{EngineError, EngineResult};
 
@@ -11,8 +12,9 @@ use crate::{EngineError, EngineResult};
 pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 1;
 
 /// 拡張機能がnative-hostへ報告する実行情報。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ExtensionRuntimeReport {
 	/// ブラウザプロファイル内の拡張機能インストールを区別するローカルID。
 	pub installation_id: String,
@@ -72,8 +74,9 @@ fn validate_identifier(value: &str) -> EngineResult<()> {
 }
 
 /// SQLiteに保存した、インストール・バージョン単位の初回／最終応答。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ExtensionRuntimeObservation {
 	pub installation_id: String,
 	pub extension_version: String,
@@ -83,8 +86,9 @@ pub struct ExtensionRuntimeObservation {
 }
 
 /// 初期セットアップ画面から見た現在の応答状態。
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum ExtensionSetupState {
 	Waiting,
 	Ready,
@@ -92,8 +96,9 @@ pub enum ExtensionSetupState {
 }
 
 /// Tauriが返す初期セットアップ用の状態。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ExtensionSetupStatus {
 	pub state: ExtensionSetupState,
 	pub observation: Option<ExtensionRuntimeObservation>,

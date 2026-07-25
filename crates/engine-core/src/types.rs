@@ -151,6 +151,17 @@ pub struct SearchHit {
 	pub score: f32,
 }
 
+/// 検索結果をAPI DTOへ変換するためのSQLite由来メタデータ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchDocumentMetadata {
+	/// SQLite上のファイルID。
+	pub file_id: i64,
+	/// 保存時の元ファイル名。
+	pub file_name: String,
+	/// コース未紐付けの場合は`None`。
+	pub course_name: Option<String>,
+}
+
 /// 重複・類似ファイルの検出結果1件。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DuplicateMatch {

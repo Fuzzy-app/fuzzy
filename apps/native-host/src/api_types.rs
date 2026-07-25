@@ -10,26 +10,30 @@ use engine_core::folder_names::{
 	CourseFolderNameWarningCode as EngineCourseFolderNameWarningCode,
 };
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// 保存用コースフォルダ名の編集要求。`None`は自動提案へ戻す。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct UpdateCourseFolderNameRequest {
 	pub course_id: i64,
 	pub folder_name: Option<String>,
 }
 
 /// コースフォルダ名について利用者確認が必要な理由。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum CourseFolderNameWarningCode {
 	NameConflict,
 	NameShortened,
 }
 
 /// backendの別名・短縮名を利用者へ提示する警告。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CourseFolderNameWarning {
 	pub code: CourseFolderNameWarningCode,
 	pub message: String,
@@ -37,17 +41,19 @@ pub struct CourseFolderNameWarning {
 }
 
 /// 一意性を確認済みの保存用コースフォルダ名。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CourseFolderNameResolution {
-	pub course_id: i64,
+	pub course_id: Option<i64>,
 	pub folder_name: String,
 	pub warnings: Vec<CourseFolderNameWarning>,
 }
 
 /// 保存用コースフォルダ名の更新結果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct UpdateCourseFolderNameResult {
 	pub ok: bool,
 	pub course_folder: CourseFolderNameResolution,
@@ -75,7 +81,7 @@ impl From<EngineCourseFolderNameWarning> for CourseFolderNameWarning {
 impl From<EngineCourseFolderNameResolution> for CourseFolderNameResolution {
 	fn from(value: EngineCourseFolderNameResolution) -> Self {
 		Self {
-			course_id: value.course_id,
+			course_id: Some(value.course_id),
 			folder_name: value.folder_name,
 			warnings: value.warnings.into_iter().map(Into::into).collect(),
 		}
@@ -83,8 +89,9 @@ impl From<EngineCourseFolderNameResolution> for CourseFolderNameResolution {
 }
 
 /// ルール違反一覧に表示する1件。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct RuleViolationListItem {
 	pub file_id: i64,
 	pub file_name: String,
@@ -96,16 +103,18 @@ pub struct RuleViolationListItem {
 }
 
 /// APIで返す重複判定方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum DuplicateMethod {
 	Exact,
 	Similar,
 }
 
 /// 重複グループに含まれる1ファイル。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct DuplicateFileListItem {
 	pub file_id: i64,
 	pub file_name: String,
@@ -116,12 +125,67 @@ pub struct DuplicateFileListItem {
 }
 
 /// 重複ファイル一覧に表示する1グループ。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct DuplicateGroupListItem {
 	pub group_id: i64,
 	pub method: DuplicateMethod,
 	pub members: Vec<DuplicateFileListItem>,
+}
+
+/// 全文検索要求。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SearchRequest {
+	pub query: String,
+}
+
+/// 全文検索のAPI結果。ファイル情報はSQLiteの正本から投影する。
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SearchResult {
+	pub file_id: i64,
+	pub file_name: String,
+	pub course_name: Option<String>,
+	pub snippet: String,
+	pub page: Option<u32>,
+	pub score: f32,
+}
+
+/// SQLiteバックアップの書き出し要求。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportDataRequest {
+	pub file_path: String,
+}
+
+/// SQLiteバックアップの書き出し結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportDataResult {
+	pub file_path: String,
+}
+
+/// SQLiteバックアップの読み込み要求。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImportDataRequest {
+	pub file_path: String,
+}
+
+/// SQLiteバックアップの読み込み結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImportDataResult {
+	pub ok: bool,
+	pub reindex_required: bool,
 }
 
 #[cfg(test)]
@@ -131,7 +195,7 @@ mod tests {
 	#[test]
 	fn dto_is_serialized_with_contract_field_names() {
 		let course_folder = CourseFolderNameResolution {
-			course_id: 2,
+			course_id: Some(2),
 			folder_name: "英語_A".to_string(),
 			warnings: vec![CourseFolderNameWarning {
 				code: CourseFolderNameWarningCode::NameConflict,

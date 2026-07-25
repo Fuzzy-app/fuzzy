@@ -11,3 +11,5 @@
 - `DuplicateDetector` — blake3 / simhash・LSH による重複・類似ファイル検出
 
 保存パターン推定には`folder_only`、`frequency`、`evidence_weighted`の3方式があり、`ConfigurableScanEngine`から選択できる。推定結果はDB用のディレクトリテンプレートと比較評価用のファイル名テンプレートを分離する。将来の学習方式も`PatternEstimator`を実装して同じ入出力で追加する。詳細は`docs/保存パターン推定方式.md`を参照。
+
+`DefaultIndexEngine`はPDFをページ単位、Office Open XML（docx / pptx / xlsx）とUTF-8テキストを文書単位で抽出し、日本語を含む部分一致検索用のTantivy索引を構築する。索引完了状態はSQLiteの`search_index_meta`へ記録し、SQLiteを正本として扱う。

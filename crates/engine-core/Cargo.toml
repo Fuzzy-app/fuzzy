@@ -8,7 +8,12 @@ description = "Fuzzy 共有エンジン：再帰走査・ルール照合・全�
 
 [dependencies]
 serde.workspace = true
+ts-rs.workspace = true
 # SQLite接続はTauriとnative-hostで共有する。bundledで外部DLL依存を避ける。
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["backup", "bundled"] }
+lopdf = "0.44"
+quick-xml = "0.38"
+tantivy = "0.26"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
+zip = { version = "4", default-features = false, features = ["deflate"] }
