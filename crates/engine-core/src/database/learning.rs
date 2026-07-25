@@ -70,7 +70,7 @@ fn load_dashboard(conn: &Connection, now: Option<&str>) -> EngineResult<Dashboar
 					LIMIT 1
 				)
 			 FROM courses c
-			 LEFT JOIN files f ON f.course_id = c.id
+			 LEFT JOIN files f ON f.course_id = c.id AND f.missing_at IS NULL
 			 GROUP BY c.id, c.name
 			 ORDER BY c.id",
 		)
@@ -91,7 +91,9 @@ fn load_dashboard(conn: &Connection, now: Option<&str>) -> EngineResult<Dashboar
 
 	let (total_files, total_violations) = conn
 		.query_row(
-			"SELECT COUNT(*), COUNT(CASE WHEN rule_compliant = 0 THEN 1 END) FROM files",
+			"SELECT COUNT(*), COUNT(CASE WHEN rule_compliant = 0 THEN 1 END)
+			 FROM files
+			 WHERE missing_at IS NULL",
 			[],
 			|row| Ok((row.get(0)?, row.get(1)?)),
 		)

@@ -15,5 +15,11 @@ tempfile = "3"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 ts-rs.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+	"Win32_Foundation",
+	"Win32_Storage_FileSystem",
+] }
+
 [dev-dependencies]
 ts-rs = { workspace = true, features = ["format"] }

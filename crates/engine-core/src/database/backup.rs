@@ -1,11 +1,13 @@
-//! SQLiteバックアップの書き出し・検証・アトミックな差し替え。
+//! SQLiteバックアップの書き出し・検証・安全な復元。
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, DatabaseName, OpenFlags};
 
-use super::{db_err, table_exists, Database};
+use super::{
+	db_err, schema_version, validate_foreign_key_integrity, validate_schema_generation, Database,
+};
 use crate::{EngineError, EngineResult};
 
 impl Database {
@@ -45,7 +47,7 @@ impl Database {
 		result
 	}
 
-	/// 生SQLiteバックアップを検証して置き換え、索引メタ情報を無効化する。
+	/// 生SQLiteバックアップを検証して復元し、索引メタ情報を無効化する。
 	///
 	/// Tantivy索引はバックアップへ含めないため、呼び出し側は既存索引も破棄し、
 	/// `reindexRequired: true`を返す。
@@ -69,7 +71,13 @@ impl Database {
 
 		validate_import_source(source)?;
 		let staging_path = temporary_sibling(&destination, "import");
-		std::fs::copy(source, &staging_path)?;
+		let source_connection =
+			Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
+				.map_err(db_err)?;
+		if let Err(error) = source_connection.backup(DatabaseName::Main, &staging_path, None) {
+			let _ = std::fs::remove_file(&staging_path);
+			return Err(db_err(error));
+		}
 		let staged = match Self::open(&staging_path) {
 			Ok(staged) => staged,
 			Err(error) => {
@@ -84,39 +92,19 @@ impl Database {
 		}
 		drop(staged);
 
-		let placeholder = Connection::open_in_memory().map_err(db_err)?;
-		let active = std::mem::replace(&mut self.conn, placeholder);
-		if let Err((active, error)) = active.close() {
-			self.conn = active;
-			let _ = std::fs::remove_file(&staging_path);
-			return Err(db_err(error));
-		}
-
-		let recovery_path = temporary_sibling(&destination, "recovery");
-		if let Err(error) = std::fs::rename(&destination, &recovery_path) {
-			self.conn = Self::open(&destination)?.conn;
-			let _ = std::fs::remove_file(&staging_path);
-			return Err(EngineError::Io(error));
-		}
-		if let Err(error) = std::fs::rename(&staging_path, &destination) {
-			let _ = std::fs::rename(&recovery_path, &destination);
-			self.conn = Self::open(&destination)?.conn;
-			return Err(EngineError::Io(error));
-		}
-
-		match Self::open(&destination) {
-			Ok(imported) => {
-				self.conn = imported.conn;
-				let _ = std::fs::remove_file(&recovery_path);
-				Ok(())
-			}
-			Err(import_error) => {
-				let _ = std::fs::remove_file(&destination);
-				std::fs::rename(&recovery_path, &destination)?;
-				self.conn = Self::open(&destination)?.conn;
-				Err(import_error)
-			}
-		}
+		// SQLite Online Backup APIの復元は、完了時にだけ宛先transactionをcommitする。
+		// ファイルを一度退避してrenameする方式と異なり、失敗時にも現在のDBファイルと
+		// 接続をそのまま利用でき、元DBの喪失や空DBの新規作成が起きない。
+		let restore_result = self
+			.conn
+			.restore(
+				DatabaseName::Main,
+				&staging_path,
+				None::<fn(rusqlite::backup::Progress)>,
+			)
+			.map_err(db_err);
+		let _ = std::fs::remove_file(&staging_path);
+		restore_result
 	}
 }
 
@@ -132,15 +120,17 @@ fn validate_import_source(path: &Path) -> EngineResult<()> {
 			reason: "SQLiteバックアップの整合性を確認できません".to_string(),
 		});
 	}
-	for required_table in ["app_settings", "files", "search_index_meta"] {
-		if !table_exists(&conn, required_table)? {
-			return Err(EngineError::InvalidInput {
-				field: "filePath".to_string(),
-				reason: "FuzzyのSQLiteバックアップではありません".to_string(),
-			});
-		}
-	}
+	let version = schema_version(&conn).map_err(invalid_backup)?;
+	validate_schema_generation(&conn, version).map_err(invalid_backup)?;
+	validate_foreign_key_integrity(&conn).map_err(invalid_backup)?;
 	Ok(())
+}
+
+fn invalid_backup(error: EngineError) -> EngineError {
+	EngineError::InvalidInput {
+		field: "filePath".to_string(),
+		reason: format!("Fuzzyバックアップのスキーマまたは外部キーが不正です: {error}"),
+	}
 }
 
 fn temporary_sibling(path: &Path, purpose: &str) -> PathBuf {

@@ -1,11 +1,22 @@
 import { defineConfig } from "wxt";
 
+/**
+ * 同梱するunpacked拡張のIDをインストール先パスに依存させない公開鍵。
+ * Native Messagingホストは、この鍵から導出されるIDだけをallowed_originsへ登録する。
+ */
+export const FUZZY_EXTENSION_PUBLIC_KEY =
+	"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqSVgHbsIUGS9L/iUcHzGGrcu+6ontzkTCsMth63MIXb8dQ+WhZfSaaKjZl+DPF4yzmK3dd9y0+NTC44b7D+7SmJk3kTu+RQ3/7spHLVh9S7apRdfNYhHVCGRDQYq4+VLl7fNR+dvyP6Jcp8RriHmrSZ4wHJuQe+YiEIt7xSjGVH/xBVHijhu+UnP6IhISSfmvG5oM09OHLKk0LLpWl9IWafPyYtAP9HZbVWJvqsZ0Lr6lwJp7hNgFSXWfwyFNKQsaupcKmd7a9Z2/sRxhs4RMomAg7eS7WtMkOpFfPuVo5x3SQMwWLvYGg7QjFO73YqCkDSavlXaAHOT7E30hlHXswIDAQAB";
+export const FUZZY_EXTENSION_ID = "edainabflfdaibonfpckomlaocmemagg";
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
 	srcDir: "src",
 	manifestVersion: 3,
 	modules: ["@wxt-dev/module-svelte"],
 	manifest: {
+		name: "Fuzzy",
+		short_name: "Fuzzy",
+		key: FUZZY_EXTENSION_PUBLIC_KEY,
 		host_permissions: ["https://*.wakayama-u.ac.jp/*"],
 		web_accessible_resources: [
 			{

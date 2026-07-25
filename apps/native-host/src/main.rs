@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! Fuzzy Native Messagingホストのエントリポイント。
 //!
 //! 標準入出力のI/Oループだけを担当し、コマンド処理は`commands`へ委譲する。
@@ -28,12 +30,15 @@ fn main() -> std::io::Result<()> {
 
 	while let Some(body) = protocol::read_message(&mut input)? {
 		let response = match serde_json::from_slice::<Request>(&body) {
-			Ok(request) => commands::dispatch_with_services(
-				&mut database,
-				&mut index_engine,
-				&mut file_transfers,
-				request,
-			),
+			Ok(request) => match protocol::validate_request(request) {
+				Ok(request) => commands::dispatch_with_services(
+					&mut database,
+					&mut index_engine,
+					&mut file_transfers,
+					request,
+				),
+				Err(response) => response,
+			},
 			Err(error) => {
 				eprintln!("Native Messagingリクエストの解析に失敗しました: {error}");
 				Response::err(None, "INVALID_REQUEST", "リクエストの形式が不正です。")

@@ -3,6 +3,7 @@ import type {
 	RuleUpdateResult,
 	RuleViolationListItem,
 } from "@fuzzy/shared";
+import { ApiError } from "@fuzzy/shared";
 import type {
 	RuleManagementApi,
 	RuleSet,
@@ -52,6 +53,7 @@ export function isRuleManagementRequestMessage(
 export async function respondToRuleManagementRequest(
 	apiPromise: Promise<RuleManagementApi>,
 	message: RuleManagementRequestMessage,
+	onError?: (error: unknown) => void,
 ): Promise<RuleManagementResponseMessage> {
 	try {
 		const api = await apiPromise;
@@ -77,9 +79,10 @@ export async function respondToRuleManagementRequest(
 		}
 		return { ok: true, data, mode: api.mode };
 	} catch (error) {
+		onError?.(error);
 		return {
 			ok: false,
-			error: error instanceof Error ? error.message : "ルールAPIの呼び出しに失敗しました。",
+			error: error instanceof ApiError ? error.message : "ルールAPIの呼び出しに失敗しました。",
 		};
 	}
 }
@@ -87,7 +90,7 @@ export async function respondToRuleManagementRequest(
 /** content script から background のルールAPIを呼ぶクライアント。 */
 export class BackgroundRuleManagementApi implements RuleManagementApi {
 	readonly #transport: RuleManagementMessageTransport;
-	#mode: RuleManagementApi["mode"] = "mock";
+	#mode: RuleManagementApi["mode"] = "native";
 
 	constructor(transport: RuleManagementMessageTransport) {
 		this.#transport = transport;
@@ -131,7 +134,7 @@ export class BackgroundRuleManagementApi implements RuleManagementApi {
 	}
 }
 
-/** 拡張機能外の画面確認・テストでは null を返し、ローカルAPIへフォールバックする。 */
+/** 拡張機能外の画面確認・テストではnullを返し、呼び出し側で接続不可として扱う。 */
 export function createBackgroundRuleManagementApi(): RuleManagementApi | null {
 	const transport = createRuntimeTransport();
 	return transport ? new BackgroundRuleManagementApi(transport) : null;

@@ -17,15 +17,24 @@ export interface DeadlineNotificationMonitor {
 
 export function createDeadlineNotificationMonitor(
 	getClient: () => Promise<FuzzyApiClient>,
+	options: {
+		shouldCheck?: () => boolean;
+		onError?: (error: unknown) => void;
+	} = {},
 ): DeadlineNotificationMonitor {
 	let checkPromise: Promise<void> | null = null;
 
 	const check = (): Promise<void> => {
+		if (options.shouldCheck && !options.shouldCheck()) return Promise.resolve();
 		if (checkPromise) return checkPromise;
 		checkPromise = (async () => {
 			try {
-				await notifyDueDeadlines(await getClient());
+				const client = await getClient();
+				// 画面開発用のサンプル締切から実通知を生成しない。
+				if (client.mode === "mock") return;
+				await notifyDueDeadlines(client);
 			} catch (error) {
+				options.onError?.(error);
 				console.warn("[fuzzy] 締切通知の確認に失敗しました", error);
 			} finally {
 				checkPromise = null;

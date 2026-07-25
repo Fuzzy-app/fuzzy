@@ -75,7 +75,7 @@ impl DefaultIndexEngine {
 		register_tokenizer(&index)?;
 		let reader = index
 			.reader_builder()
-			.reload_policy(ReloadPolicy::Manual)
+			.reload_policy(ReloadPolicy::OnCommitWithDelay)
 			.try_into()
 			.map_err(index_err)?;
 
@@ -261,6 +261,8 @@ mod tests {
 	use rusqlite::params;
 	use std::fs::File;
 	use std::io::Write;
+	use std::thread;
+	use std::time::Duration;
 	use std::time::{SystemTime, UNIX_EPOCH};
 	use zip::write::SimpleFileOptions;
 
@@ -431,6 +433,39 @@ mod tests {
 		assert_eq!(hits[0].file_id, 4);
 		assert_eq!(hits[0].page, None);
 		drop(engine);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn observes_commits_from_another_index_engine() {
+		let directory = test_directory("cross-process-reload");
+		std::fs::create_dir_all(&directory).unwrap();
+		let document_path = directory.join("visibility.txt");
+		std::fs::write(&document_path, "cross process search visibility").unwrap();
+		let database = Database::open_in_memory().unwrap();
+		insert_file(&database, 51, &document_path);
+		let index_path = directory.join("index");
+		let search_engine = DefaultIndexEngine::open(&index_path).unwrap();
+		let mut save_engine = DefaultIndexEngine::open(&index_path).unwrap();
+
+		assert!(search_engine.search("visibility", 10).unwrap().is_empty());
+		save_engine
+			.index_file(&database, 51, &document_path)
+			.unwrap();
+
+		let mut hits = Vec::new();
+		for _ in 0..100 {
+			hits = search_engine.search("visibility", 10).unwrap();
+			if !hits.is_empty() {
+				break;
+			}
+			thread::sleep(Duration::from_millis(20));
+		}
+		assert_eq!(hits.len(), 1);
+		assert_eq!(hits[0].file_id, 51);
+
+		drop(save_engine);
+		drop(search_engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}
 

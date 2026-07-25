@@ -10,6 +10,8 @@ use crate::pattern::{
 };
 use crate::types::{FileEntry, SavePatternGuess, ScanSnapshot, ScanWarning};
 
+const ZIP_STAGING_PREFIX: &str = ".fuzzy-internal-zip-staging-";
+
 /// フォルダの再帰走査と保存パターン推定を担うトレイト。
 ///
 /// 初期セットアップ（Tauri）では既存構成のスキャンとパターン推定に、
@@ -145,6 +147,16 @@ fn scan_directory(
 				continue;
 			}
 		};
+		if directory == root
+			&& file_type.is_dir()
+			&& child
+				.file_name()
+				.to_string_lossy()
+				.starts_with(ZIP_STAGING_PREFIX)
+		{
+			// native-hostがZIPを検証中の一時領域は正本へ登録しない。
+			continue;
+		}
 		if file_type.is_symlink() {
 			// Windowsのジャンクションを含む名前サロゲートは追跡しない。
 			continue;
@@ -283,6 +295,21 @@ mod tests {
 		);
 		assert!(snapshot.entries[0].modified_at.is_some());
 		assert_eq!(snapshot.entries[1].file_name, "09_演習課題.docx");
+	}
+
+	#[test]
+	fn ignores_native_host_zip_staging_directly_below_root() {
+		let directory = TestDirectory::new("zip-staging");
+		directory.create_file(
+			".fuzzy-internal-zip-staging-test/途中の資料.pdf",
+			b"partial",
+		);
+		directory.create_file("データベース/公開済み資料.pdf", b"published");
+
+		let snapshot = DefaultScanEngine.scan(&directory.path).expect("走査できる");
+
+		assert_eq!(snapshot.entries.len(), 1);
+		assert_eq!(snapshot.entries[0].file_name, "公開済み資料.pdf");
 	}
 
 	#[test]

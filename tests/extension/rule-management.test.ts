@@ -14,7 +14,10 @@ import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
 } from "../../apps/extension/src/lib/rules/backgroundApi";
-import { RuleManagementStore } from "../../apps/extension/src/lib/rules/state";
+import {
+	RuleManagementStore,
+	createRuleManagementStore,
+} from "../../apps/extension/src/lib/rules/state";
 import type { RuleManagementApi } from "../../apps/extension/src/lib/rules/types";
 
 describe("MockApiClient のルール管理", () => {
@@ -184,6 +187,15 @@ describe("ルールテンプレート", () => {
 });
 
 describe("RuleManagementStore", () => {
+	test("拡張機能runtimeがない場合はサンプルへ退避せず接続エラーにする", async () => {
+		const store = createRuleManagementStore();
+
+		expect(store.mode).toBe("native");
+		await expect(store.load()).rejects.toMatchObject({ code: "NO_NATIVE_HOST" });
+		expect(store.snapshot.rules).toBeNull();
+		expect(store.snapshot.status).toBe("error");
+	});
+
 	test("保存後のルールと保存対象を単一スナップショットへ反映する", async () => {
 		const store = new RuleManagementStore(new MockApiClient());
 

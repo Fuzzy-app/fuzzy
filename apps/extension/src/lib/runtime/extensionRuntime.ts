@@ -88,9 +88,14 @@ export async function reportCurrentExtensionRuntime(
 	const storage = options.storage ?? browser.storage.local;
 	const installationId = await getOrCreateInstallationId(storage, options.createId);
 	const extensionVersion = options.extensionVersion ?? browser.runtime.getManifest().version;
-	const client = options.client ?? new NativeApiClient();
-
-	return client.reportExtensionRuntime(
-		createExtensionRuntimeReport(installationId, extensionVersion),
-	);
+	const ownedClient = options.client ? null : new NativeApiClient();
+	const client = options.client ?? ownedClient;
+	if (!client) throw new Error("native-hostクライアントを初期化できませんでした");
+	try {
+		return await client.reportExtensionRuntime(
+			createExtensionRuntimeReport(installationId, extensionVersion),
+		);
+	} finally {
+		ownedClient?.disconnect();
+	}
 }

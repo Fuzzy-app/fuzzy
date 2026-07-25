@@ -35,9 +35,11 @@ import type {
 	ExtractZipResult,
 	ImportDataRequest,
 	ImportDataResult,
+	LibraryMaintenanceSummary,
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
+	RebuildLibraryRequest,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolationListItem,
@@ -47,6 +49,7 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	SyncMoodleAssignmentsRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
@@ -60,9 +63,10 @@ const delay = <T>(value: T) =>
 	new Promise<T>((resolve) => setTimeout(() => resolve(value), LATENCY_MS));
 
 /**
- * native-host が起動していない場合に使うモック実装。
+ * テスト・画面開発で明示的に使うモック実装。
+ * productionのnative-host接続失敗時には使用しない。
  * バンドルされたサンプルデータ（sample-data/*.json）を返す。
- * 画面開発・デモ・テストを native-host 未実装の状態でも進められるようにするためのもの。
+ * 実環境のnative-hostへ接続しない単体テストや画面確認だけに使用する。
  */
 export class MockApiClient implements FuzzyApiClient {
 	readonly mode = "mock" as const;
@@ -362,6 +366,18 @@ export class MockApiClient implements FuzzyApiClient {
 		return delay(events[events.length - 1] ?? null);
 	}
 
+	async syncMoodleAssignments(request: SyncMoodleAssignmentsRequest): Promise<DataSyncEvent> {
+		const events = syncEvents as DataSyncEvent[];
+		return delay({
+			id: (events[events.length - 1]?.id ?? 0) + 1,
+			syncedAt: new Date().toISOString(),
+			trigger: request.trigger,
+			newAssignmentCount: request.assignments.length,
+			changedAssignmentCount: 0,
+			removedAssignmentCount: 0,
+		});
+	}
+
 	async getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]> {
 		// サンプルデータは直近の同期（sync_events末尾）1回分の変更点のみを保持している。
 		// sinceSyncEventIdがそれより新しい同期を指す場合は差分なしとして扱う
@@ -379,6 +395,10 @@ export class MockApiClient implements FuzzyApiClient {
 
 	async importData(_request: ImportDataRequest): Promise<ImportDataResult> {
 		throw new ApiError("NO_NATIVE_HOST", "データのインポートにはnative-hostへの接続が必要です。");
+	}
+
+	async rebuildLibrary(_request: RebuildLibraryRequest): Promise<LibraryMaintenanceSummary> {
+		throw new ApiError("NO_NATIVE_HOST", "保存先の再スキャンにはnative-hostへの接続が必要です。");
 	}
 
 	private async enqueueRuleMutation(mutate: () => void): Promise<RuleUpdateResult> {

@@ -53,6 +53,65 @@ body {
 	line-height: 1.8;
 }
 
+.fuzzy-popup-cache-date {
+	margin: 0 0 14px;
+	color: var(--fuzzy-color-text-muted);
+	font-size: 0.84rem;
+	font-weight: 700;
+	line-height: 1.6;
+}
+
+.fuzzy-popup-metrics {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px;
+	margin-bottom: 16px;
+}
+
+.fuzzy-popup-metric {
+	display: grid;
+	gap: 5px;
+	padding: 10px;
+	border: 1px solid #1c1c1c;
+	background: var(--fuzzy-color-surface);
+}
+
+.fuzzy-popup-metric span {
+	font-size: 0.72rem;
+	font-weight: 800;
+}
+
+.fuzzy-popup-metric strong {
+	font-size: 1.35rem;
+}
+
+.fuzzy-popup-courses,
+.fuzzy-popup-guide {
+	margin-top: 16px;
+	padding-top: 14px;
+	border-top: 2px solid #1c1c1c;
+}
+
+.fuzzy-popup-courses h2,
+.fuzzy-popup-guide h2 {
+	margin: 0 0 10px;
+	font-size: 1rem;
+}
+
+.fuzzy-popup-course {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 9px 0;
+	border-top: 1px solid #d8d2c4;
+	font-size: 0.82rem;
+}
+
+.fuzzy-popup-course span {
+	flex: 0 0 auto;
+	color: var(--fuzzy-color-text-muted);
+}
+
 .fuzzy-popup-steps {
 	display: grid;
 	gap: 10px;

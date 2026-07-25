@@ -15,12 +15,18 @@
 	import { createCourseOverrides } from "$lib/setup/course-overrides";
 	import ExtensionInstallStep from "$lib/setup/ExtensionInstallStep.svelte";
 	import ExtensionRecoveryPanel from "$lib/setup/ExtensionRecoveryPanel.svelte";
+	import StartupRecoveryPanel from "$lib/setup/StartupRecoveryPanel.svelte";
 	import type { ExtensionRecoveryStatus } from "@fuzzy/shared";
 	import type {
 		InitialRuleOption,
 		SetupDraft,
 		SetupStatus,
 	} from "$lib/setup/types";
+	import {
+		getApplicationRecoveryStatusClient,
+		type ApplicationRecoveryStatus,
+		type LibraryMaintenanceSummary,
+	} from "$lib/setup/library-maintenance";
 
 	type SetupStepState = "done" | "current" | "pending";
 
@@ -58,7 +64,7 @@
 	};
 
 	let setupStatus: SetupStatus = { done: false };
-	let currentStepIndex = 2;
+	let currentStepIndex = 0;
 	let isPickingFolder = false;
 	let isScanning = false;
 	let isSaving = false;
@@ -68,18 +74,66 @@
 	let extensionRecoveryLoadError: string | null = null;
 	let isLoadingExtensionRecovery = false;
 	let isRecoveryMode = false;
+	let initialMaintenanceSummary: LibraryMaintenanceSummary | null = null;
+	let applicationRecoveryStatus: ApplicationRecoveryStatus | null = null;
+	let isCheckingApplicationRecovery = true;
 	const minimumScanLoadingMs = 450;
 	const extensionVerificationStartedAt = new Date().toISOString();
 
 	onMount(async () => {
-		setupStatus = await getSetupStatusClient();
+		try {
+			applicationRecoveryStatus = await getApplicationRecoveryStatusClient();
+			if (!requiresApplicationRecovery(applicationRecoveryStatus)) {
+				await loadNormalApplicationState();
+			}
+		} catch (error) {
+			errorMessage =
+				error instanceof Error
+					? error.message
+					: "ローカルデータの状態を確認できませんでした。";
+		} finally {
+			isCheckingApplicationRecovery = false;
+		}
+	});
 
+	function requiresApplicationRecovery(
+		status: ApplicationRecoveryStatus | null,
+	): boolean {
+		return (
+			status !== null &&
+			(status.database.state !== "ready" ||
+				status.searchIndex.state !== "ready")
+		);
+	}
+
+	async function loadNormalApplicationState(): Promise<void> {
+		setupStatus = await getSetupStatusClient();
 		if (setupStatus.done) {
 			currentStepIndex = 3;
 			isRecoveryMode = true;
 			await loadExtensionRecoveryStatus();
+		} else {
+			currentStepIndex = 0;
+			isRecoveryMode = false;
+			extensionRecoveryStatus = null;
 		}
-	});
+	}
+
+	async function handleApplicationRecovered(message: string): Promise<void> {
+		errorMessage = null;
+		successMessage = message;
+		try {
+			applicationRecoveryStatus = await getApplicationRecoveryStatusClient();
+			if (!requiresApplicationRecovery(applicationRecoveryStatus)) {
+				await loadNormalApplicationState();
+			}
+		} catch (error) {
+			errorMessage =
+				error instanceof Error
+					? error.message
+					: "復旧後のローカルデータを確認できませんでした。";
+		}
+	}
 
 	async function loadExtensionRecoveryStatus(): Promise<void> {
 		isLoadingExtensionRecovery = true;
@@ -87,8 +141,8 @@
 		try {
 			const status = await getExtensionRecoveryStatusClient();
 			extensionRecoveryStatus = status;
-			// 実応答の履歴がなければ初回導入は未完了なので、導入待機を継続する。
-			isRecoveryMode = status.state !== "missing";
+			// セットアップ済みなら応答がmissingでも保守・バックアップ導線を維持する。
+			isRecoveryMode = setupStatus.done;
 		} catch (error) {
 			extensionRecoveryStatus = null;
 			extensionRecoveryLoadError =
@@ -173,6 +227,7 @@
 				selectedCandidateId: selectedCandidate?.id ?? null,
 				lastScannedAt: new Date().toISOString(),
 			};
+			currentStepIndex = 2;
 		} catch {
 			errorMessage = "スキャン結果の読み込みに失敗しました。";
 		} finally {
@@ -219,7 +274,7 @@
 		successMessage = null;
 
 		try {
-			await saveInitialSetupClient({
+			const saved = await saveInitialSetupClient({
 				path: draft.baseFolderPath,
 				pattern: selectedCandidate,
 				rule: selectedRule,
@@ -227,9 +282,10 @@
 					(override) => override.enabled,
 				),
 			});
+			initialMaintenanceSummary = saved.maintenance;
 
 			setupStatus = await getSetupStatusClient();
-			successMessage = "保存先と初期ルールを保存しました。";
+			successMessage = `保存先と初期ルールを保存し、既存資料${saved.maintenance.indexedFileCount}件を索引化しました。`;
 			currentStepIndex = 3;
 		} catch {
 			errorMessage = "初期セットアップの保存に失敗しました。";
@@ -252,6 +308,9 @@
 				) + 1;
 	$: canSaveSetup = Boolean(
 		draft.baseFolderPath && selectedCandidate && selectedRule,
+	);
+	$: applicationNeedsRecovery = requiresApplicationRecovery(
+		applicationRecoveryStatus,
 	);
 	$: steps = stepLabels.map((label, index) => ({
 		label,
@@ -286,352 +345,384 @@
 		</div>
 	</header>
 
-	<section class="workspace">
-		<aside class="sidebar">
-			<p class="sidebar-label">
-				{isRecoveryMode
-					? "SQLiteに保存された最終応答を確認し、必要な場合だけ復旧手順を案内します。"
-					: "保存先と初期ルールを設定した後、ブラウザ拡張機能の導入を案内します。"}
-			</p>
-			{#if isRecoveryMode}
-				<ul class="side-list">
-					<li class="active" aria-current="page">
-						<span class="side-index">✓</span>
-						<span>拡張機能の状態</span>
-					</li>
-				</ul>
-			{:else}
-				<nav aria-label="セットアップの流れ">
+	{#if isCheckingApplicationRecovery}
+		<section class="startup-check-panel" aria-live="polite">
+			<div class="startup-spinner" aria-hidden="true"></div>
+			<div>
+				<p class="eyebrow">ローカルデータを確認中</p>
+				<h1>SQLite正本と検索索引を確認しています</h1>
+				<p>保存済みの資料ファイルは変更しません。</p>
+			</div>
+		</section>
+	{:else if applicationRecoveryStatus && applicationNeedsRecovery}
+		<StartupRecoveryPanel
+			initialStatus={applicationRecoveryStatus}
+			onRecovered={handleApplicationRecovered}
+		/>
+	{:else}
+		<section class="workspace">
+			<aside class="sidebar">
+				<p class="sidebar-label">
+					{isRecoveryMode
+						? "SQLiteに保存された最終応答を確認し、必要な場合だけ復旧手順を案内します。"
+						: "保存先と初期ルールを設定した後、ブラウザ拡張機能の導入を案内します。"}
+				</p>
+				{#if isRecoveryMode}
 					<ul class="side-list">
-						{#each sidebarItems as item, index}
-							<li
-								class:active={index <= currentStepIndex}
-								aria-current={index === currentStepIndex ? "step" : undefined}
-							>
-								<span class="side-index">{index + 1}</span>
-								<span>{item}</span>
-							</li>
-						{/each}
+						<li class="active" aria-current="page">
+							<span class="side-index">✓</span>
+							<span>拡張機能の状態</span>
+						</li>
 					</ul>
-				</nav>
-			{/if}
-		</aside>
-
-		<section class="content">
-			{#if !isRecoveryMode}
-				<div class="progress" aria-label="進捗">
-					{#each steps as item, index}
-						<div
-							class="progress-item"
-							aria-current={item.state === "current" ? "step" : undefined}
-						>
-							<div
-								class:current={item.state === "current"}
-								class:done={item.state === "done"}
-								class="progress-dot"
-							>
-								{#if item.state === "done"}
-									✓
-								{:else}
-									{index + 1}
-								{/if}
-							</div>
-							<span>{item.label}</span>
-						</div>
-					{/each}
-				</div>
-			{/if}
-
-			<section class="panel" hidden={currentStepIndex !== 2}>
-				<div class="panel-header">
-					<div>
-						<p class="chip">STEP 3 / 4</p>
-						<h1>保存パターンを確認して、初期ルールを選ぶ</h1>
-						<p class="intro">
-							スキャン結果に近い保存パターンを確認し、Fuzzy
-							が今後使うフォルダ作成ルールを選びます。
-						</p>
-					</div>
-					<button
-						class="primary-button"
-						type="button"
-						on:click={handlePickFolder}
-						disabled={isPickingFolder || isScanning || isSaving}
-					>
-						{#if isPickingFolder}
-							フォルダを選択中...
-						{:else}
-							保存先フォルダを選ぶ
-						{/if}
-					</button>
-				</div>
-
-				<div class="folder-card">
-					<div>
-						<p class="section-label">選択中の保存先</p>
-						<strong>{draft.baseFolderPath ?? "まだ選択されていません"}</strong>
-					</div>
-					<div class="folder-meta">
-						<span>最終スキャン: {formatScannedAt(draft.lastScannedAt)}</span>
-						<button
-							class:loading={isScanning}
-							class="ghost-button"
-							type="button"
-							on:click={handleRescan}
-							disabled={!draft.baseFolderPath || isScanning || isSaving}
-							aria-busy={isScanning}
-						>
-							<span class="ghost-button-label">
-								{#if isScanning}
-									<span class="spinner" aria-hidden="true"></span>
-								{/if}
-								<span>
-									{#if isScanning}
-										再スキャン中...
-									{:else}
-										再スキャン
-									{/if}
-								</span>
-							</span>
-						</button>
-					</div>
-				</div>
-
-				{#if setupStatus.done}
-					<p class="success-banner" role="status">
-						保存先と初期ルールは保存済みです。
-						{#if setupStatus.savedAt}
-							<span>保存日時: {formatScannedAt(setupStatus.savedAt)}</span>
-						{/if}
-					</p>
+				{:else}
+					<nav aria-label="セットアップの流れ">
+						<ul class="side-list">
+							{#each sidebarItems as item, index}
+								<li
+									class:active={index <= currentStepIndex}
+									aria-current={index === currentStepIndex ? "step" : undefined}
+								>
+									<span class="side-index">{index + 1}</span>
+									<span>{item}</span>
+								</li>
+							{/each}
+						</ul>
+					</nav>
 				{/if}
+			</aside>
 
-				{#if errorMessage}
+			<section class="content">
+				{#if !isRecoveryMode}
+					<div class="progress" aria-label="進捗">
+						{#each steps as item, index}
+							<div
+								class="progress-item"
+								aria-current={item.state === "current" ? "step" : undefined}
+							>
+								<div
+									class:current={item.state === "current"}
+									class:done={item.state === "done"}
+									class="progress-dot"
+								>
+									{#if item.state === "done"}
+										✓
+									{:else}
+										{index + 1}
+									{/if}
+								</div>
+								<span>{item.label}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+				{#if currentStepIndex === 3 && errorMessage}
 					<p class="error-banner" role="alert">{errorMessage}</p>
 				{/if}
-
-				{#if successMessage}
+				{#if currentStepIndex === 3 && successMessage}
 					<p class="success-banner" role="status">{successMessage}</p>
 				{/if}
 
-				<section class="scan-section">
-					<div class="scan-heading">
+				<section class="panel" hidden={currentStepIndex === 3}>
+					<div class="panel-header">
 						<div>
-							<p class="section-label">保存パターン推定</p>
-							<h2>推定結果</h2>
+							<p class="chip">STEP {currentStepIndex + 1} / 4</p>
+							<h1>
+								{currentStepIndex === 0
+									? "保存先フォルダーを選ぶ"
+									: "保存パターンを確認して、初期ルールを選ぶ"}
+							</h1>
+							<p class="intro">
+								{currentStepIndex === 0
+									? "資料を保存するフォルダーを選ぶと、既存の構成を読み取り、近い保存パターンを提案します。"
+									: "スキャン結果に近い保存パターンを確認し、Fuzzyが今後使うフォルダ作成ルールを選びます。"}
+							</p>
 						</div>
-						<span class="scan-count">{draft.candidates.length} 件</span>
+						<button
+							class="primary-button"
+							type="button"
+							on:click={handlePickFolder}
+							disabled={isPickingFolder || isScanning || isSaving}
+						>
+							{#if isPickingFolder}
+								フォルダを選択中...
+							{:else}
+								保存先フォルダを選ぶ
+							{/if}
+						</button>
 					</div>
 
-					{#if draft.candidates.length === 0}
-						<div class="empty-state">
-							<p>フォルダを選ぶと、保存パターンの候補が表示されます。</p>
+					<div class="folder-card">
+						<div>
+							<p class="section-label">選択中の保存先</p>
+							<strong>{draft.baseFolderPath ?? "まだ選択されていません"}</strong
+							>
 						</div>
-					{:else}
-						<div class="pattern-list">
-							{#each draft.candidates as candidate}
-								<button
-									class:selected={candidate.id === draft.selectedCandidateId}
-									class="pattern-card"
-									type="button"
-									on:click={() => selectCandidate(candidate.id)}
-								>
-									<div class="pattern-main">
-										<div class="pattern-title-row">
-											<h3>{candidate.name}</h3>
-											{#if candidate.recommended}
-												<span class="badge">おすすめ</span>
-											{/if}
-										</div>
-										<p>{candidate.description}</p>
-										<p class="reason">{candidate.reason}</p>
-									</div>
+						<div class="folder-meta">
+							<span>最終スキャン: {formatScannedAt(draft.lastScannedAt)}</span>
+							<button
+								class:loading={isScanning}
+								class="ghost-button"
+								type="button"
+								on:click={handleRescan}
+								disabled={!draft.baseFolderPath || isScanning || isSaving}
+								aria-busy={isScanning}
+							>
+								<span class="ghost-button-label">
+									{#if isScanning}
+										<span class="spinner" aria-hidden="true"></span>
+									{/if}
+									<span>
+										{#if isScanning}
+											再スキャン中...
+										{:else}
+											再スキャン
+										{/if}
+									</span>
+								</span>
+							</button>
+						</div>
+					</div>
 
-									<div class="pattern-side">
-										<div class="score-box">
-											<span>一致度</span>
-											<strong>{candidate.matchScore}%</strong>
+					{#if setupStatus.done}
+						<p class="success-banner" role="status">
+							保存先と初期ルールは保存済みです。
+							{#if setupStatus.savedAt}
+								<span>保存日時: {formatScannedAt(setupStatus.savedAt)}</span>
+							{/if}
+						</p>
+					{/if}
+
+					{#if errorMessage}
+						<p class="error-banner" role="alert">{errorMessage}</p>
+					{/if}
+
+					{#if successMessage}
+						<p class="success-banner" role="status">{successMessage}</p>
+					{/if}
+
+					<section class="scan-section">
+						<div class="scan-heading">
+							<div>
+								<p class="section-label">保存パターン推定</p>
+								<h2>推定結果</h2>
+							</div>
+							<span class="scan-count">{draft.candidates.length} 件</span>
+						</div>
+
+						{#if draft.candidates.length === 0}
+							<div class="empty-state">
+								<p>フォルダを選ぶと、保存パターンの候補が表示されます。</p>
+							</div>
+						{:else}
+							<div class="pattern-list">
+								{#each draft.candidates as candidate}
+									<button
+										class:selected={candidate.id === draft.selectedCandidateId}
+										class="pattern-card"
+										type="button"
+										on:click={() => selectCandidate(candidate.id)}
+									>
+										<div class="pattern-main">
+											<div class="pattern-title-row">
+												<h3>{candidate.name}</h3>
+												{#if candidate.recommended}
+													<span class="badge">おすすめ</span>
+												{/if}
+											</div>
+											<p>{candidate.description}</p>
+											<p class="reason">{candidate.reason}</p>
 										</div>
-										<div
-											class="example-box"
-											aria-label={`${candidate.name} の例`}
-										>
-											<p>検出された並び</p>
-											<ul>
-												{#each candidate.folders as folder}
-													<li>{folder}</li>
-												{/each}
-											</ul>
+
+										<div class="pattern-side">
+											<div class="score-box">
+												<span>一致度</span>
+												<strong>{candidate.matchScore}%</strong>
+											</div>
+											<div
+												class="example-box"
+												aria-label={`${candidate.name} の例`}
+											>
+												<p>検出された並び</p>
+												<ul>
+													{#each candidate.folders as folder}
+														<li>{folder}</li>
+													{/each}
+												</ul>
+											</div>
 										</div>
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</section>
+
+					<section class="rule-section">
+						<div class="scan-heading">
+							<div>
+								<p class="section-label">初期ルール</p>
+								<h2>フォルダ作成ルール</h2>
+							</div>
+						</div>
+
+						<div class="rule-grid">
+							{#each ruleOptions as rule}
+								<button
+									class:selected={rule.id === draft.selectedRuleId}
+									class="rule-card"
+									type="button"
+									on:click={() => selectRule(rule.id)}
+								>
+									<div class="pattern-title-row">
+										<h3>{rule.name}</h3>
+										{#if rule.recommended}
+											<span class="badge">標準</span>
+										{/if}
 									</div>
+									<p>{rule.description}</p>
+									<code>{rule.template}</code>
+									<ul>
+										{#each rule.preview as preview}
+											<li>{preview}</li>
+										{/each}
+									</ul>
 								</button>
 							{/each}
 						</div>
-					{/if}
-				</section>
-
-				<section class="rule-section">
-					<div class="scan-heading">
-						<div>
-							<p class="section-label">初期ルール</p>
-							<h2>フォルダ作成ルール</h2>
-						</div>
-					</div>
-
-					<div class="rule-grid">
-						{#each ruleOptions as rule}
-							<button
-								class:selected={rule.id === draft.selectedRuleId}
-								class="rule-card"
-								type="button"
-								on:click={() => selectRule(rule.id)}
-							>
-								<div class="pattern-title-row">
-									<h3>{rule.name}</h3>
-									{#if rule.recommended}
-										<span class="badge">標準</span>
-									{/if}
-								</div>
-								<p>{rule.description}</p>
-								<code>{rule.template}</code>
-								<ul>
-									{#each rule.preview as preview}
-										<li>{preview}</li>
-									{/each}
-								</ul>
-							</button>
-						{/each}
-					</div>
-				</section>
-
-				{#if draft.courseOverrides.length > 0}
-					<section class="override-section">
-						<div class="override-explanation">
-							<p class="section-label">初期例外</p>
-							<h2>コース別に外す候補</h2>
-							<p class="override-help">
-								チェックしたコースは、選択中の初期ルールから外して保存します。たとえば
-								`年度 / 科目 / 課題` を選んでいても、そのコースだけは `科目 /
-								課題` のように短い並びで扱う想定です。
-							</p>
-						</div>
-						<div>
-							<p class="section-label">初期例外</p>
-							<h2>コース別に外す候補</h2>
-						</div>
-						<div class="override-list">
-							{#each draft.courseOverrides as override}
-								<label class="override-row">
-									<input
-										type="checkbox"
-										checked={override.enabled}
-										on:change={() => toggleOverride(override.id)}
-									/>
-									<span>
-										<strong>{override.courseName}</strong>
-										<small
-											>このコースだけ共通ルールから外し、科目フォルダ直下で保存します。</small
-										>
-									</span>
-								</label>
-							{/each}
-						</div>
 					</section>
-				{/if}
 
-				<section class="selection-summary">
-					<div>
-						<p class="section-label">保存内容</p>
-						<h2>現在の選択内容</h2>
-					</div>
-					<div class="summary-card">
-						<p><strong>保存先:</strong> {draft.baseFolderPath ?? "未選択"}</p>
-						<p>
-							<strong>推定候補:</strong>
-							{selectedCandidate?.name ?? "未選択"}
-						</p>
-						{#if selectedCandidate}
-							<p>
-								<strong>候補順位:</strong>
-								{selectedCandidateRank} / {draft.candidates.length}
-							</p>
-							<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
-						{/if}
-						<p><strong>初期ルール:</strong> {selectedRule?.name ?? "未選択"}</p>
-						{#if selectedRule}
-							<p><strong>テンプレート:</strong> {selectedRule.template}</p>
-						{/if}
-						<p>
-							<strong>初期例外:</strong>
-							{draft.courseOverrides.filter((override) => override.enabled)
-								.length}件
-						</p>
-					</div>
-				</section>
-
-				<div class="action-row">
-					{#if setupStatus.done}
-						<button
-							class="ghost-button"
-							type="button"
-							on:click={() => (currentStepIndex = 3)}
-						>
-							拡張機能の導入へ進む
-						</button>
-					{/if}
-					<button
-						class="primary-button"
-						type="button"
-						on:click={handleSaveInitialSetup}
-						disabled={!canSaveSetup || isSaving || isScanning}
-					>
-						{#if isSaving}
-							保存中...
-						{:else}
-							この内容で初期設定を保存
-						{/if}
-					</button>
-				</div>
-			</section>
-			{#if currentStepIndex === 3}
-				{#if isRecoveryMode}
-					{#if extensionRecoveryStatus}
-						<ExtensionRecoveryPanel initialStatus={extensionRecoveryStatus} />
-					{:else}
-						<section class="panel recovery-load-panel">
-							<div class="panel-header">
-								<div>
-									<p class="eyebrow">拡張機能の状態</p>
-									<h1>SQLiteの応答情報を確認</h1>
-									<p>
-										保存済みの最終応答を読み取り、拡張機能の状態を確認します。
-									</p>
-								</div>
-							</div>
-							{#if extensionRecoveryLoadError}
-								<p class="error-banner" role="alert">
-									{extensionRecoveryLoadError}
+					{#if draft.courseOverrides.length > 0}
+						<section class="override-section">
+							<div class="override-explanation">
+								<p class="section-label">初期例外</p>
+								<h2>コース別に外す候補</h2>
+								<p class="override-help">
+									チェックしたコースは、選択中の初期ルールから外して保存します。たとえば
+									`年度 / 科目 / 課題` を選んでいても、そのコースだけは `科目 /
+									課題` のように短い並びで扱う想定です。
 								</p>
-							{/if}
-							<button
-								class="primary-button"
-								type="button"
-								on:click={loadExtensionRecoveryStatus}
-								disabled={isLoadingExtensionRecovery}
-							>
-								{isLoadingExtensionRecovery ? "確認中..." : "再試行"}
-							</button>
+							</div>
+							<div>
+								<p class="section-label">初期例外</p>
+								<h2>コース別に外す候補</h2>
+							</div>
+							<div class="override-list">
+								{#each draft.courseOverrides as override}
+									<label class="override-row">
+										<input
+											type="checkbox"
+											checked={override.enabled}
+											on:change={() => toggleOverride(override.id)}
+										/>
+										<span>
+											<strong>{override.courseName}</strong>
+											<small
+												>このコースだけ共通ルールから外し、科目フォルダ直下で保存します。</small
+											>
+										</span>
+									</label>
+								{/each}
+							</div>
 						</section>
 					{/if}
-				{:else}
-					<ExtensionInstallStep
-						verificationStartedAt={extensionVerificationStartedAt}
-						onBack={() => (currentStepIndex = 2)}
-					/>
+
+					<section class="selection-summary">
+						<div>
+							<p class="section-label">保存内容</p>
+							<h2>現在の選択内容</h2>
+						</div>
+						<div class="summary-card">
+							<p><strong>保存先:</strong> {draft.baseFolderPath ?? "未選択"}</p>
+							<p>
+								<strong>推定候補:</strong>
+								{selectedCandidate?.name ?? "未選択"}
+							</p>
+							{#if selectedCandidate}
+								<p>
+									<strong>候補順位:</strong>
+									{selectedCandidateRank} / {draft.candidates.length}
+								</p>
+								<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
+							{/if}
+							<p>
+								<strong>初期ルール:</strong>
+								{selectedRule?.name ?? "未選択"}
+							</p>
+							{#if selectedRule}
+								<p><strong>テンプレート:</strong> {selectedRule.template}</p>
+							{/if}
+							<p>
+								<strong>初期例外:</strong>
+								{draft.courseOverrides.filter((override) => override.enabled)
+									.length}件
+							</p>
+						</div>
+					</section>
+
+					<div class="action-row">
+						{#if setupStatus.done}
+							<button
+								class="ghost-button"
+								type="button"
+								on:click={() => (currentStepIndex = 3)}
+							>
+								拡張機能の導入へ進む
+							</button>
+						{/if}
+						<button
+							class="primary-button"
+							type="button"
+							on:click={handleSaveInitialSetup}
+							disabled={!canSaveSetup || isSaving || isScanning}
+						>
+							{#if isSaving}
+								保存中...
+							{:else}
+								この内容で初期設定を保存
+							{/if}
+						</button>
+					</div>
+				</section>
+				{#if currentStepIndex === 3}
+					{#if isRecoveryMode}
+						{#if extensionRecoveryStatus}
+							<ExtensionRecoveryPanel initialStatus={extensionRecoveryStatus} />
+						{:else}
+							<section class="panel recovery-load-panel">
+								<div class="panel-header">
+									<div>
+										<p class="eyebrow">拡張機能の状態</p>
+										<h1>SQLiteの応答情報を確認</h1>
+										<p>
+											保存済みの最終応答を読み取り、拡張機能の状態を確認します。
+										</p>
+									</div>
+								</div>
+								{#if extensionRecoveryLoadError}
+									<p class="error-banner" role="alert">
+										{extensionRecoveryLoadError}
+									</p>
+								{/if}
+								<button
+									class="primary-button"
+									type="button"
+									on:click={loadExtensionRecoveryStatus}
+									disabled={isLoadingExtensionRecovery}
+								>
+									{isLoadingExtensionRecovery ? "確認中..." : "再試行"}
+								</button>
+							</section>
+						{/if}
+					{:else}
+						<ExtensionInstallStep
+							verificationStartedAt={extensionVerificationStartedAt}
+							maintenanceSummary={initialMaintenanceSummary}
+							onBack={() => (currentStepIndex = 2)}
+						/>
+					{/if}
 				{/if}
-			{/if}
+			</section>
 		</section>
-	</section>
+	{/if}
 </main>
 
 <style>
@@ -647,6 +738,41 @@
 			),
 			linear-gradient(180deg, #f6f7fb 0%, #eceef7 100%);
 		color: #27283a;
+	}
+
+	.startup-check-panel {
+		width: min(100% - 32px, 720px);
+		margin: 80px auto;
+		padding: 28px;
+		display: flex;
+		align-items: center;
+		gap: 18px;
+		box-sizing: border-box;
+		border: 1px solid rgba(203, 207, 226, 0.82);
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.96);
+		box-shadow: 0 28px 52px rgba(96, 105, 151, 0.16);
+	}
+
+	.startup-check-panel h1 {
+		margin: 0 0 8px;
+		font-size: 1.2rem;
+	}
+
+	.startup-check-panel p {
+		margin: 0;
+		color: #727894;
+		font-size: 0.8rem;
+	}
+
+	.startup-spinner {
+		width: 24px;
+		height: 24px;
+		flex: 0 0 auto;
+		border: 3px solid rgba(109, 92, 246, 0.2);
+		border-top-color: var(--fuzzy-color-primary);
+		border-radius: 999px;
+		animation: spin 0.8s linear infinite;
 	}
 
 	.window {

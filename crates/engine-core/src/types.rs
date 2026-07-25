@@ -72,6 +72,18 @@ pub struct AssignmentSyncInput {
 	pub submitted: bool,
 }
 
+/// Moodleの安定した課題識別子を使う、コース単位同期の入力。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoodleAssignmentSyncInput {
+	pub moodle_assignment_id: String,
+	pub title: String,
+	pub source: String,
+	pub due_at: Option<String>,
+	pub due_at_status: String,
+	pub submission_mode: String,
+	pub submitted: bool,
+}
+
 /// Aggregate result of one assignment synchronization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataSyncEventRecord {

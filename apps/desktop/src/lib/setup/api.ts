@@ -1,14 +1,26 @@
+import { isTauriRuntime } from "./extension-install";
+import { parseLibraryMaintenanceSummary } from "./library-maintenance";
+import type { LibraryMaintenanceSummary } from "./library-maintenance";
 import type { InitialSetupPayload, PatternCandidate, SetupStatus } from "./types";
 
-const setupStorageKey = "fuzzy.desktop.initialSetup";
+export type SetupRuntime = {
+	invoke: <T>(command: string, args: Record<string, unknown>) => Promise<T>;
+};
 
-const mockBaseFolders = [
-	"C:/Users/hirot/Documents/Fuzzy",
-	"D:/School/Fuzzy",
-	"C:/Users/hirot/Desktop/講義資料",
-];
+export class SetupApiError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "SetupApiError";
+	}
+}
 
-const mockCourses = [
+export type InitialSetupSaveResult = {
+	ok: true;
+	maintenance: LibraryMaintenanceSummary;
+};
+
+const previewFolder = "C:/Users/preview/Documents/Fuzzy";
+const previewCourses = [
 	{ name: "情報アーキテクチャ", assignment: "第03回レポート" },
 	{ name: "データベース", assignment: "正規化レポート" },
 	{ name: "離散数学", assignment: "小テスト" },
@@ -17,131 +29,210 @@ const mockCourses = [
 	{ name: "英語IIB", assignment: "単語テスト" },
 ] as const;
 
-function createMockCourseFolders(prefix?: string): string[] {
-	return mockCourses.map(({ name, assignment }) =>
+function createPreviewCourseFolders(prefix?: string): string[] {
+	return previewCourses.map(({ name, assignment }) =>
 		[prefix, name, assignment].filter(Boolean).join("/"),
 	);
 }
 
-const mockScanResultsByPath: Record<string, PatternCandidate[]> = {
-	"C:/Users/hirot/Documents/Fuzzy": [
-		{
-			id: "year-course-assignment",
-			name: "年度 / 科目 / 課題",
-			description: "年度単位でまとめつつ、各科目の中に課題フォルダを配置する構成です。",
-			folders: ["2026", ...createMockCourseFolders("2026")],
-			courseSegmentIndex: 1,
-			matchScore: 92,
-			reason: "年度フォルダと科目名フォルダの並びが最も多く見つかりました。",
-			recommended: true,
-		},
-		{
-			id: "course-assignment",
-			name: "科目 / 課題",
-			description: "シンプルに科目ごとで分け、その下に課題を入れる構成です。",
-			folders: createMockCourseFolders(),
-			courseSegmentIndex: 0,
-			matchScore: 76,
-			reason: "年度がないフォルダも一部含まれていたため候補として残しています。",
-		},
-		{
-			id: "download-flat",
-			name: "単一フォルダ保存",
-			description: "ダウンロード先を固定し、課題名だけで管理する構成です。",
-			folders: mockCourses.map(({ name, assignment }) => `${name}_${assignment}`),
-			courseSegmentIndex: null,
-			matchScore: 41,
-			reason: "課題名のみのフォルダが少数存在しました。",
-		},
-	],
-	"D:/School/Fuzzy": [
-		{
-			id: "semester-course",
-			name: "学期 / 科目",
-			description: "前期・後期の粒度で整理してから科目に分ける構成です。",
-			folders: ["2026前期", ...createMockCourseFolders("2026前期")],
-			courseSegmentIndex: 1,
-			matchScore: 88,
-			reason: "学期名フォルダの直下に科目フォルダが揃っていました。",
-			recommended: true,
-		},
-		{
-			id: "course-week",
-			name: "科目 / 回次",
-			description: "科目ごとに回次や講義日で整理する構成です。",
-			folders: createMockCourseFolders(),
-			courseSegmentIndex: 0,
-			matchScore: 63,
-			reason: "回次表記が複数見つかったため副候補にしています。",
-		},
-	],
-	"C:/Users/hirot/Desktop/講義資料": [
-		{
-			id: "course-flat",
-			name: "科目ごとにひとまとめ",
-			description: "まずは科目単位でまとめ、細かい分割は後続設定に回す構成です。",
-			folders: createMockCourseFolders(),
-			courseSegmentIndex: 0,
-			matchScore: 71,
-			reason: "提出物と資料が同居する科目フォルダが多く見つかりました。",
-			recommended: true,
-		},
-	],
+const previewCandidates: PatternCandidate[] = [
+	{
+		id: "year-course-assignment",
+		name: "年度 / 科目 / 課題",
+		description: "年度単位でまとめつつ、各科目の中に課題フォルダを配置する構成です。",
+		folders: ["2026", ...createPreviewCourseFolders("2026")],
+		courseSegmentIndex: 1,
+		matchScore: 92,
+		reason: "年度フォルダと科目名フォルダの並びが最も多く見つかりました。",
+		recommended: true,
+	},
+	{
+		id: "course-assignment",
+		name: "科目 / 課題",
+		description: "シンプルに科目ごとで分け、その下に課題を入れる構成です。",
+		folders: createPreviewCourseFolders(),
+		courseSegmentIndex: 0,
+		matchScore: 76,
+		reason: "年度がないフォルダも一部含まれていたため候補として残しています。",
+		recommended: false,
+	},
+	{
+		id: "download-flat",
+		name: "単一フォルダ保存",
+		description: "ダウンロード先を固定し、課題名だけで管理する構成です。",
+		folders: previewCourses.map(({ name, assignment }) => `${name}_${assignment}`),
+		courseSegmentIndex: null,
+		matchScore: 41,
+		reason: "課題名のみのフォルダが少数存在しました。",
+		recommended: false,
+	},
+];
+
+let previewSavedAt: string | null = null;
+
+/**
+ * `vite dev`で画面だけを確認する場合の明示的なプレビューアダプター。
+ * Tauri本番では使用せず、完了状態をlocalStorageへ保存しない。
+ */
+export const previewSetupAdapter: SetupRuntime = {
+	async invoke<T>(command: string): Promise<T> {
+		switch (command) {
+			case "pick_base_folder":
+				return previewFolder as T;
+			case "scan_existing_structure":
+				return structuredClone(previewCandidates) as T;
+			case "save_initial_setup":
+				previewSavedAt = new Date().toISOString();
+				return {
+					ok: true,
+					maintenance: {
+						scannedFileCount: previewCandidates[0]?.folders.length ?? 0,
+						registeredFileCount: 0,
+						updatedFileCount: 0,
+						indexedFileCount: 0,
+						missingFileCount: 0,
+						skippedFileCount: 0,
+						warnings: [],
+					},
+				} as T;
+			case "get_setup_status":
+				return {
+					done: previewSavedAt !== null,
+					...(previewSavedAt ? { savedAt: previewSavedAt } : {}),
+				} as T;
+			default:
+				throw new SetupApiError(`未対応のプレビューコマンドです: ${command}`);
+		}
+	},
 };
 
-let mockFolderIndex = 0;
-let memorySavedSetup: { payload: InitialSetupPayload; savedAt: string } | null = null;
-
-function canUseLocalStorage(): boolean {
-	return typeof localStorage !== "undefined";
+async function createSetupRuntime(): Promise<SetupRuntime> {
+	if (!isTauriRuntime()) return previewSetupAdapter;
+	const { invoke } = await import("@tauri-apps/api/core");
+	return { invoke };
 }
 
-export async function pickBaseFolderClient(): Promise<string | null> {
-	const folder = mockBaseFolders[mockFolderIndex % mockBaseFolders.length] ?? null;
-
-	mockFolderIndex += 1;
-
-	return Promise.resolve(folder);
+export function parsePatternCandidates(value: unknown): PatternCandidate[] | null {
+	if (!Array.isArray(value)) return null;
+	const candidates: PatternCandidate[] = [];
+	for (const item of value) {
+		if (!item || typeof item !== "object") return null;
+		const candidate = item as Record<string, unknown>;
+		if (
+			typeof candidate.id !== "string" ||
+			!candidate.id ||
+			typeof candidate.name !== "string" ||
+			typeof candidate.description !== "string" ||
+			!Array.isArray(candidate.folders) ||
+			!candidate.folders.every((folder) => typeof folder === "string") ||
+			!(
+				candidate.courseSegmentIndex === null ||
+				(typeof candidate.courseSegmentIndex === "number" &&
+					Number.isInteger(candidate.courseSegmentIndex) &&
+					candidate.courseSegmentIndex >= 0)
+			) ||
+			typeof candidate.matchScore !== "number" ||
+			!Number.isInteger(candidate.matchScore) ||
+			candidate.matchScore < 0 ||
+			candidate.matchScore > 100 ||
+			typeof candidate.reason !== "string" ||
+			typeof candidate.recommended !== "boolean"
+		) {
+			return null;
+		}
+		candidates.push({
+			id: candidate.id,
+			name: candidate.name,
+			description: candidate.description,
+			folders: candidate.folders,
+			courseSegmentIndex: candidate.courseSegmentIndex,
+			matchScore: candidate.matchScore,
+			reason: candidate.reason,
+			recommended: candidate.recommended,
+		});
+	}
+	return candidates;
 }
 
-export async function scanExistingStructureClient(path: string): Promise<PatternCandidate[]> {
-	return Promise.resolve(mockScanResultsByPath[path] ?? []);
+export function parseSetupStatus(value: unknown): SetupStatus | null {
+	if (!value || typeof value !== "object") return null;
+	const status = value as Record<string, unknown>;
+	if (typeof status.done !== "boolean") return null;
+	if (status.savedAt !== undefined) {
+		if (typeof status.savedAt !== "string" || Number.isNaN(Date.parse(status.savedAt))) {
+			return null;
+		}
+		return { done: status.done, savedAt: status.savedAt };
+	}
+	return { done: status.done };
 }
 
-export async function saveInitialSetupClient(payload: InitialSetupPayload): Promise<{ ok: true }> {
-	const savedAt = new Date().toISOString();
-
-	memorySavedSetup = { payload, savedAt };
-
-	if (canUseLocalStorage()) {
-		localStorage.setItem(setupStorageKey, JSON.stringify(memorySavedSetup));
-	}
-
-	return Promise.resolve({ ok: true });
-}
-
-export async function getSetupStatusClient(): Promise<SetupStatus> {
-	if (memorySavedSetup) {
-		return Promise.resolve({ done: true, savedAt: memorySavedSetup.savedAt });
-	}
-
-	if (!canUseLocalStorage()) {
-		return Promise.resolve({ done: false });
-	}
-
-	const savedSetup = localStorage.getItem(setupStorageKey);
-
-	if (!savedSetup) {
-		return Promise.resolve({ done: false });
-	}
-
+export async function pickBaseFolderClient(runtime?: SetupRuntime): Promise<string | null> {
+	const setupRuntime = runtime ?? (await createSetupRuntime());
 	try {
-		const parsed = JSON.parse(savedSetup) as { savedAt?: string };
-
-		return Promise.resolve({ done: true, savedAt: parsed.savedAt });
+		const value = await setupRuntime.invoke<unknown>("pick_base_folder", {});
+		if (value === null || typeof value === "string") return value;
+		throw new Error("invalid response");
 	} catch {
-		localStorage.removeItem(setupStorageKey);
+		throw new SetupApiError(
+			"保存先フォルダーを選択できませんでした。Fuzzyを再起動してから再試行してください。",
+		);
+	}
+}
 
-		return Promise.resolve({ done: false });
+export async function scanExistingStructureClient(
+	path: string,
+	runtime?: SetupRuntime,
+): Promise<PatternCandidate[]> {
+	const setupRuntime = runtime ?? (await createSetupRuntime());
+	try {
+		const value = await setupRuntime.invoke<unknown>("scan_existing_structure", {
+			path,
+		});
+		const candidates = parsePatternCandidates(value);
+		if (!candidates) throw new Error("invalid response");
+		return candidates;
+	} catch {
+		throw new SetupApiError(
+			"既存のフォルダー構成を読み取れませんでした。保存先のアクセス権を確認してください。",
+		);
+	}
+}
+
+export async function saveInitialSetupClient(
+	payload: InitialSetupPayload,
+	runtime?: SetupRuntime,
+): Promise<InitialSetupSaveResult> {
+	const setupRuntime = runtime ?? (await createSetupRuntime());
+	try {
+		const value = await setupRuntime.invoke<unknown>(
+			"save_initial_setup",
+			payload as unknown as Record<string, unknown>,
+		);
+		if (!value || typeof value !== "object") {
+			throw new Error("invalid response");
+		}
+		const result = value as Record<string, unknown>;
+		const maintenance = parseLibraryMaintenanceSummary(result.maintenance);
+		if (result.ok !== true || !maintenance) throw new Error("invalid response");
+		return { ok: true, maintenance };
+	} catch {
+		throw new SetupApiError(
+			"初期設定をSQLiteへ保存できませんでした。保存先とルールを確認してください。",
+		);
+	}
+}
+
+export async function getSetupStatusClient(runtime?: SetupRuntime): Promise<SetupStatus> {
+	const setupRuntime = runtime ?? (await createSetupRuntime());
+	try {
+		const value = await setupRuntime.invoke<unknown>("get_setup_status", {});
+		const status = parseSetupStatus(value);
+		if (!status) throw new Error("invalid response");
+		return status;
+	} catch {
+		throw new SetupApiError(
+			"初期設定の状態をSQLiteから読み込めませんでした。Fuzzyを再起動してください。",
+		);
 	}
 }

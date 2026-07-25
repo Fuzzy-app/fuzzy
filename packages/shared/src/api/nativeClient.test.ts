@@ -8,6 +8,328 @@ afterEach(() => {
 	(globalThis as { chrome?: unknown }).chrome = originalChrome;
 });
 
+describe("NativeApiClientの接続ライフサイクル", () => {
+	test("通常コマンドは同じ接続を再利用し、明示終了時に切断する", async () => {
+		const messageListeners = new Set<(message: unknown) => void>();
+		let connectCount = 0;
+		let disconnectCount = 0;
+		const port = {
+			onMessage: {
+				addListener(listener: (message: unknown) => void) {
+					messageListeners.add(listener);
+				},
+			},
+			onDisconnect: {
+				addListener() {},
+			},
+			postMessage(message: { id: string; command: string }) {
+				queueMicrotask(() => {
+					const data =
+						message.command === "search"
+							? []
+							: {
+									courses: [],
+									totalFiles: 0,
+									totalViolations: 0,
+									upcomingDeadlineCount: 0,
+								};
+					for (const listener of messageListeners) {
+						listener({ id: message.id, ok: true, data });
+					}
+				});
+			},
+			disconnect() {
+				disconnectCount += 1;
+			},
+		};
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					connectCount += 1;
+					return port;
+				},
+			},
+		};
+
+		const client = new NativeApiClient();
+		await client.search("正規化");
+		await client.getDashboard();
+
+		expect(connectCount).toBe(1);
+		expect(disconnectCount).toBe(0);
+		client.disconnect();
+		expect(disconnectCount).toBe(1);
+	});
+
+	test("pingは現在の通信仕様バージョンと一致するhostだけを受理する", async () => {
+		let protocolVersion = 2;
+		const createPort = () => {
+			const listeners = new Set<(message: unknown) => void>();
+			return {
+				onMessage: {
+					addListener(listener: (message: unknown) => void) {
+						listeners.add(listener);
+					},
+				},
+				onDisconnect: {
+					addListener() {},
+				},
+				postMessage(message: { id: string }) {
+					queueMicrotask(() => {
+						for (const listener of listeners) {
+							listener({
+								id: message.id,
+								ok: true,
+								data: { version: "0.1.0", protocolVersion },
+							});
+						}
+					});
+				},
+				disconnect() {},
+			};
+		};
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: { connectNative: createPort },
+		};
+
+		const oldClient = new NativeApiClient();
+		expect(await oldClient.ping()).toBe(false);
+		oldClient.disconnect();
+
+		protocolVersion = 3;
+		const currentClient = new NativeApiClient();
+		expect(await currentClient.ping()).toBe(true);
+		currentClient.disconnect();
+	});
+
+	test("応答タイムアウト時は接続を閉じ、次回要求で再接続する", async () => {
+		let connectCount = 0;
+		let disconnectCount = 0;
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					connectCount += 1;
+					return {
+						onMessage: { addListener() {} },
+						onDisconnect: { addListener() {} },
+						postMessage() {},
+						disconnect() {
+							disconnectCount += 1;
+						},
+					};
+				},
+			},
+		};
+		const client = new NativeApiClient({ requestTimeoutMs: 5 });
+
+		await expect(client.getDashboard()).rejects.toMatchObject({ code: "TIMEOUT" });
+		await expect(client.getDashboard()).rejects.toMatchObject({ code: "TIMEOUT" });
+		expect(connectCount).toBe(2);
+		expect(disconnectCount).toBe(2);
+	});
+
+	test("ライブラリ再構築は通常要求と分離した長時間timeoutで完了を待つ", async () => {
+		const messageListeners = new Set<(message: unknown) => void>();
+		let disconnectCount = 0;
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					return {
+						onMessage: {
+							addListener(listener: (message: unknown) => void) {
+								messageListeners.add(listener);
+							},
+							removeListener(listener: (message: unknown) => void) {
+								messageListeners.delete(listener);
+							},
+						},
+						onDisconnect: { addListener() {} },
+						postMessage(message: { id: string; command: string }) {
+							setTimeout(() => {
+								for (const listener of messageListeners) {
+									listener({
+										id: message.id,
+										ok: true,
+										data: {
+											scannedFileCount: 1,
+											registeredFileCount: 1,
+											updatedFileCount: 0,
+											indexedFileCount: 1,
+											missingFileCount: 0,
+											skippedFileCount: 0,
+											warnings: [],
+										},
+									});
+								}
+							}, 20);
+						},
+						disconnect() {
+							disconnectCount += 1;
+						},
+					};
+				},
+			},
+		};
+		const client = new NativeApiClient({
+			requestTimeoutMs: 1,
+			libraryMaintenanceTimeoutMs: 100,
+		});
+
+		const summary = await client.rebuildLibrary({ rebuildIndex: true });
+
+		expect(summary.indexedFileCount).toBe(1);
+		expect(disconnectCount).toBe(1);
+	});
+
+	test("ZIP展開は通常要求と分離した長時間timeoutで完了を待つ", async () => {
+		const messageListeners = new Set<(message: unknown) => void>();
+		let disconnectCount = 0;
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					return {
+						onMessage: {
+							addListener(listener: (message: unknown) => void) {
+								messageListeners.add(listener);
+							},
+							removeListener(listener: (message: unknown) => void) {
+								messageListeners.delete(listener);
+							},
+						},
+						onDisconnect: { addListener() {} },
+						postMessage(message: { id: string }) {
+							setTimeout(() => {
+								for (const listener of messageListeners) {
+									listener({
+										id: message.id,
+										ok: true,
+										data: { extractedPaths: ["C:\\save\\guide.txt"] },
+									});
+								}
+							}, 20);
+						},
+						disconnect() {
+							disconnectCount += 1;
+						},
+					};
+				},
+			},
+		};
+		const client = new NativeApiClient({
+			requestTimeoutMs: 1,
+			zipExtractionTimeoutMs: 100,
+		});
+
+		const result = await client.extractZip({
+			fileMeta: {
+				title: "guide.zip",
+				url: "https://moodle.example/guide.zip",
+				moodleFileId: "zip-1",
+				sectionTitle: null,
+				mimeHint: "application/zip",
+			},
+			targetPath: "C:\\save",
+			destinationPath: "C:\\save",
+			flatten: true,
+		});
+
+		expect(result.extractedPaths).toEqual(["C:\\save\\guide.txt"]);
+		expect(disconnectCount).toBe(1);
+	});
+
+	test("long-running session cleans up when postMessage throws synchronously", async () => {
+		let disconnectCount = 0;
+		let removeListenerCount = 0;
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					return {
+						onMessage: {
+							addListener() {},
+							removeListener() {
+								removeListenerCount += 1;
+							},
+						},
+						onDisconnect: { addListener() {} },
+						postMessage() {
+							throw new Error("port closed");
+						},
+						disconnect() {
+							disconnectCount += 1;
+						},
+					};
+				},
+			},
+		};
+
+		await expect(
+			new NativeApiClient().rebuildLibrary({ rebuildIndex: true }),
+		).rejects.toMatchObject({ code: "NO_NATIVE_HOST" });
+		expect(removeListenerCount).toBe(1);
+		expect(disconnectCount).toBe(1);
+	});
+
+	test("long-running session normalizes a synchronous connect failure", async () => {
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					throw new Error("host unavailable");
+				},
+			},
+		};
+
+		await expect(
+			new NativeApiClient().rebuildLibrary({ rebuildIndex: true }),
+		).rejects.toMatchObject({ code: "NO_NATIVE_HOST" });
+	});
+
+	test("long-running session keeps a successful result when disconnect already failed", async () => {
+		const listeners = new Set<(message: unknown) => void>();
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					return {
+						onMessage: {
+							addListener(listener: (message: unknown) => void) {
+								listeners.add(listener);
+							},
+							removeListener(listener: (message: unknown) => void) {
+								listeners.delete(listener);
+							},
+						},
+						onDisconnect: { addListener() {} },
+						postMessage(message: { id: string }) {
+							queueMicrotask(() => {
+								for (const listener of listeners) {
+									listener({
+										id: message.id,
+										ok: true,
+										data: {
+											scannedFileCount: 0,
+											registeredFileCount: 0,
+											updatedFileCount: 0,
+											indexedFileCount: 0,
+											missingFileCount: 0,
+											skippedFileCount: 0,
+											warnings: [],
+										},
+									});
+								}
+							});
+						},
+						disconnect() {
+							throw new Error("already disconnected");
+						},
+					};
+				},
+			},
+		};
+
+		const result = await new NativeApiClient().rebuildLibrary({ rebuildIndex: true });
+		expect(result.scannedFileCount).toBe(0);
+	});
+});
+
 describe("NativeApiClientのファイル分割転送", () => {
 	test("1接続内でbegin・複数chunk・saveFilesを順に送る", async () => {
 		const messages: Array<{ id: string; command: string; payload: Record<string, unknown> }> = [];

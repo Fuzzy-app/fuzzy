@@ -14,14 +14,14 @@ Fuzzy は、Moodle の授業資料を自動整理し、課題・締切を一元�
 
 ## 現在の進捗段階（重要）
 
-**Phase0（雛形生成）完了・Phase1（バックエンド実装）着手前** の段階。全アプリ・crateの実体は生成済みだが、中核ロジックは未実装。実装を追加する前に必ず現状を確認すること（雛形があることと実装済みであることを混同しない）。
+**Phase3（#59 最終統合・Windows配布）** の段階。バックエンドとフロントエンドの主要機能は実装済みであり、本番画面はSQLiteを正本とするnative-hostへ接続する。既存の本実装を雛形やスタブと誤認して置き換えないこと。
 
-- `crates/engine-core` — `ScanEngine`（#38）、`RuleEngine`（#39）、`IndexEngine`（#41）を実装済み。`DuplicateDetector`は未実装
-- `apps/native-host` — 生成済み（#33）。Native MessagingのI/Oループ（4byte LE長プレフィックス＋envelope、`src/protocol.rs`）まで実装済み。コマンドは全て未実装で `INTERNAL` エラーを返す。SQLite接続は #36、pingは #37 以降で実装
-- `apps/extension` — 生成済み（#34、WXT＋Svelte 5）。popupは `createApiClient()` → `getDashboard()` の疎通確認画面のみ。Phase2の画面系issue（#46〜#58）で置き換える
-- `apps/desktop` — 生成済み（#35、Tauri 2＋SvelteKit）。初期セットアップ画面の土台のみ
-- 動くロジックの中心は依然 `packages/shared`（型定義 `src/types.ts`、APIクライアント `src/api/`、サンプルデータ `src/sample-data/`）。native-hostのコマンド未実装のため、実行時は `MockApiClient` がサンプルデータで疑似応答する
-- `packages/shared/src/generated/` はts-rsによるRust→TS自動生成物（#44）。**手編集禁止**。Rust API DTO変更時は`bun run generate:types`で更新する
+- `crates/engine-core` — 走査・ルール・全文索引・重複検出、SQLiteマイグレーション、欠損資料の履歴保持、ライブラリ再走査を実装済み
+- `apps/native-host` — Native Messagingの4byte LEフレーミング、APIコマンド、分割ファイル転送、SQLite・索引更新を実装済み
+- `apps/extension` — WXT＋Svelte 5。本番APIはcontent scriptからbackgroundを経由してnative-hostへ接続し、接続失敗時にモックへ暗黙フォールバックしない
+- `apps/desktop` — Tauri 2＋SvelteKit。初期設定、再走査・再索引、バックアップ、破損DB・索引のGUI復旧、native-host登録付きWindows配布を実装済み
+- `packages/shared` — 共有型と本番Native Messagingクライアントを提供する。`MockApiClient`とサンプルデータは開発・テストで明示的に使用する場合だけ利用する
+- `packages/shared/src/generated/` はts-rsによるRust→TS自動生成物。**手編集禁止**。Rust DTO変更時は`bun run generate:types`で更新する
 
 ## モノレポ構成と配置ルール
 
@@ -67,7 +67,7 @@ docs/*      ドキュメント
 
 ## AIが作業する際の注意
 
-1. 雛形のみで未実装の箇所（`todo!()` スタブ等）に本実装を追加する際は、対応するissueの担当者・完了条件を確認してから行う。他人の担当領域に踏み込む場合は必ずユーザーに確認する
+1. 既存の本実装を雛形やスタブと誤認して置き換えない。実装を変更する際は、対応するissueの担当者・完了条件と現在のテストを確認する。他人の担当領域に踏み込む場合は必ずユーザーに確認する
 2. 型定義・APIコマンド・DBスキーマは3点（`packages/shared/src/types.ts`・`docs/api/contract.md`・`crates/engine-core/fixtures/schema.sql`）の整合を必ず確認する
 3. 仕様に無い自動実行系の機能（自動移動・自動削除・外部送信等）を提案・実装しない
 4. 既存のサンプルデータ（6科目：情報アーキテクチャ・データベース・離散数学・アプリ演習・認知科学概論・英語IIB）の世界観に合わせてテストデータを作る

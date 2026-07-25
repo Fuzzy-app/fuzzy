@@ -9,11 +9,16 @@ use engine_core::folder_names::{
 	CourseFolderNameWarning as EngineCourseFolderNameWarning,
 	CourseFolderNameWarningCode as EngineCourseFolderNameWarningCode,
 };
+use engine_core::library::{
+	LibraryMaintenanceSummary as EngineLibraryMaintenanceSummary,
+	LibraryMaintenanceWarning as EngineLibraryMaintenanceWarning,
+};
 use engine_core::types::{
 	AssignmentChangeRecord, AssignmentRecord, CourseDashboardRecord, CourseRuleOverrideRecord,
 	DashboardRecord, DataSyncEventRecord, DeadlineFilter as EngineDeadlineFilter,
-	DuplicateGroupRecord, NotificationRuleInput as EngineNotificationRuleInput,
-	NotificationRuleRecord, RuleSetRecord, RuleViolationRecord,
+	DuplicateGroupRecord, MoodleAssignmentSyncInput as EngineMoodleAssignmentSyncInput,
+	NotificationRuleInput as EngineNotificationRuleInput, NotificationRuleRecord, RuleSetRecord,
+	RuleViolationRecord,
 };
 use engine_core::{EngineError, EngineResult};
 use serde::{Deserialize, Serialize};
@@ -24,6 +29,14 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PingResult {
+	pub version: String,
+	pub protocol_version: u32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -273,8 +286,9 @@ pub struct GetAssignmentChangesRequest {
 	pub since_sync_event_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct DataSyncEvent {
 	pub id: i64,
 	pub synced_at: String,
@@ -297,6 +311,52 @@ impl From<DataSyncEventRecord> for DataSyncEvent {
 	}
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SyncMoodleCourseRequest {
+	pub moodle_course_id: String,
+	pub name: String,
+	pub academic_year: Option<i64>,
+	pub term: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SyncMoodleAssignmentRequest {
+	pub moodle_assignment_id: String,
+	pub title: String,
+	pub due_at: Option<String>,
+	pub source: String,
+	pub due_at_status: String,
+	pub submission_mode: String,
+	pub submitted: bool,
+}
+
+impl From<SyncMoodleAssignmentRequest> for EngineMoodleAssignmentSyncInput {
+	fn from(value: SyncMoodleAssignmentRequest) -> Self {
+		Self {
+			moodle_assignment_id: value.moodle_assignment_id,
+			title: value.title,
+			due_at: value.due_at,
+			source: value.source,
+			due_at_status: value.due_at_status,
+			submission_mode: value.submission_mode,
+			submitted: value.submitted,
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SyncMoodleAssignmentsRequest {
+	pub trigger: String,
+	pub course: SyncMoodleCourseRequest,
+	pub assignments: Vec<SyncMoodleAssignmentRequest>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AssignmentChangeField {
@@ -305,6 +365,7 @@ pub enum AssignmentChangeField {
 	SubmissionMode,
 	DueAtStatus,
 	Submitted,
+	RemovedAt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -329,6 +390,7 @@ impl TryFrom<AssignmentChangeRecord> for AssignmentChange {
 			"submission_mode" => AssignmentChangeField::SubmissionMode,
 			"due_at_status" => AssignmentChangeField::DueAtStatus,
 			"submitted" => AssignmentChangeField::Submitted,
+			"removed_at" => AssignmentChangeField::RemovedAt,
 			_ => return Err(invalid_stored_value("assignment_changes.field")),
 		};
 		Ok(Self {
@@ -501,7 +563,7 @@ pub struct NotificationRuleUpdateResult {
 
 /// 保存用コースフォルダ名の編集要求。`None`は自動提案へ戻す。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct UpdateCourseFolderNameRequest {
 	pub course_id: i64,
@@ -663,7 +725,7 @@ impl DuplicateGroupListItem {
 
 /// 全文検索要求。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct SearchRequest {
 	pub query: String,
@@ -684,7 +746,7 @@ pub struct SearchResult {
 
 /// SQLiteバックアップの書き出し要求。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct ExportDataRequest {
 	pub file_path: String,
@@ -700,7 +762,7 @@ pub struct ExportDataResult {
 
 /// SQLiteバックアップの読み込み要求。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct ImportDataRequest {
 	pub file_path: String,
@@ -713,6 +775,61 @@ pub struct ImportDataRequest {
 pub struct ImportDataResult {
 	pub ok: bool,
 	pub reindex_required: bool,
+}
+
+/// 保存ルートの明示再スキャンと全文索引再構築の要求。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct RebuildLibraryRequest {
+	#[ts(optional)]
+	pub rebuild_index: Option<bool>,
+}
+
+/// 再スキャンで個別に処理できなかった相対パスと利用者向け理由。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LibraryMaintenanceWarning {
+	pub path: String,
+	pub message: String,
+}
+
+/// ファイルを移動・削除しないライブラリ整合処理の集計。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LibraryMaintenanceSummary {
+	pub scanned_file_count: usize,
+	pub registered_file_count: usize,
+	pub updated_file_count: usize,
+	pub indexed_file_count: usize,
+	pub missing_file_count: usize,
+	pub skipped_file_count: usize,
+	pub warnings: Vec<LibraryMaintenanceWarning>,
+}
+
+impl From<EngineLibraryMaintenanceWarning> for LibraryMaintenanceWarning {
+	fn from(value: EngineLibraryMaintenanceWarning) -> Self {
+		Self {
+			path: value.path,
+			message: value.message,
+		}
+	}
+}
+
+impl From<EngineLibraryMaintenanceSummary> for LibraryMaintenanceSummary {
+	fn from(value: EngineLibraryMaintenanceSummary) -> Self {
+		Self {
+			scanned_file_count: value.scanned_file_count,
+			registered_file_count: value.registered_file_count,
+			updated_file_count: value.updated_file_count,
+			indexed_file_count: value.indexed_file_count,
+			missing_file_count: value.missing_file_count,
+			skipped_file_count: value.skipped_file_count,
+			warnings: value.warnings.into_iter().map(Into::into).collect(),
+		}
+	}
 }
 
 /// SQLiteの絶対パスを、保存ルート以下の正規化済みWindows相対パスへ変換する。
@@ -906,6 +1023,83 @@ mod tests {
 		let value = serde_json::to_value(result).unwrap();
 		assert_eq!(value["savedFileIds"][0], "4376");
 		assert_eq!(value["failedFiles"][0]["code"], "INVALID_CONTENT");
+	}
+
+	#[test]
+	fn moodle_assignment_sync_dto_matches_the_wire_contract() {
+		let request: SyncMoodleAssignmentsRequest = serde_json::from_value(serde_json::json!({
+			"trigger": "auto",
+			"course": {
+				"moodleCourseId": "course-412",
+				"name": "データベース",
+				"academicYear": 2026,
+				"term": "2026前期"
+			},
+			"assignments": [{
+				"moodleAssignmentId": "cm-412-101",
+				"title": "第3正規形レポート",
+				"dueAt": "2026-07-31T23:59:00+09:00",
+				"source": "moodle_dashboard",
+				"dueAtStatus": "normal",
+				"submissionMode": "moodle_auto",
+				"submitted": false
+			}]
+		}))
+		.unwrap();
+		assert_eq!(request.course.moodle_course_id, "course-412");
+		assert_eq!(request.assignments[0].moodle_assignment_id, "cm-412-101");
+		assert!(
+			serde_json::from_value::<SyncMoodleAssignmentsRequest>(serde_json::json!({
+				"trigger": "auto",
+				"course": {
+					"moodleCourseId": "course-412",
+					"name": "データベース",
+					"academicYear": null,
+					"term": null
+				},
+				"assignments": [],
+				"unexpected": true
+			}))
+			.is_err()
+		);
+
+		let ping = serde_json::to_value(PingResult {
+			version: "0.1.0".to_string(),
+			protocol_version: 3,
+		})
+		.unwrap();
+		assert_eq!(ping["protocolVersion"], 3);
+	}
+
+	#[test]
+	fn native_request_dtos_reject_unknown_fields() {
+		assert!(
+			serde_json::from_value::<UpdateCourseFolderNameRequest>(serde_json::json!({
+				"courseId": 1,
+				"folderName": null,
+				"unexpected": true
+			}))
+			.is_err()
+		);
+		assert!(serde_json::from_value::<SearchRequest>(serde_json::json!({
+			"query": "正規化",
+			"unexpected": true
+		}))
+		.is_err());
+		assert!(
+			serde_json::from_value::<ExportDataRequest>(serde_json::json!({
+				"filePath": "backup.sqlite3",
+				"unexpected": true
+			}))
+			.is_err()
+		);
+		assert!(
+			serde_json::from_value::<ImportDataRequest>(serde_json::json!({
+				"filePath": "backup.sqlite3",
+				"unexpected": true
+			}))
+			.is_err()
+		);
 	}
 
 	#[test]

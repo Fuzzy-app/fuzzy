@@ -6,12 +6,20 @@
 		getExtensionInstallDestination,
 		getPreferredExtensionInstallChannel,
 		openExtensionInstallDestinationClient,
+		repairNativeHostInstallationClient,
 	} from "./extension-install";
 	import {
 		deriveExtensionRecoveryViewState,
 		getExtensionRecoveryStatusClient,
 		openMoodleForRecoveryClient,
 	} from "./extension-recovery";
+	import {
+		changeLibraryRootClient,
+		exportBackupClient,
+		importBackupClient,
+		rebuildLibraryClient,
+	} from "./library-maintenance";
+	import type { LibraryMaintenanceSummary } from "./library-maintenance";
 
 	export let initialStatus: ExtensionRecoveryStatus;
 
@@ -27,6 +35,14 @@
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let maintenanceSummary: LibraryMaintenanceSummary | null = null;
+	let maintenanceError: string | null = null;
+	let maintenanceSuccess: string | null = null;
+	let isRebuildingLibrary = false;
+	let isChangingLibraryRoot = false;
+	let isExportingBackup = false;
+	let isImportingBackup = false;
+	let isRepairingNativeHost = false;
 
 	onMount(() => {
 		pollTimer = setInterval(() => {
@@ -116,6 +132,128 @@
 					: "拡張機能の導入先を開けませんでした。";
 		} finally {
 			isOpening = false;
+		}
+	}
+
+	async function rebuildLibrary(): Promise<void> {
+		isRebuildingLibrary = true;
+		maintenanceError = null;
+		maintenanceSuccess = null;
+		try {
+			maintenanceSummary = await rebuildLibraryClient();
+			maintenanceSuccess =
+				"保存先の再スキャンと検索索引の再構築が完了しました。";
+		} catch (error) {
+			maintenanceError =
+				error instanceof Error
+					? error.message
+					: "保存先を再スキャンできませんでした。";
+		} finally {
+			isRebuildingLibrary = false;
+		}
+	}
+
+	async function changeLibraryRoot(): Promise<void> {
+		isChangingLibraryRoot = true;
+		maintenanceError = null;
+		maintenanceSuccess = null;
+		try {
+			const result = await changeLibraryRootClient();
+			if (result.cancelled) {
+				maintenanceSuccess =
+					"保存先の変更をキャンセルしました。設定と資料ファイルは変更していません。";
+				return;
+			}
+			maintenanceSummary = result.maintenance ?? null;
+			const rebasedMessage =
+				result.rebasedFileCount > 0
+					? `既存資料${result.rebasedFileCount}件の登録先を新しい保存先へ引き継ぎました。`
+					: "新しい保存先を設定しました。";
+			if (result.maintenance) {
+				maintenanceSuccess = `${rebasedMessage} 既存ルールを保持し、再スキャンと検索索引の再構築を完了しました。資料ファイルは移動・削除していません。`;
+			} else {
+				maintenanceSuccess = `${rebasedMessage} 既存ルールと資料ファイルは変更していません。`;
+				maintenanceError =
+					result.maintenanceError ??
+					"保存先変更後の再スキャンに失敗しました。ブラウザを閉じて再構築を実行してください。";
+			}
+		} catch (error) {
+			maintenanceError =
+				error instanceof Error
+					? error.message
+					: "保存先を変更できませんでした。";
+		} finally {
+			isChangingLibraryRoot = false;
+		}
+	}
+
+	async function exportBackup(): Promise<void> {
+		isExportingBackup = true;
+		maintenanceError = null;
+		maintenanceSuccess = null;
+		try {
+			const result = await exportBackupClient();
+			if (result.cancelled) return;
+			maintenanceSuccess = result.filePath
+				? `バックアップを書き出しました: ${result.filePath}`
+				: "バックアップを書き出しました。";
+		} catch (error) {
+			maintenanceError =
+				error instanceof Error
+					? error.message
+					: "バックアップを書き出せませんでした。";
+		} finally {
+			isExportingBackup = false;
+		}
+	}
+
+	async function importBackup(): Promise<void> {
+		isImportingBackup = true;
+		maintenanceError = null;
+		maintenanceSuccess = null;
+		try {
+			const result = await importBackupClient();
+			if (result.cancelled) return;
+			maintenanceSummary = result.maintenance ?? null;
+			if (result.maintenance) {
+				maintenanceSuccess =
+					"バックアップを復元し、保存先の再スキャンと検索索引の再構築を完了しました。";
+			} else {
+				maintenanceSuccess =
+					"バックアップの復元は完了しました。保存済みの資料ファイルは変更していません。";
+				maintenanceError =
+					result.maintenanceError ??
+					"復元後の再スキャンに失敗しました。保存先を確認して再構築を実行してください。";
+			}
+		} catch (error) {
+			maintenanceError =
+				error instanceof Error
+					? error.message
+					: "バックアップから復元できませんでした。";
+		} finally {
+			isImportingBackup = false;
+		}
+	}
+
+	async function repairNativeHost(): Promise<void> {
+		isRepairingNativeHost = true;
+		maintenanceError = null;
+		maintenanceSuccess = null;
+		try {
+			const result = await repairNativeHostInstallationClient();
+			if (result.ready) {
+				maintenanceSuccess =
+					"Native Messaging接続を自動修復しました。コマンド操作は不要です。";
+			} else {
+				maintenanceError = result.message;
+			}
+		} catch (error) {
+			maintenanceError =
+				error instanceof Error
+					? error.message
+					: "Native Messaging接続を自動修復できませんでした。";
+		} finally {
+			isRepairingNativeHost = false;
 		}
 	}
 
@@ -235,6 +373,139 @@
 	<p class="help">
 		更新または再インストールした後はMoodleを開いてください。互換性のある新しい応答を受信すると、この画面は自動的に復旧完了へ切り替わります。
 	</p>
+
+	<section
+		class="maintenance-card"
+		aria-labelledby="library-maintenance-heading"
+	>
+		<div>
+			<p class="section-label">ローカルデータの保守</p>
+			<h2 id="library-maintenance-heading">
+				保存先の再スキャン・検索索引・バックアップ
+			</h2>
+			<p>
+				別のPCへ復元した場合などは「保存先を変更」から新しいフォルダーを選べます。既存ルールを保持し、資料を移動・削除せずに登録先と検索索引を更新します。保守操作の前に資料の保存完了を確認し、ブラウザを閉じてください。
+			</p>
+		</div>
+
+		{#if maintenanceError}
+			<p class="error-banner" role="alert">{maintenanceError}</p>
+		{/if}
+		{#if maintenanceSuccess}
+			<p class="success-banner" role="status">{maintenanceSuccess}</p>
+		{/if}
+
+		<div class="maintenance-actions">
+			<button
+				class="secondary-button"
+				type="button"
+				on:click={changeLibraryRoot}
+				disabled={isChangingLibraryRoot ||
+					isRebuildingLibrary ||
+					isImportingBackup ||
+					isExportingBackup}
+			>
+				{isChangingLibraryRoot ? "保存先を変更・再構築中..." : "保存先を変更"}
+			</button>
+			<button
+				class="primary-button"
+				type="button"
+				on:click={rebuildLibrary}
+				disabled={isRebuildingLibrary ||
+					isChangingLibraryRoot ||
+					isImportingBackup}
+			>
+				{isRebuildingLibrary
+					? "再スキャン・再構築中..."
+					: "保存先を再スキャンして検索索引を再構築"}
+			</button>
+			<button
+				class="secondary-button"
+				type="button"
+				on:click={exportBackup}
+				disabled={isExportingBackup ||
+					isChangingLibraryRoot ||
+					isImportingBackup}
+			>
+				{isExportingBackup ? "書き出し中..." : "バックアップを書き出す"}
+			</button>
+			<button
+				class="secondary-button"
+				type="button"
+				on:click={importBackup}
+				disabled={isImportingBackup ||
+					isChangingLibraryRoot ||
+					isRebuildingLibrary}
+			>
+				{isImportingBackup ? "復元・再構築中..." : "バックアップから復元"}
+			</button>
+			<button
+				class="secondary-button"
+				type="button"
+				on:click={repairNativeHost}
+				disabled={isRepairingNativeHost}
+			>
+				{isRepairingNativeHost
+					? "Native Messaging接続を自動修復中..."
+					: "Native Messaging接続を自動修復"}
+			</button>
+		</div>
+
+		{#if maintenanceSummary}
+			<div class="maintenance-summary" aria-label="再スキャン結果">
+				<div>
+					<span>検出</span><strong>{maintenanceSummary.scannedFileCount}</strong
+					>
+				</div>
+				<div>
+					<span>新規登録</span><strong
+						>{maintenanceSummary.registeredFileCount}</strong
+					>
+				</div>
+				<div>
+					<span>更新</span><strong>{maintenanceSummary.updatedFileCount}</strong
+					>
+				</div>
+				<div>
+					<span>索引化</span><strong
+						>{maintenanceSummary.indexedFileCount}</strong
+					>
+				</div>
+				<div>
+					<span>見つからない資料</span><strong
+						>{maintenanceSummary.missingFileCount}</strong
+					>
+				</div>
+				<div>
+					<span>スキップ</span><strong
+						>{maintenanceSummary.skippedFileCount}</strong
+					>
+				</div>
+			</div>
+			{#if maintenanceSummary.warnings.length > 0}
+				<details class="maintenance-warnings">
+					<summary>
+						確認が必要な項目 {maintenanceSummary.warnings.length} 件
+					</summary>
+					<ul>
+						{#each maintenanceSummary.warnings.slice(0, 50) as warning}
+							<li>
+								<strong>{warning.path}</strong>
+								<span>{warning.message}</span>
+							</li>
+						{/each}
+					</ul>
+					{#if maintenanceSummary.warnings.length > 50}
+						<p>先頭50件を表示しています。</p>
+					{/if}
+				</details>
+			{/if}
+		{/if}
+
+		<p class="maintenance-note">
+			復元前には確認ダイアログを表示します。バックアップの書き出しでは既存ファイルを上書きしません。
+		</p>
+	</section>
 </section>
 
 <style>
@@ -441,6 +712,88 @@
 		border-top: 1px solid rgba(203, 207, 226, 0.82);
 	}
 
+	.maintenance-card {
+		margin-top: 24px;
+		padding: 20px;
+		border: 1px solid rgba(203, 207, 226, 0.82);
+		border-radius: 10px;
+		background: #f8f9ff;
+	}
+
+	.maintenance-card > div:first-child > p:not(.section-label),
+	.maintenance-note {
+		margin-bottom: 0;
+		font-size: 0.78rem;
+		line-height: 1.7;
+		color: #727894;
+	}
+
+	.maintenance-actions {
+		margin-top: 18px;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 10px;
+	}
+
+	.maintenance-summary {
+		margin-top: 18px;
+		display: grid;
+		grid-template-columns: repeat(5, minmax(0, 1fr));
+		gap: 8px;
+	}
+
+	.maintenance-summary div {
+		padding: 10px;
+		display: grid;
+		gap: 3px;
+		border-radius: 8px;
+		background: #fff;
+		text-align: center;
+	}
+
+	.maintenance-summary span {
+		font-size: 0.67rem;
+		color: #7d83a2;
+	}
+
+	.maintenance-summary strong {
+		color: #4f46b8;
+		font-size: 1.05rem;
+	}
+
+	.maintenance-warnings {
+		margin-top: 14px;
+		padding: 12px 14px;
+		border-radius: 8px;
+		background: #fff9e8;
+		color: #6f5600;
+		font-size: 0.75rem;
+	}
+
+	.maintenance-warnings summary {
+		cursor: pointer;
+		font-weight: 700;
+	}
+
+	.maintenance-warnings ul {
+		margin: 10px 0 0;
+		padding-left: 1.1rem;
+		display: grid;
+		gap: 8px;
+	}
+
+	.maintenance-warnings li span {
+		display: block;
+		margin-top: 2px;
+		color: #7b6a2d;
+	}
+
+	.maintenance-note {
+		margin: 16px 0 0;
+		padding-top: 14px;
+		border-top: 1px solid rgba(203, 207, 226, 0.82);
+	}
+
 	@keyframes spin {
 		to {
 			transform: rotate(360deg);
@@ -453,13 +806,18 @@
 		}
 
 		.recovery-header,
-		.actions {
+		.actions,
+		.maintenance-actions {
 			flex-direction: column;
 			align-items: stretch;
 		}
 
 		button {
 			width: 100%;
+		}
+
+		.maintenance-summary {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 	}
 </style>

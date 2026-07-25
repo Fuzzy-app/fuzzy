@@ -15,7 +15,7 @@ describe("Fuzzy GitHub Pages site", () => {
 		expect(html).toContain("Fuzzy for Windows");
 		expect(html).toContain("現在は開発・レビュー段階のため");
 		expect(html).toContain("開発中の拡張機能はTauriアプリへ同梱しています");
-		expect(html).toContain("正式公開後は、Windowsアプリとブラウザ拡張機能");
+		expect(html).toContain("正式公開後は、Windowsアプリの配布ページと公式ブラウザストア");
 		expect(html).toContain("学習状況をひと目で確認");
 		expect(html).not.toContain("おかえりなさい");
 	});
@@ -30,7 +30,7 @@ describe("Fuzzy GitHub Pages site", () => {
 		expect(disabledDownloads.every((element) => element.tagName === "SPAN")).toBe(true);
 		expect(html).toContain("公開予定");
 		expect(html).toContain("Fuzzy-Setup.exe");
-		expect(html).toContain("Fuzzy-Extension.zip");
+		expect(html).toContain("公式ブラウザストア");
 		expect(html).toContain("Windows 11");
 		expect(html).toContain("Chrome以外も利用可能");
 		expect(html).toContain("Chrome限定ではありません");
@@ -40,9 +40,11 @@ describe("Fuzzy GitHub Pages site", () => {
 		const html = await readFile(new URL("index.html", siteRoot), "utf8");
 
 		expect(html).toContain("正式公開後の導入手順");
-		expect(html).toContain("ZIPをダウンロードして展開");
-		expect(html).toContain("デベロッパーモードを有効");
-		expect(html).toContain("パッケージ化されていない拡張機能を読み込む");
+		expect(html).toContain("公式ストアを開く");
+		expect(html).toContain("権限を確認して追加");
+		expect(html).toContain("コマンド操作は不要");
+		expect(html).not.toContain("デベロッパーモードを有効");
+		expect(html).not.toContain("パッケージ化されていない拡張機能を読み込む");
 		expect(html).toContain("拡張機能からFuzzyアプリへの実応答を確認");
 	});
 
@@ -56,6 +58,22 @@ describe("Fuzzy GitHub Pages site", () => {
 		for (const link of externalLinks) {
 			expect(link.startsWith("https://")).toBe(true);
 		}
+	});
+
+	test("ストア申請に必要な独立プライバシーポリシーを公開対象に含める", async () => {
+		const [indexHtml, privacyHtml, viteConfig] = await Promise.all([
+			readFile(new URL("index.html", siteRoot), "utf8"),
+			readFile(new URL("privacy.html", siteRoot), "utf8"),
+			readFile(new URL("vite.config.ts", siteRoot), "utf8"),
+		]);
+
+		expect(indexHtml).toContain('href="./privacy.html"');
+		expect(viteConfig).toContain('privacy: fileURLToPath(new URL("./privacy.html"');
+		expect(privacyHtml).toContain("利用データをFuzzy運営者や第三者のサーバーへ送信しません");
+		expect(privacyHtml).toContain("Native Messaging");
+		expect(privacyHtml).toContain("Cookieや認証情報をNative Messaging Hostへ渡さず");
+		expect(privacyHtml).toContain("資料を自動で移動・削除しません");
+		expect(privacyHtml).toContain("FuzzyのGitHub Issues");
 	});
 
 	test("GitHub Pages用ワークフローがビルド成果物を公開する", async () => {

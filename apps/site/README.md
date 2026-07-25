@@ -7,7 +7,7 @@ Issue #101で作成した、Fuzzyの概要と導入手順を案内する静的�
 現在は開発・レビュー段階のため、サイト上のダウンロードボタンは「公開予定」として無効化しています。
 
 - 開発・レビュー段階：拡張機能をTauriアプリへ同梱
-- 正式公開後：Windowsアプリとブラウザ拡張機能をこのサイトから個別配布
+- 正式公開後：署名済みWindowsアプリの配布ページと、公式ブラウザストアの拡張機能詳細ページを案内
 - どちらの段階でも、初期セットアップ完了は拡張機能からの実応答で確認
 
 ## ローカル表示
@@ -21,24 +21,24 @@ bun run dev:site
 
 表示されたURL（通常は `http://127.0.0.1:5173/`）をブラウザで開きます。
 
-## 配布ファイル名
+## 公開先
 
-正式公開後、サイトのダウンロードボタンはGitHub Releaseへ次の名前で添付されたファイルを直接取得します。
+正式公開後、WindowsアプリはGitHub Releaseへ次の名前で添付し、サイトから存在確認済みの公開ページへ案内します。
 
 - Windowsアプリ: `Fuzzy-Setup.exe`
-- ブラウザ拡張機能: `Fuzzy-Extension.zip`
 
-配布時はファイル名を変えずにReleaseへ添付します。利用者はGitHub Releasesの一覧画面を経由しません。拡張機能はZIPを展開し、対応ブラウザのデベロッパーモードから「パッケージ化されていない拡張機能を読み込む」操作で追加します。
+ブラウザ拡張機能は、Chrome Web StoreまたはMicrosoft Edge Add-onsのFuzzy詳細ページへ案内します。一般利用者へZIP展開、デベロッパーモード、コマンド操作を要求しません。ローカル配布物の`QA-確認用/Fuzzy-Extension.zip`はストア提出・内部確認専用です。
 
 ## 正式公開時の有効化
 
 ダウンロードボタンを有効にする前に、次の項目をすべて確認します。
 
-1. GitHub Releaseへ`Fuzzy-Setup.exe`と`Fuzzy-Extension.zip`を添付する
-2. 両方の直接ダウンロードURLが正常にファイルを返すことを確認する
-3. `apps/site/index.html`の「公開予定」表示を直接ダウンロードリンクへ変更する
-4. サイトへバージョン、公開日、リリースノートを掲載する
-5. `bun run verify`を実行し、サイトビルドと全テストが成功することを確認する
+1. `Fuzzy-Setup.exe`、`Fuzzy.exe`、`FuzzyNativeHost.exe`へWindowsコード署名を行い、署名を検証する
+2. GitHub Releaseへ署名済み`Fuzzy-Setup.exe`を添付し、公開ページから正常に取得できることを確認する
+3. 拡張機能を公式ブラウザストアへ公開し、確定したURLとIDを`distribution.config.json`とアプリの配布設定へ反映する
+4. `apps/site/index.html`の「公開予定」を、Windows公開ページと公式ブラウザストアの実在確認済みリンクへ変更する
+5. サイトへバージョン、公開日、リリースノートを掲載し、`privacy.html`の内容を再確認する
+6. `bun run verify`とWindows配布ビルドを実行し、クリーンなWindowsユーザー環境で導入・接続・更新・削除を実機確認する
 
 ## 公開用ビルド
 
@@ -51,10 +51,9 @@ bun run --cwd apps/site preview
 
 ## GitHub Pagesの有効化
 
-1. `issue101` のPRをレビューして `main` へマージする
-2. GitHubのリポジトリで `Settings` → `Pages` を開く
-3. `Build and deployment` の `Source` を `GitHub Actions` にする
-4. `Deploy Fuzzy site to GitHub Pages` の完了を待つ
-5. `https://fuzzy-app.github.io/fuzzy/` を開いて確認する
+1. GitHubのリポジトリで `Settings` → `Pages` を開く
+2. `Build and deployment` の `Source` を `GitHub Actions` にする
+3. `Deploy Fuzzy site to GitHub Pages` の完了を待つ
+4. `https://fuzzy-app.github.io/fuzzy/` を開いて確認する
 
 Organization Pages用の `Fuzzy-app/Fuzzy-app.github.io` リポジトリへ移す場合も、リンクとアセットは相対パスなので同じサイトを利用できます。

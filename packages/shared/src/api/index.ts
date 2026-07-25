@@ -1,5 +1,4 @@
-import type { FuzzyApiClient } from "./client";
-import { MockApiClient } from "./mockClient";
+import { ApiError, type FuzzyApiClient } from "./client";
 import { NativeApiClient } from "./nativeClient";
 
 export type { FuzzyApiClient } from "./client";
@@ -8,42 +7,37 @@ export { MockApiClient } from "./mockClient";
 export { NativeApiClient } from "./nativeClient";
 
 export interface CreateApiClientOptions {
-	/** ping応答を待つ上限時間(ms)。超えたらサンプルデータにフォールバックする */
+	/** ping応答を待つ上限時間(ms)。超えた場合はNO_NATIVE_HOSTとして扱う */
 	timeoutMs?: number;
 	/** ログを出すかどうか（デフォルト true） */
 	verbose?: boolean;
 }
 
 /**
- * native-host への接続を試み、応答が無ければサンプルデータ(MockApiClient)にフォールバックする。
- * 拡張機能の各画面はこの関数経由でクライアントを取得し、native/mockどちらかを意識しない。
+ * native-hostへの接続を確認し、実データ用クライアントだけを返す。
  *
- * 例:
- *   const api = await createApiClient();
- *   const dashboard = await api.getDashboard(); // native-host未起動でもサンプルデータが返る
+ * 本番でサンプルデータへ暗黙に切り替えるとSQLite正本と見分けがつかなくなるため、
+ * 未接続時は明示的なNO_NATIVE_HOSTとする。MockApiClientはテストや画面開発で
+ * 明示生成する場合だけ使用する。
  */
 export async function createApiClient(
 	options: CreateApiClientOptions = {},
 ): Promise<FuzzyApiClient> {
-	const { timeoutMs = 800, verbose = true } = options;
-	const native = new NativeApiClient();
-
-	const pingWithTimeout = Promise.race([
-		native.ping(),
-		new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
-	]).catch(() => false);
-
-	const reachable = await pingWithTimeout;
+	const { timeoutMs = 5_000, verbose = true } = options;
+	const native = new NativeApiClient({ requestTimeoutMs: timeoutMs });
+	const reachable = await native.ping();
 
 	if (reachable) {
 		if (verbose) console.info("[fuzzy] native-host に接続しました（mode=native）");
 		return native;
 	}
 
+	native.disconnect();
 	if (verbose) {
-		console.warn(
-			"[fuzzy] native-host に接続できませんでした。サンプルデータにフォールバックします（mode=mock）",
-		);
+		console.warn("[fuzzy] native-host に接続できませんでした");
 	}
-	return new MockApiClient();
+	throw new ApiError(
+		"NO_NATIVE_HOST",
+		"native-hostに接続できません。Fuzzyを起動し、接続状態を確認してから再試行してください。",
+	);
 }
