@@ -1,29 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { MockApiClient } from "@fuzzy/shared";
+import type { FuzzyApiClient } from "@fuzzy/shared";
 import { createRecoveringApiClientProvider } from "../../apps/extension/src/lib/api/recoveringClient";
 
 describe("native-host再接続プロバイダー", () => {
-	test("mockを一定時間だけ共有し、期限後はnative接続を再試行する", async () => {
-		let now = 1_000;
+	test("接続失敗をキャッシュせず、次の要求でnative接続を再試行する", async () => {
 		let attempts = 0;
 		const native = {
 			mode: "native" as const,
 			disconnect() {},
-		} as unknown as MockApiClient & { mode: "native"; disconnect(): void };
+		} as unknown as FuzzyApiClient & { mode: "native"; disconnect(): void };
 		const provider = createRecoveringApiClientProvider({
-			now: () => now,
-			mockRetryMs: 5_000,
 			createClient: async () => {
 				attempts += 1;
-				return attempts === 1 ? new MockApiClient() : native;
+				if (attempts === 1) throw new Error("native-host unavailable");
+				return native;
 			},
 		});
 
-		expect((await provider.getClient()).mode).toBe("mock");
-		expect((await provider.getClient()).mode).toBe("mock");
+		await expect(provider.getClient()).rejects.toThrow("native-host unavailable");
 		expect(attempts).toBe(1);
-
-		now += 5_001;
 		expect((await provider.getClient()).mode).toBe("native");
 		expect(attempts).toBe(2);
 	});
@@ -35,7 +30,7 @@ describe("native-host再接続プロバイダー", () => {
 			disconnect() {
 				disconnected += 1;
 			},
-		} as unknown as MockApiClient & { mode: "native"; disconnect(): void };
+		} as unknown as FuzzyApiClient & { mode: "native"; disconnect(): void };
 		const provider = createRecoveringApiClientProvider({
 			createClient: async () => client,
 		});

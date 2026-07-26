@@ -103,18 +103,14 @@ describe("browser-independent extension installation", () => {
 		expect(startupRecoverySource).toContain("changeLibraryRootClient");
 		expect(startupRecoverySource).toContain("バックアップ元の保存先がこのPCにない場合");
 		expect(startupRecoverySource).toContain("保存先を変更");
-		expect(startupRecoverySource).toContain(
-			"$: canChangeLibraryRoot = !databaseNeedsRecovery;",
-		);
+		expect(startupRecoverySource).toContain("$: canChangeLibraryRoot = !databaseNeedsRecovery;");
 		expect(startupRecoverySource).toContain("maintenanceError");
 		expect(startupRecoverySource).toContain("資料は移動・削除しません");
 		expect(pageSource).toContain("isRecoveryMode = setupStatus.done");
 		expect(pageSource).not.toContain('status.state !== "missing"');
 		expect(rustSource).not.toContain("Database::open_default().unwrap");
 		expect(rustSource).not.toContain("DefaultIndexEngine::open_default().unwrap");
-		expect(rustSource).toContain(
-			"保存先変更前に開けなかった検索索引を退避しました",
-		);
+		expect(rustSource).toContain("保存先変更前に開けなかった検索索引を退避しました");
 	});
 
 	test("公開前は同梱版を既定にする", () => {

@@ -58,9 +58,8 @@ const allowedExtensionIds = new Set(distributionConfig.extensionIds);
 
 // 公式配布開始後は、利用する1つの配布ページを設定する。
 // ブラウザの種類は判定せず、既定ブラウザでページを開く。
-const configuredExtensionStoreUrl: unknown = (
-	distributionConfig as { extensionStoreUrl?: unknown }
-).extensionStoreUrl;
+const configuredExtensionStoreUrl: unknown = (distributionConfig as { extensionStoreUrl?: unknown })
+	.extensionStoreUrl;
 export const extensionStoreUrl: string | null =
 	typeof configuredExtensionStoreUrl === "string" ? configuredExtensionStoreUrl : null;
 

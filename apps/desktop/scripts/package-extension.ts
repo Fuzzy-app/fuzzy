@@ -1,10 +1,7 @@
 import { readdir, rm, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import {
-	extensionBundleDirectory,
-	validatePreparedExtensionBundle,
-} from "./prepare-extension";
 import { validateDistributionVersions } from "./distribution-version";
+import { extensionBundleDirectory, validatePreparedExtensionBundle } from "./prepare-extension";
 
 const desktopDirectory = resolve(import.meta.dir, "..");
 const extensionDirectory = resolve(desktopDirectory, "..", "extension");
@@ -60,15 +57,7 @@ export async function packagePreparedExtension(): Promise<string> {
 	);
 	await rm(archivePath, { force: true });
 	const entries = await topLevelEntries();
-	await runTar([
-		"-a",
-		"-c",
-		"-f",
-		archivePath,
-		"-C",
-		extensionBundleDirectory,
-		...entries,
-	]);
+	await runTar(["-a", "-c", "-f", archivePath, "-C", extensionBundleDirectory, ...entries]);
 
 	const archive = await stat(archivePath);
 	if (!archive.isFile() || archive.size === 0) {

@@ -11,22 +11,17 @@ export interface RecoveringApiClientProvider {
 
 interface RecoveringApiClientOptions {
 	createClient(): Promise<FuzzyApiClient>;
-	mockRetryMs?: number;
-	now?: () => number;
 }
 
 /**
- * 初回失敗でmockを永久キャッシュせず、一定時間後にnative-hostを再確認する。
+ * 接続成功後は同じNative Messagingクライアントを共有し、接続失敗はキャッシュしない。
  * 同時呼び出しは同じPromiseへまとめ、古い試行が後から完了しても現在の接続を上書きしない。
  */
 export function createRecoveringApiClientProvider(
 	options: RecoveringApiClientOptions,
 ): RecoveringApiClientProvider {
-	const mockRetryMs = options.mockRetryMs ?? 5_000;
-	const now = options.now ?? Date.now;
 	let currentPromise: Promise<FuzzyApiClient> | null = null;
 	let currentMode: FuzzyApiClient["mode"] | null = null;
-	let attemptedAt = 0;
 	let generation = 0;
 
 	const releaseCurrent = (): void => {
@@ -38,13 +33,9 @@ export function createRecoveringApiClientProvider(
 	};
 
 	const getClient = (): Promise<FuzzyApiClient> => {
-		if (currentPromise && (currentMode !== "mock" || now() - attemptedAt < mockRetryMs)) {
-			return currentPromise;
-		}
-		if (currentPromise) releaseCurrent();
+		if (currentPromise) return currentPromise;
 
 		const attemptGeneration = ++generation;
-		attemptedAt = now();
 		const attempt = options
 			.createClient()
 			.then((client) => {

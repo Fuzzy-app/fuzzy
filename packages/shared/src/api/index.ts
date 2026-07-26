@@ -22,7 +22,7 @@ export interface CreateApiClientOptions {
  */
 export async function createApiClient(
 	options: CreateApiClientOptions = {},
-): Promise<FuzzyApiClient> {
+): Promise<NativeApiClient> {
 	const { timeoutMs = 5_000, verbose = true } = options;
 	const native = new NativeApiClient({ requestTimeoutMs: timeoutMs });
 	const reachable = await native.ping();

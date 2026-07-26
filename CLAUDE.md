@@ -16,7 +16,7 @@ Fuzzy は、Moodle の授業資料を自動整理し、課題・締切を一元�
 
 **Phase3（#59 最終統合・Windows配布）** の段階。バックエンドとフロントエンドの主要機能は実装済みであり、本番画面はSQLiteを正本とするnative-hostへ接続する。既存の本実装を雛形やスタブと誤認して置き換えないこと。
 
-- `crates/engine-core` — 走査・ルール・全文索引・重複検出、SQLiteマイグレーション、欠損資料の履歴保持、ライブラリ再走査を実装済み
+- `crates/engine-core` — 走査・ルール・全文索引・重複検出、SQLite初版スキーマ、欠損資料の履歴保持、ライブラリ再走査を実装済み
 - `apps/native-host` — Native Messagingの4byte LEフレーミング、APIコマンド、分割ファイル転送、SQLite・索引更新を実装済み
 - `apps/extension` — WXT＋Svelte 5。本番APIはcontent scriptからbackgroundを経由してnative-hostへ接続し、接続失敗時にモックへ暗黙フォールバックしない
 - `apps/desktop` — Tauri 2＋SvelteKit。初期設定、再走査・再索引、バックアップ、破損DB・索引のGUI復旧、native-host登録付きWindows配布を実装済み

@@ -1293,8 +1293,7 @@ img {
 
 .policy-hero {
 	border-bottom: 1px solid var(--border);
-	background:
-		radial-gradient(circle at 82% 12%, rgba(108, 60, 255, 0.13), transparent 30%),
+	background: radial-gradient(circle at 82% 12%, rgba(108, 60, 255, 0.13), transparent 30%),
 		linear-gradient(180deg, #fff 0%, var(--page) 100%);
 	padding: 92px 0 76px;
 }

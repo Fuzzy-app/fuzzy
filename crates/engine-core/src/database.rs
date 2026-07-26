@@ -1,7 +1,7 @@
 //! Tauriとnative-hostが共有するSQLite接続・永続化層。
 //!
-//! 同じDBパス解決、外部キー設定、スキーマ適用、マイグレーションを両プロセスで
-//! 使用し、SQLiteを唯一の正本として扱う。
+//! 同じDBパス解決、外部キー設定、スキーマ検証を両プロセスで使用し、
+//! SQLiteを唯一の正本として扱う。
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -32,19 +32,9 @@ pub use saved_files::{ExtractedFileRegistration, SavedZipSource};
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-const SCHEMA_VERSION: i64 = 6;
-const COURSE_FOLDER_NAMES_MIGRATION_SQL: &str =
-	include_str!("../fixtures/migrations/0002_course_folder_names.sql");
-const ASSIGNMENT_SYNC_MIGRATION_SQL: &str =
-	include_str!("../fixtures/migrations/0003_assignment_sync.sql");
-const MOODLE_ASSIGNMENT_IDENTITY_MIGRATION_SQL: &str =
-	include_str!("../fixtures/migrations/0004_moodle_assignment_identity.sql");
-const ASSIGNMENT_REMOVED_CHANGES_MIGRATION_SQL: &str =
-	include_str!("../fixtures/migrations/0005_assignment_removed_changes.sql");
-const MISSING_FILES_MIGRATION_SQL: &str =
-	include_str!("../fixtures/migrations/0006_missing_files.sql");
+const SCHEMA_VERSION: i64 = 1;
 
-/// SQLite接続。接続時にFK有効化、スキーマ適用、マイグレーションを保証する。
+/// SQLite接続。接続時にFK有効化と初版スキーマの適用・検証を保証する。
 pub struct Database {
 	conn: Connection,
 	path: Option<PathBuf>,
@@ -84,24 +74,9 @@ impl Database {
 		if database_is_empty(&conn)? {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		} else {
-			let mut version = schema_version(&conn)?;
+			let version = schema_version(&conn)?;
 			validate_schema_generation(&conn, version)?;
 			validate_foreign_key_integrity(&conn)?;
-
-			while version < SCHEMA_VERSION {
-				let migration = match version {
-					1 => COURSE_FOLDER_NAMES_MIGRATION_SQL,
-					2 => ASSIGNMENT_SYNC_MIGRATION_SQL,
-					3 => MOODLE_ASSIGNMENT_IDENTITY_MIGRATION_SQL,
-					4 => ASSIGNMENT_REMOVED_CHANGES_MIGRATION_SQL,
-					5 => MISSING_FILES_MIGRATION_SQL,
-					_ => unreachable!("schema generation validation rejects unsupported versions"),
-				};
-				apply_schema(&mut conn, migration)?;
-				version = schema_version(&conn)?;
-				validate_schema_generation(&conn, version)?;
-				validate_foreign_key_integrity(&conn)?;
-			}
 		}
 
 		validate_schema_generation(&conn, SCHEMA_VERSION)?;
@@ -456,9 +431,9 @@ fn schema_version(conn: &Connection) -> EngineResult<i64> {
 }
 
 pub(super) fn validate_schema_generation(conn: &Connection, version: i64) -> EngineResult<()> {
-	if !(1..=SCHEMA_VERSION).contains(&version) {
+	if version != SCHEMA_VERSION {
 		let detail = if version == 0 {
-			"世代情報のない非空DBは安全な移行元を特定できません".to_string()
+			"世代情報のない非空DBはFuzzy初版の正規スキーマとして確認できません".to_string()
 		} else if version > SCHEMA_VERSION {
 			format!(
 				"新しいバージョンのFuzzyで作成された可能性があります（対応上限: {SCHEMA_VERSION}）"
@@ -475,24 +450,7 @@ pub(super) fn validate_schema_generation(conn: &Connection, version: i64) -> Eng
 		require_table_columns(conn, table, columns)?;
 	}
 
-	validate_versioned_column(conn, "courses", "academic_year", version >= 2, version)?;
-	validate_versioned_column(
-		conn,
-		"courses",
-		"folder_name_override",
-		version >= 2,
-		version,
-	)?;
-	validate_versioned_column(conn, "assignments", "removed_at", version >= 3, version)?;
-	validate_versioned_column(
-		conn,
-		"assignments",
-		"moodle_assignment_id",
-		version >= 4,
-		version,
-	)?;
-	validate_versioned_column(conn, "files", "missing_at", version >= 6, version)?;
-	validate_schema_shape(conn, version)?;
+	validate_schema_shape(conn)?;
 
 	let assignment_changes_sql: String = conn
 		.query_row(
@@ -503,12 +461,10 @@ pub(super) fn validate_schema_generation(conn: &Connection, version: i64) -> Eng
 			|row| row.get(0),
 		)
 		.map_err(db_err)?;
-	let accepts_removed_at = assignment_changes_sql.contains("'removed_at'");
-	if accepts_removed_at != (version >= 5) {
+	if !assignment_changes_sql.contains("'removed_at'") {
 		return Err(EngineError::Database {
-			message: format!(
-				"SQLiteスキーマv{version}とassignment_changes.field制約の状態が一致しません"
-			),
+			message: "SQLiteスキーマのassignment_changes.field制約にremoved_atがありません"
+				.to_string(),
 		});
 	}
 
@@ -536,6 +492,8 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("courses", "id", false, 1),
 	("courses", "moodle_course_id", true, 0),
 	("courses", "name", true, 0),
+	("courses", "academic_year", false, 0),
+	("courses", "folder_name_override", false, 0),
 	("global_rule", "id", false, 1),
 	("global_rule", "pattern_key", true, 0),
 	("global_rule", "pattern_template", true, 0),
@@ -550,6 +508,7 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("files", "text_extracted", true, 0),
 	("files", "rule_compliant", true, 0),
 	("files", "downloaded_at", true, 0),
+	("files", "missing_at", false, 0),
 	("duplicate_groups", "id", false, 1),
 	("duplicate_groups", "method", true, 0),
 	("duplicate_members", "group_id", true, 1),
@@ -557,11 +516,13 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("duplicate_members", "similarity", true, 0),
 	("assignments", "id", false, 1),
 	("assignments", "course_id", true, 0),
+	("assignments", "moodle_assignment_id", false, 0),
 	("assignments", "title", true, 0),
 	("assignments", "source", true, 0),
 	("assignments", "due_at_status", true, 0),
 	("assignments", "submission_mode", true, 0),
 	("assignments", "submitted", true, 0),
+	("assignments", "removed_at", false, 0),
 	("assignments", "created_at", true, 0),
 	("assignments", "updated_at", true, 0),
 	("notification_rules", "id", false, 1),
@@ -619,7 +580,7 @@ const EXPECTED_FOREIGN_KEYS: &[(&str, &str, &str, &str, &str)] = &[
 	),
 ];
 
-fn validate_schema_shape(conn: &Connection, version: i64) -> EngineResult<()> {
+fn validate_schema_shape(conn: &Connection) -> EngineResult<()> {
 	reject_unexpected_schema_objects(conn)?;
 	for &(table, column, expected_not_null, expected_pk) in REQUIRED_COLUMN_SHAPES {
 		validate_column_shape(conn, table, column, expected_not_null, expected_pk)?;
@@ -633,20 +594,21 @@ fn validate_schema_shape(conn: &Connection, version: i64) -> EngineResult<()> {
 	] {
 		require_unique_index(conn, table, columns, partial)?;
 	}
-	if version >= 4 {
-		require_unique_index(
-			conn,
-			"assignments",
-			&["course_id", "moodle_assignment_id"],
-			true,
-		)?;
-	}
-	if version >= 6 && !index_exists(conn, "idx_files_missing")? {
+	require_unique_index(
+		conn,
+		"assignments",
+		&["course_id", "moodle_assignment_id"],
+		true,
+	)?;
+	for index in ["idx_assignments_active", "idx_files_missing"] {
+		if index_exists(conn, index)? {
+			continue;
+		}
 		return Err(EngineError::Database {
-			message: "SQLiteスキーマに必須索引「idx_files_missing」がありません".to_string(),
+			message: format!("SQLiteスキーマに必須索引「{index}」がありません"),
 		});
 	}
-	validate_check_constraints(conn, version)
+	validate_check_constraints(conn)
 }
 
 fn reject_unexpected_schema_objects(conn: &Connection) -> EngineResult<()> {
@@ -802,8 +764,8 @@ fn require_unique_index(
 	})
 }
 
-fn validate_check_constraints(conn: &Connection, version: i64) -> EngineResult<()> {
-	let mut requirements = vec![
+fn validate_check_constraints(conn: &Connection) -> EngineResult<()> {
+	let requirements = [
 		(
 			"extension_runtime_observations",
 			"check(protocol_version>0)",
@@ -827,16 +789,12 @@ fn validate_check_constraints(conn: &Connection, version: i64) -> EngineResult<(
 			"notification_rules",
 			"check(offset_minutesbetween0and525600)",
 		),
+		("courses", "check(academic_yearbetween1900and9999)"),
+		(
+			"assignment_changes",
+			"check(fieldin('due_at','title','submission_mode','due_at_status','submitted','removed_at'))",
+		),
 	];
-	if version >= 2 {
-		requirements.push(("courses", "check(academic_yearbetween1900and9999)"));
-	}
-	let assignment_change_check = if version >= 5 {
-		"check(fieldin('due_at','title','submission_mode','due_at_status','submitted','removed_at'))"
-	} else {
-		"check(fieldin('due_at','title','submission_mode','due_at_status','submitted'))"
-	};
-	requirements.push(("assignment_changes", assignment_change_check));
 
 	for (table, required) in requirements {
 		let sql: String = conn
@@ -897,24 +855,6 @@ fn require_table_columns(
 	Ok(())
 }
 
-fn validate_versioned_column(
-	conn: &Connection,
-	table_name: &str,
-	column_name: &str,
-	expected: bool,
-	version: i64,
-) -> EngineResult<()> {
-	let actual = column_exists(conn, table_name, column_name)?;
-	if actual != expected {
-		return Err(EngineError::Database {
-			message: format!(
-				"SQLiteスキーマv{version}と{table_name}.{column_name}の有無が一致しません"
-			),
-		});
-	}
-	Ok(())
-}
-
 fn validate_foreign_keys_enabled(conn: &Connection) -> EngineResult<()> {
 	let enabled: i64 = conn
 		.query_row("PRAGMA foreign_keys", [], |row| row.get(0))
@@ -962,7 +902,9 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"id",
 			"moodle_course_id",
 			"name",
+			"academic_year",
 			"term",
+			"folder_name_override",
 			"created_at",
 			"updated_at",
 		],
@@ -999,6 +941,7 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"rule_compliant",
 			"violation_reason",
 			"downloaded_at",
+			"missing_at",
 		],
 	),
 	("duplicate_groups", &["id", "method", "created_at"]),
@@ -1008,6 +951,7 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 		&[
 			"id",
 			"course_id",
+			"moodle_assignment_id",
 			"title",
 			"source",
 			"due_at",
@@ -1015,6 +959,7 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"submission_mode",
 			"submitted",
 			"related_file_id",
+			"removed_at",
 			"created_at",
 			"updated_at",
 		],
@@ -1136,52 +1081,6 @@ mod tests {
 			extension_version: version.to_string(),
 			protocol_version,
 		}
-	}
-
-	fn schema_for_version(version: i64) -> String {
-		assert!((1..=SCHEMA_VERSION).contains(&version));
-		let schema = SCHEMA_SQL
-			.lines()
-			.filter(|line| {
-				let trimmed = line.trim_start();
-				(version >= 2
-					|| (!trimmed.starts_with("academic_year")
-						&& !trimmed.starts_with("folder_name_override")))
-					&& (version >= 3
-						|| (!trimmed.starts_with("removed_at")
-							&& !line.contains("idx_assignments_active")))
-					&& (version >= 4
-						|| (!line.contains("moodle_assignment_id")
-							&& !line.contains("idx_assignments_moodle_identity")
-							&& !trimmed.starts_with("ON assignments(course_id,")
-							&& !trimmed.starts_with("WHERE moodle_assignment_id")))
-			})
-			.collect::<Vec<_>>()
-			.join("\n");
-		let schema = if version < 5 {
-			schema.replace(
-				"'due_at_status', 'submitted', 'removed_at'",
-				"'due_at_status', 'submitted'",
-			)
-		} else {
-			schema
-		};
-		let schema = if version < 6 {
-			schema
-				.lines()
-				.filter(|line| {
-					!line.trim_start().starts_with("missing_at")
-						&& !line.contains("idx_files_missing")
-				})
-				.collect::<Vec<_>>()
-				.join("\n")
-		} else {
-			schema
-		};
-		schema.replace(
-			"PRAGMA user_version = 6;",
-			&format!("PRAGMA user_version = {version};"),
-		)
 	}
 
 	#[test]
@@ -1399,189 +1298,15 @@ mod tests {
 	}
 
 	#[test]
-	fn version_one_database_is_validated_and_migrated_to_current() {
+	fn pre_release_schema_generation_is_rejected() {
 		let mut conn = Connection::open_in_memory().unwrap();
-		apply_schema(&mut conn, &schema_for_version(1)).unwrap();
-
-		let database = Database::from_connection(conn, None).unwrap();
-		let count: i64 = database
-			.conn()
-			.query_row(
-				"SELECT count(*) FROM sqlite_master
-				 WHERE type = 'table' AND name = 'extension_runtime_observations'",
-				[],
-				|row| row.get(0),
-			)
-			.unwrap();
-		assert_eq!(count, 1);
-		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
-	}
-
-	#[test]
-	fn migration_adds_course_folder_fields_and_backfills_academic_year() {
-		let mut conn = Connection::open_in_memory().unwrap();
-		apply_schema(&mut conn, &schema_for_version(1)).unwrap();
-		conn.execute_batch(
-			"INSERT INTO courses (id, moodle_course_id, name, term)
-			 VALUES (1, 'course-db', 'データベース', '2026前期');",
-		)
-		.unwrap();
-
-		let database = Database::from_connection(conn, None).unwrap();
-		let values: (Option<i64>, Option<String>) = database
-			.conn()
-			.query_row(
-				"SELECT academic_year, folder_name_override FROM courses WHERE id = 1",
-				[],
-				|row| Ok((row.get(0)?, row.get(1)?)),
-			)
-			.unwrap();
-
-		assert_eq!(values, (Some(2026), None));
-		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
-	}
-
-	#[test]
-	fn migration_rejects_version_one_database_with_version_two_columns() {
-		let mut conn = Connection::open_in_memory().unwrap();
-		apply_schema(&mut conn, &schema_for_version(1)).unwrap();
-		conn.execute_batch(
-			"ALTER TABLE courses ADD COLUMN academic_year INTEGER;
-			 ALTER TABLE courses ADD COLUMN folder_name_override TEXT;",
-		)
-		.unwrap();
+		apply_schema(&mut conn, SCHEMA_SQL).unwrap();
+		conn.execute_batch("PRAGMA user_version = 2;").unwrap();
 
 		assert!(matches!(
 			Database::from_connection(conn, None),
 			Err(EngineError::Database { .. })
 		));
-	}
-
-	#[test]
-	fn version_two_database_is_migrated_without_losing_assignments() {
-		let mut conn = Connection::open_in_memory().unwrap();
-		apply_schema(&mut conn, &schema_for_version(2)).unwrap();
-		conn.execute_batch(
-			"INSERT INTO courses (id, moodle_course_id, name) VALUES (1, 'course-1', 'Course');
-			 INSERT INTO assignments (id, course_id, title, source)
-			 VALUES (1, 1, 'Task', 'moodle_dashboard');",
-		)
-		.unwrap();
-
-		let database = Database::from_connection(conn, None).unwrap();
-		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
-		let assignment: (String, Option<String>) = database
-			.conn()
-			.query_row(
-				"SELECT title, removed_at FROM assignments WHERE id = 1",
-				[],
-				|row| Ok((row.get(0)?, row.get(1)?)),
-			)
-			.unwrap();
-		assert_eq!(assignment, ("Task".to_string(), None));
-	}
-
-	#[test]
-	fn version_three_database_adds_course_scoped_moodle_assignment_identity() {
-		let mut conn = Connection::open_in_memory().unwrap();
-		apply_schema(&mut conn, &schema_for_version(3)).unwrap();
-		conn.execute_batch(
-			"INSERT INTO courses (id, moodle_course_id, name)
-			 VALUES (1, 'course-1', 'データベース');
-			 INSERT INTO assignments (id, course_id, title, source)
-			 VALUES (1, 1, '正規化レポート', 'moodle_dashboard');",
-		)
-		.unwrap();
-
-		let database = Database::from_connection(conn, None).unwrap();
-		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
-		let identity: Option<String> = database
-			.conn()
-			.query_row(
-				"SELECT moodle_assignment_id FROM assignments WHERE id = 1",
-				[],
-				|row| row.get(0),
-			)
-			.unwrap();
-		assert_eq!(identity, None);
-	}
-
-	#[test]
-	fn version_four_database_allows_removed_assignment_changes_without_losing_history() {
-		let mut conn = Connection::open_in_memory().unwrap();
-		apply_schema(&mut conn, &schema_for_version(4)).unwrap();
-		conn.execute_batch(
-			"INSERT INTO courses (id, moodle_course_id, name)
-			 VALUES (1, 'course-1', '認知科学概論');
-			 INSERT INTO assignments (
-				id, course_id, moodle_assignment_id, title, source
-			 ) VALUES (
-				1, 1, 'cm-1', '期末レポート', 'moodle_dashboard'
-			 );
-			 INSERT INTO sync_events (id, synced_at, trigger)
-			 VALUES (1, '2026-07-24T09:00:00Z', 'auto');
-			 INSERT INTO assignment_changes (
-				id, sync_event_id, assignment_id, field, old_value, new_value, detected_at
-			 ) VALUES (
-				1, 1, 1, 'title', '旧題名', '期末レポート', '2026-07-24T09:00:00Z'
-			 );",
-		)
-		.unwrap();
-
-		let database = Database::from_connection(conn, None).unwrap();
-		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
-		let existing: (i64, String) = database
-			.conn()
-			.query_row(
-				"SELECT id, field FROM assignment_changes WHERE id = 1",
-				[],
-				|row| Ok((row.get(0)?, row.get(1)?)),
-			)
-			.unwrap();
-		assert_eq!(existing, (1, "title".to_string()));
-		database
-			.conn()
-			.execute(
-				"INSERT INTO assignment_changes (
-					sync_event_id, assignment_id, field, old_value, new_value, detected_at
-				 ) VALUES (1, 1, 'removed_at', NULL, '2026-07-25T09:00:00Z', '2026-07-25T09:00:00Z')",
-				[],
-			)
-			.unwrap();
-		assert!(database
-			.conn()
-			.execute(
-				"INSERT INTO assignment_changes (
-					sync_event_id, assignment_id, field, detected_at
-				 ) VALUES (1, 1, 'unknown', '2026-07-25T09:00:00Z')",
-				[],
-			)
-			.is_err());
-	}
-
-	#[test]
-	fn version_five_database_adds_missing_state_without_losing_files() {
-		let mut conn = Connection::open_in_memory().unwrap();
-		apply_schema(&mut conn, &schema_for_version(5)).unwrap();
-		conn.execute(
-			"INSERT INTO files (
-				id, original_name, saved_path, size_bytes, hash_blake3
-			 ) VALUES (1, '講義資料.pdf', 'C:\\Fuzzy\\講義資料.pdf', 42, ?1)",
-			[format!("b3:{}", "a".repeat(64))],
-		)
-		.unwrap();
-
-		let database = Database::from_connection(conn, None).unwrap();
-		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
-		let stored: (String, Option<String>) = database
-			.conn()
-			.query_row(
-				"SELECT original_name, missing_at FROM files WHERE id = 1",
-				[],
-				|row| Ok((row.get(0)?, row.get(1)?)),
-			)
-			.unwrap();
-		assert_eq!(stored, ("講義資料.pdf".to_string(), None));
 	}
 
 	#[test]

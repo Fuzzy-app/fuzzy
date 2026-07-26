@@ -17,6 +17,14 @@ import { validateDistributionVersions } from "./distribution-version";
 const desktopDirectory = resolve(import.meta.dir, "..");
 const repositoryDirectory = resolve(desktopDirectory, "..", "..");
 const extensionOutputDirectory = resolve(repositoryDirectory, "apps", "extension", ".output");
+const artifactTimestampToleranceMs = 2_000;
+
+export function isArtifactTimestampCurrent(
+	generatedMtimeMs: number,
+	sourceMtimeMs: number,
+): boolean {
+	return generatedMtimeMs + artifactTimestampToleranceMs >= sourceMtimeMs;
+}
 
 async function filesRecursively(directory: string): Promise<string[]> {
 	const entries = await readdir(directory, { withFileTypes: true });
@@ -38,9 +46,7 @@ async function singleMatchingFile(
 ): Promise<string> {
 	const files = (await filesRecursively(directory)).filter(matches);
 	if (files.length !== 1) {
-		throw new Error(
-			`配布成果物を1つに特定できません（${files.length}件）: ${directory}`,
-		);
+		throw new Error(`配布成果物を1つに特定できません（${files.length}件）: ${directory}`);
 	}
 	return files[0] as string;
 }
@@ -57,8 +63,12 @@ async function assertNotOlder(
 	description: string,
 ): Promise<void> {
 	const [generated, source] = await Promise.all([stat(generatedFile), stat(sourceFile)]);
-	if (generated.mtimeMs < source.mtimeMs) {
-		throw new Error(`${description}が現在のビルド成果物より古いため、配布を中止しました。`);
+	if (!isArtifactTimestampCurrent(generated.mtimeMs, source.mtimeMs)) {
+		throw new Error(
+			`${description}が現在のビルド成果物より古いため、配布を中止しました。` +
+				`生成物: ${generatedFile} (${generated.mtime.toISOString()})、` +
+				`比較元: ${sourceFile} (${source.mtime.toISOString()})`,
+		);
 	}
 }
 
@@ -115,15 +125,9 @@ async function publishStagedDirectory(
 export async function collectWindowsArtifacts(): Promise<string> {
 	const distributionVersion = await validateDistributionVersions();
 	const distributionRoot = resolve(repositoryDirectory, "dist");
-	const outputDirectory = resolve(
-		distributionRoot,
-		`Fuzzy-${distributionVersion}-windows`,
-	);
+	const outputDirectory = resolve(distributionRoot, `Fuzzy-${distributionVersion}-windows`);
 	assertPathWithin(distributionRoot, outputDirectory, "Windows配布成果物の出力先");
-	const targetDirectory = resolve(
-		await cargoTargetDirectory(repositoryDirectory),
-		"release",
-	);
+	const targetDirectory = resolve(await cargoTargetDirectory(repositoryDirectory), "release");
 
 	const installer = await singleMatchingFile(resolve(targetDirectory, "bundle", "nsis"), (file) =>
 		new RegExp(
@@ -144,20 +148,14 @@ export async function collectWindowsArtifacts(): Promise<string> {
 		throw new Error("同梱拡張機能が見つかりません。");
 	}
 	const extensionZip = await singleMatchingFile(extensionOutputDirectory, (file) =>
-		basename(file)
-			.toLowerCase()
-			.endsWith(`-${distributionVersion.toLowerCase()}-chrome.zip`),
+		basename(file).toLowerCase().endsWith(`-${distributionVersion.toLowerCase()}-chrome.zip`),
 	);
 	await assertNotOlder(installer, desktopExecutable, "NSISインストーラー");
 	await assertNotOlder(installer, nativeHost, "NSISインストーラー");
 	for (const bundledExtensionFile of await filesRecursively(extensionDirectory)) {
 		await assertNotOlder(installer, bundledExtensionFile, "NSISインストーラー");
 	}
-	await assertNotOlder(
-		extensionZip,
-		resolve(extensionDirectory, "manifest.json"),
-		"拡張機能ZIP",
-	);
+	await assertNotOlder(extensionZip, resolve(extensionDirectory, "manifest.json"), "拡張機能ZIP");
 
 	const nonce = `${process.pid}-${Date.now()}`;
 	const stagingDirectory = resolve(distributionRoot, `.fuzzy-staging-${nonce}`);

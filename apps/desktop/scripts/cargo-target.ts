@@ -14,10 +14,7 @@ export async function cargoTargetDirectory(repositoryDirectory: string): Promise
 		throw new Error(`Cargoの出力先を確認できませんでした（終了コード: ${exitCode}）。`);
 	}
 	const metadata = JSON.parse(output) as CargoMetadata;
-	if (
-		typeof metadata.target_directory !== "string" ||
-		!isAbsolute(metadata.target_directory)
-	) {
+	if (typeof metadata.target_directory !== "string" || !isAbsolute(metadata.target_directory)) {
 		throw new Error("Cargoの出力先が不正です。");
 	}
 	return metadata.target_directory;

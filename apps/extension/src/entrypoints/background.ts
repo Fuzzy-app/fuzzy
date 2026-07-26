@@ -125,11 +125,7 @@ export default defineBackground(() => {
 		if (runtimeReportPromise) return runtimeReportPromise;
 
 		const reportPromise = reportCurrentExtensionRuntime()
-			.then(() => {
-				// 画面開発用mockの後にhostの実応答を確認できた場合は、次のAPIで再判定する。
-				if (clientProvider.mode === "mock") clientProvider.invalidate();
-				return true;
-			})
+			.then(() => true)
 			.catch((error) => {
 				console.warn("[fuzzy] 拡張機能の実行情報をnative-hostへ保存できませんでした", error);
 				return false;

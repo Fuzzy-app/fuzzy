@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
+import { isArtifactTimestampCurrent } from "../../apps/desktop/scripts/collect-windows-artifacts";
+import { validateDistributionVersions } from "../../apps/desktop/scripts/distribution-version";
 import {
 	validateDistributionConfiguration,
 	validateExtensionManifest,
 } from "../../apps/desktop/scripts/prepare-extension";
-import { validateDistributionVersions } from "../../apps/desktop/scripts/distribution-version";
 import { validateExtensionStoreUrl } from "../../apps/desktop/scripts/validate-extension-store";
 
 const repositoryRoot = resolve(import.meta.dir, "..", "..");
@@ -180,5 +181,10 @@ describe("Tauri extension bundle", () => {
 		expect(collector).toContain("assertPathWithin");
 		expect(collector).not.toContain("newestMatchingFile");
 		expect(collector).not.toContain('resolve(outputDirectory, "native-host.exe")');
+	});
+
+	test("成果物時刻はビルドツールの粒度差だけを許容する", () => {
+		expect(isArtifactTimestampCurrent(10_000, 11_999)).toBe(true);
+		expect(isArtifactTimestampCurrent(10_000, 12_001)).toBe(false);
 	});
 });

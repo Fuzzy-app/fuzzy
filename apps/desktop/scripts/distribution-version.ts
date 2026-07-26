@@ -23,8 +23,7 @@ async function cargoVersion(path: string, label: string): Promise<[string, strin
 	}
 	const afterHeader = source.slice(packageHeader.index + packageHeader[0].length);
 	const nextSection = afterHeader.search(/^\[/m);
-	const packageSection =
-		nextSection === -1 ? afterHeader : afterHeader.slice(0, nextSection);
+	const packageSection = nextSection === -1 ? afterHeader : afterHeader.slice(0, nextSection);
 	const version = packageSection.match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
 	if (!version) {
 		throw new Error(`${label}のバージョンを読み取れません。`);

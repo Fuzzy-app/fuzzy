@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
+import { defineConfig } from "vite";
 
 export default defineConfig({
 	// 相対パスにすることで、Organization Pages と /fuzzy/ 配下の両方で表示できる。
