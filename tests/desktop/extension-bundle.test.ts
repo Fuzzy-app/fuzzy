@@ -175,7 +175,9 @@ describe("Tauri extension bundle", () => {
 		expect(collector).toContain('resolve(stagingDirectory, "Fuzzy-Setup.exe")');
 		expect(collector).toContain('resolve(qaDirectory, "FuzzyNativeHost.exe")');
 		expect(collector).toContain('resolve(qaDirectory, "Fuzzy-Extension.zip")');
-		expect(collector).toContain("assertNotOlder(installer, desktopExecutable");
+		expect(collector).not.toContain("assertNotOlder(installer, desktopExecutable");
+		expect(collector).toContain("assertNotOlder(installer, nativeHost");
+		expect(collector).toContain("assertNotOlder(installer, bundledExtensionFile");
 		expect(collector).toContain("assertNotOlder(");
 		expect(collector).toContain("publishStagedDirectory");
 		expect(collector).toContain("assertPathWithin");

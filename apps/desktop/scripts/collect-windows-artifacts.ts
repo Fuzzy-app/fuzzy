@@ -150,7 +150,9 @@ export async function collectWindowsArtifacts(): Promise<string> {
 	const extensionZip = await singleMatchingFile(extensionOutputDirectory, (file) =>
 		basename(file).toLowerCase().endsWith(`-${distributionVersion.toLowerCase()}-chrome.zip`),
 	);
-	await assertNotOlder(installer, desktopExecutable, "NSISインストーラー");
+	// Tauriはmakensis完了後にFuzzy.exeを通常実行用へ復元するため、復元時刻は
+	// インストーラーの生成時刻より後になる。beforeBuildで毎回生成するnative-hostと
+	// 拡張機能を現在ビルドの基準にし、復元後exeとの誤った新旧比較は行わない。
 	await assertNotOlder(installer, nativeHost, "NSISインストーラー");
 	for (const bundledExtensionFile of await filesRecursively(extensionDirectory)) {
 		await assertNotOlder(installer, bundledExtensionFile, "NSISインストーラー");
