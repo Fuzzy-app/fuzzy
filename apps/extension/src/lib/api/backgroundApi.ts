@@ -2,23 +2,32 @@
 //
 // 【背景】NativeApiClient は chrome.runtime.connectNative を使うが、これは
 // content script からは利用できないため、content script で createApiClient() を
-// 直接呼ぶと native-host 完成後も常にモックへフォールバックしてしまう。
+// 直接呼んでもnative-hostへ接続できない。
 // 仕様書3.4節「Moodleアクセス中のみ接続を維持」の方針とも合わせ、
 // Native Messaging 接続は background(service worker) に集約し、
 // content script からは runtime メッセージ経由で呼び出す。
 import type {
+	Assignment,
+	AssignmentChange,
 	CheckSimilarFilesRequest,
+	DashboardSummary,
+	DataSyncEvent,
+	DeadlineFilter,
 	ExtractZipRequest,
 	ExtractZipResult,
 	FuzzyApiClient,
+	LibraryMaintenanceSummary,
 	MoodleSaveFilesRequest,
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
+	RebuildLibraryRequest,
 	SaveFilesResult,
 	SaveSuggestion,
+	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	SyncMoodleAssignmentsRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 } from "@fuzzy/shared";
@@ -28,6 +37,10 @@ import { FILE_TRANSFER_LIMITS } from "@fuzzy/shared";
 export const FUZZY_API_MESSAGE_TYPE = "fuzzy:apiRequest";
 
 const BACKGROUND_API_METHODS = [
+	"getDashboard",
+	"getDeadlines",
+	"updateSubmissionStatus",
+	"search",
 	"suggestSavePath",
 	"updateCourseFolderName",
 	"checkSimilarFiles",
@@ -35,6 +48,10 @@ const BACKGROUND_API_METHODS = [
 	"extractZip",
 	"getNotificationRules",
 	"updateNotificationRules",
+	"syncMoodleAssignments",
+	"getLatestSyncEvent",
+	"getAssignmentChanges",
+	"rebuildLibrary",
 ] as const;
 
 export type BackgroundApiMethod = (typeof BACKGROUND_API_METHODS)[number];
@@ -66,6 +83,29 @@ export function hasValidFuzzyApiRequestPayload(message: FuzzyApiRequestMessage):
 
 function isRequestForMethod(method: BackgroundApiMethod, request: unknown): boolean {
 	switch (method) {
+		case "getDashboard":
+		case "getLatestSyncEvent":
+			return isRecord(request);
+		case "getDeadlines":
+			return (
+				isRecord(request) &&
+				(request.courseId === undefined || isPositiveInteger(request.courseId)) &&
+				(request.includePast === undefined || typeof request.includePast === "boolean") &&
+				(request.needsReviewOnly === undefined || typeof request.needsReviewOnly === "boolean")
+			);
+		case "updateSubmissionStatus":
+			return (
+				isRecord(request) &&
+				isPositiveInteger(request.assignmentId) &&
+				typeof request.submitted === "boolean"
+			);
+		case "search":
+			return (
+				isRecord(request) &&
+				typeof request.query === "string" &&
+				request.query.trim().length > 0 &&
+				request.query.length <= 256
+			);
 		case "suggestSavePath":
 			return (
 				isRecord(request) &&
@@ -113,6 +153,20 @@ function isRequestForMethod(method: BackgroundApiMethod, request: unknown): bool
 						typeof rule.enabled === "boolean",
 				)
 			);
+		case "syncMoodleAssignments":
+			return isSyncMoodleAssignmentsRequest(request);
+		case "getAssignmentChanges":
+			return (
+				isRecord(request) &&
+				(request.sinceSyncEventId === undefined ||
+					(Number.isSafeInteger(request.sinceSyncEventId) && Number(request.sinceSyncEventId) >= 0))
+			);
+		case "rebuildLibrary":
+			return (
+				isRecord(request) &&
+				Object.keys(request).every((key) => key === "rebuildIndex") &&
+				(request.rebuildIndex === undefined || typeof request.rebuildIndex === "boolean")
+			);
 	}
 }
 
@@ -141,6 +195,60 @@ function isMoodleFileMeta(value: unknown): boolean {
 		isNullableString(value.moodleFileId) &&
 		isNullableString(value.sectionTitle) &&
 		isNullableString(value.mimeHint)
+	);
+}
+
+function isSyncMoodleAssignmentsRequest(value: unknown): boolean {
+	if (
+		!isRecord(value) ||
+		(value.trigger !== "manual" && value.trigger !== "auto") ||
+		!isRecord(value.course) ||
+		typeof value.course.moodleCourseId !== "string" ||
+		!/^[A-Za-z0-9._:-]{1,128}$/.test(value.course.moodleCourseId) ||
+		typeof value.course.name !== "string" ||
+		value.course.name.trim().length === 0 ||
+		value.course.name.length > 512 ||
+		(value.course.academicYear !== null &&
+			(!Number.isSafeInteger(value.course.academicYear) ||
+				Number(value.course.academicYear) < 1900 ||
+				Number(value.course.academicYear) > 9999)) ||
+		!isNullableString(value.course.term) ||
+		!Array.isArray(value.assignments) ||
+		value.assignments.length > 2_000
+	) {
+		return false;
+	}
+	const ids = new Set<string>();
+	return value.assignments.every((assignment) => {
+		if (
+			!isRecord(assignment) ||
+			typeof assignment.moodleAssignmentId !== "string" ||
+			!/^[A-Za-z0-9._:-]{1,128}$/.test(assignment.moodleAssignmentId) ||
+			ids.has(assignment.moodleAssignmentId) ||
+			typeof assignment.title !== "string" ||
+			assignment.title.trim().length === 0 ||
+			assignment.title.length > 512 ||
+			!isExplicitOffsetIsoOrNull(assignment.dueAt) ||
+			(assignment.source !== "moodle_dashboard" && assignment.source !== "moodle_text") ||
+			(assignment.dueAtStatus !== "normal" && assignment.dueAtStatus !== "needs_review") ||
+			!["moodle_auto", "manual", "notify_only", "unknown"].includes(
+				String(assignment.submissionMode),
+			) ||
+			typeof assignment.submitted !== "boolean"
+		) {
+			return false;
+		}
+		ids.add(assignment.moodleAssignmentId);
+		return true;
+	});
+}
+
+function isExplicitOffsetIsoOrNull(value: unknown): boolean {
+	return (
+		value === null ||
+		(typeof value === "string" &&
+			/(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+			Number.isFinite(Date.parse(value)))
 	);
 }
 
@@ -173,6 +281,22 @@ export class BackgroundApiClient implements BackgroundApi {
 		return this.#mode;
 	}
 
+	getDashboard(): Promise<DashboardSummary> {
+		return this.#call("getDashboard", {});
+	}
+
+	getDeadlines(filter?: DeadlineFilter): Promise<Assignment[]> {
+		return this.#call("getDeadlines", filter ?? {});
+	}
+
+	updateSubmissionStatus(assignmentId: number, submitted: boolean): Promise<{ ok: boolean }> {
+		return this.#call("updateSubmissionStatus", { assignmentId, submitted });
+	}
+
+	search(query: string): Promise<SearchResult[]> {
+		return this.#call("search", { query });
+	}
+
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
 		return this.#call("suggestSavePath", request);
 	}
@@ -201,6 +325,22 @@ export class BackgroundApiClient implements BackgroundApi {
 
 	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult> {
 		return this.#call("updateNotificationRules", rules);
+	}
+
+	syncMoodleAssignments(request: SyncMoodleAssignmentsRequest): Promise<DataSyncEvent> {
+		return this.#call("syncMoodleAssignments", request);
+	}
+
+	getLatestSyncEvent(): Promise<DataSyncEvent | null> {
+		return this.#call("getLatestSyncEvent", {});
+	}
+
+	getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]> {
+		return this.#call("getAssignmentChanges", { sinceSyncEventId });
+	}
+
+	rebuildLibrary(request: RebuildLibraryRequest): Promise<LibraryMaintenanceSummary> {
+		return this.#call("rebuildLibrary", request);
 	}
 
 	async #call<T>(method: BackgroundApiMethod, request: unknown): Promise<T> {

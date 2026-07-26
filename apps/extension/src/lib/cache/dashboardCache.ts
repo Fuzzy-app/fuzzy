@@ -1,11 +1,16 @@
 import type { DashboardSummary } from "@fuzzy/shared";
 
-const DATABASE_NAME = "fuzzy-display-cache";
+// Issue #59以前にcontent scriptがMoodle originへ保存したmock混在キャッシュと
+// 名前空間を分け、native-hostから取得した実データだけを表示する。
+const DATABASE_NAME = "fuzzy-native-display-cache-v2";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "dashboard";
-const CACHE_KEY = "latest";
+const CACHE_KEY = "latest-native-v2";
+const CACHE_FORMAT_VERSION = 2;
 
 export interface CachedDashboard {
+	formatVersion: typeof CACHE_FORMAT_VERSION;
+	source: "native";
 	dashboard: DashboardSummary;
 	cachedAt: string;
 }
@@ -30,7 +35,7 @@ export async function readDashboardCache(): Promise<CachedDashboard | null> {
 		const cached = await new Promise<CachedDashboard | undefined>((resolve, reject) => {
 			const transaction = database.transaction(STORE_NAME, "readonly");
 			const request = transaction.objectStore(STORE_NAME).get(CACHE_KEY);
-			request.onsuccess = () => resolve(request.result as CachedDashboard | undefined);
+			request.onsuccess = () => resolve(parseCachedDashboard(request.result) ?? undefined);
 			request.onerror = () => reject(request.error);
 		});
 		database.close();
@@ -47,12 +52,15 @@ export async function writeDashboardCache(dashboard: DashboardSummary): Promise<
 		const database = await openDatabase();
 		await new Promise<void>((resolve, reject) => {
 			const transaction = database.transaction(STORE_NAME, "readwrite");
-			transaction
-				.objectStore(STORE_NAME)
-				.put(
-					{ dashboard, cachedAt: new Date().toISOString() } satisfies CachedDashboard,
-					CACHE_KEY,
-				);
+			transaction.objectStore(STORE_NAME).put(
+				{
+					formatVersion: CACHE_FORMAT_VERSION,
+					source: "native",
+					dashboard,
+					cachedAt: new Date().toISOString(),
+				} satisfies CachedDashboard,
+				CACHE_KEY,
+			);
 			transaction.oncomplete = () => resolve();
 			transaction.onerror = () => reject(transaction.error);
 			transaction.onabort = () => reject(transaction.error);
@@ -61,4 +69,51 @@ export async function writeDashboardCache(dashboard: DashboardSummary): Promise<
 	} catch (error) {
 		console.warn("[fuzzy] ダッシュボードキャッシュを保存できませんでした", error);
 	}
+}
+
+export function parseCachedDashboard(value: unknown): CachedDashboard | null {
+	if (!value || typeof value !== "object") return null;
+	const cached = value as Record<string, unknown>;
+	if (
+		cached.formatVersion !== CACHE_FORMAT_VERSION ||
+		cached.source !== "native" ||
+		typeof cached.cachedAt !== "string" ||
+		Number.isNaN(Date.parse(cached.cachedAt)) ||
+		!isDashboardSummary(cached.dashboard)
+	) {
+		return null;
+	}
+	return cached as unknown as CachedDashboard;
+}
+
+function isDashboardSummary(value: unknown): value is DashboardSummary {
+	if (!value || typeof value !== "object") return false;
+	const dashboard = value as Record<string, unknown>;
+	if (
+		!isNonNegativeInteger(dashboard.totalFiles) ||
+		!isNonNegativeInteger(dashboard.totalViolations) ||
+		!isNonNegativeInteger(dashboard.upcomingDeadlineCount) ||
+		!Array.isArray(dashboard.courses)
+	) {
+		return false;
+	}
+	return dashboard.courses.every((value) => {
+		if (!value || typeof value !== "object") return false;
+		const course = value as Record<string, unknown>;
+		return (
+			typeof course.courseId === "number" &&
+			Number.isSafeInteger(course.courseId) &&
+			course.courseId > 0 &&
+			typeof course.courseName === "string" &&
+			course.courseName.length > 0 &&
+			isNonNegativeInteger(course.fileCount) &&
+			isNonNegativeInteger(course.violationCount) &&
+			(course.nextDueAt === null ||
+				(typeof course.nextDueAt === "string" && !Number.isNaN(Date.parse(course.nextDueAt))))
+		);
+	});
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }

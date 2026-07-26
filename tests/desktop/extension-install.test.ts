@@ -4,10 +4,13 @@ import {
 	ExtensionInstallError,
 	getExtensionInstallDestination,
 	getExtensionSetupStatusClient,
+	getNativeHostInstallationStatusClient,
 	getPreferredExtensionInstallChannel,
 	isAllowedExtensionStoreUrl,
 	openExtensionInstallDestinationClient,
 	parseExtensionSetupStatus,
+	parseNativeHostInstallationStatus,
+	repairNativeHostInstallationClient,
 } from "../../apps/desktop/src/lib/setup/extension-install";
 import type {
 	ExtensionInstallRuntime,
@@ -21,7 +24,8 @@ import {
 	parseExtensionRecoveryStatus,
 } from "../../apps/desktop/src/lib/setup/extension-recovery";
 
-const extensionId = "abcdefghijklmnopabcdefghijklmnop";
+const extensionId = "edainabflfdaibonfpckomlaocmemagg";
+const unregisteredExtensionId = "abcdefghijklmnopabcdefghijklmnop";
 const chromeStoreUrl = `https://chromewebstore.google.com/detail/fuzzy/${extensionId}`;
 const edgeStoreUrl = `https://microsoftedge.microsoft.com/addons/detail/fuzzy/${extensionId}`;
 
@@ -68,6 +72,47 @@ describe("browser-independent extension installation", () => {
 		expect(componentSource).not.toContain("localStorage");
 	});
 
+	test("復旧画面から資料・索引・バックアップをコマンドなしで保守できる", async () => {
+		const componentSource = await Bun.file(
+			resolve(import.meta.dir, "../../apps/desktop/src/lib/setup/ExtensionRecoveryPanel.svelte"),
+		).text();
+
+		expect(componentSource).toContain("保存先を再スキャンして検索索引を再構築");
+		expect(componentSource).toContain("バックアップを書き出す");
+		expect(componentSource).toContain("バックアップから復元");
+		expect(componentSource).toContain("repairNativeHostInstallationClient");
+		expect(componentSource).toContain("Native Messaging接続を自動修復");
+		expect(componentSource).toContain("移動・削除せず");
+		expect(componentSource).not.toContain("localStorage");
+	});
+
+	test("SQLiteを開けない起動時もGUI復旧でき、missing応答でも保守導線を隠さない", async () => {
+		const startupRecoverySource = await Bun.file(
+			resolve(import.meta.dir, "../../apps/desktop/src/lib/setup/StartupRecoveryPanel.svelte"),
+		).text();
+		const pageSource = await Bun.file(
+			resolve(import.meta.dir, "../../apps/desktop/src/routes/+page.svelte"),
+		).text();
+		const rustSource = await Bun.file(
+			resolve(import.meta.dir, "../../apps/desktop/src-tauri/src/lib.rs"),
+		).text();
+
+		expect(startupRecoverySource).toContain("バックアップから復元");
+		expect(startupRecoverySource).toContain("破損DBを保全して新しく開始");
+		expect(startupRecoverySource).toContain("検索索引を再構築");
+		expect(startupRecoverySource).toContain("changeLibraryRootClient");
+		expect(startupRecoverySource).toContain("バックアップ元の保存先がこのPCにない場合");
+		expect(startupRecoverySource).toContain("保存先を変更");
+		expect(startupRecoverySource).toContain("$: canChangeLibraryRoot = !databaseNeedsRecovery;");
+		expect(startupRecoverySource).toContain("maintenanceError");
+		expect(startupRecoverySource).toContain("資料は移動・削除しません");
+		expect(pageSource).toContain("isRecoveryMode = setupStatus.done");
+		expect(pageSource).not.toContain('status.state !== "missing"');
+		expect(rustSource).not.toContain("Database::open_default().unwrap");
+		expect(rustSource).not.toContain("DefaultIndexEngine::open_default().unwrap");
+		expect(rustSource).toContain("保存先変更前に開けなかった検索索引を退避しました");
+	});
+
 	test("公開前は同梱版を既定にする", () => {
 		expect(getPreferredExtensionInstallChannel()).toBe("bundled");
 		expect(getExtensionInstallDestination("bundled")).toMatchObject({
@@ -75,7 +120,7 @@ describe("browser-independent extension installation", () => {
 			displayTarget: "Fuzzyアプリに同梱済み",
 			target: {
 				kind: "bundled-resource",
-				value: "extension/chrome-mv3/manifest.json",
+				value: "resources/extension/chrome-mv3/manifest.json",
 			},
 		});
 	});
@@ -84,6 +129,11 @@ describe("browser-independent extension installation", () => {
 		expect(isAllowedExtensionStoreUrl(chromeStoreUrl)).toBe(true);
 		expect(isAllowedExtensionStoreUrl(edgeStoreUrl)).toBe(true);
 		expect(isAllowedExtensionStoreUrl("https://chromewebstore.google.com/")).toBe(false);
+		expect(
+			isAllowedExtensionStoreUrl(
+				`https://chromewebstore.google.com/detail/fuzzy/${unregisteredExtensionId}`,
+			),
+		).toBe(false);
 		expect(
 			isAllowedExtensionStoreUrl("https://chromewebstore.google.com/detail/fuzzy/not-an-id"),
 		).toBe(false);
@@ -107,7 +157,7 @@ describe("openExtensionInstallDestinationClient", () => {
 		const result = await openExtensionInstallDestinationClient("bundled", mock.runtime);
 
 		expect(result.mocked).toBe(false);
-		expect(mock.resolvedResources).toEqual(["extension/chrome-mv3/manifest.json"]);
+		expect(mock.resolvedResources).toEqual(["resources/extension/chrome-mv3/manifest.json"]);
 		expect(mock.revealedPaths).toEqual([
 			"C:\\Program Files\\Fuzzy\\extension\\chrome-mv3\\manifest.json",
 		]);
@@ -212,6 +262,42 @@ describe("SQLite-backed extension setup status", () => {
 		await expect(
 			getExtensionSetupStatusClient("2026-07-20T12:00:00.000Z", runtime),
 		).rejects.toMatchObject({ code: "STATUS_UNAVAILABLE" });
+	});
+});
+
+describe("Native Messaging host installation status", () => {
+	test("Tauri応答を検証し、確認と自動修復のコマンドを呼び分ける", async () => {
+		const calls: string[] = [];
+		const runtime: ExtensionStatusRuntime = {
+			invoke: async <T>(command: string) => {
+				calls.push(command);
+				return {
+					ready: true,
+					message: "Native Messagingホストを利用できます。",
+				} as T;
+			},
+		};
+
+		expect(
+			parseNativeHostInstallationStatus({
+				ready: true,
+				message: "Native Messagingホストを利用できます。",
+			}),
+		).toEqual({
+			ready: true,
+			message: "Native Messagingホストを利用できます。",
+		});
+		expect(parseNativeHostInstallationStatus({ ready: "yes", message: "" })).toBeNull();
+		await expect(getNativeHostInstallationStatusClient(runtime)).resolves.toMatchObject({
+			ready: true,
+		});
+		await expect(repairNativeHostInstallationClient(runtime)).resolves.toMatchObject({
+			ready: true,
+		});
+		expect(calls).toEqual([
+			"get_native_host_installation_status",
+			"repair_native_host_installation",
+		]);
 	});
 });
 
@@ -355,7 +441,8 @@ describe("SQLite-backed extension recovery status", () => {
 		expect(routeSource).toContain("extensionRecoveryLoadError");
 		expect(routeSource).toContain("on:click={loadExtensionRecoveryStatus}");
 		expect(routeSource).toContain("let isRecoveryMode = false;");
-		expect(routeSource).toContain('isRecoveryMode = status.state !== "missing"');
+		expect(routeSource).toContain("isRecoveryMode = setupStatus.done");
+		expect(routeSource).not.toContain('isRecoveryMode = status.state !== "missing"');
 		expect(routeSource).not.toContain("$: isRecoveryMode = setupStatus.done");
 	});
 });

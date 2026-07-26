@@ -4,6 +4,9 @@
 		"beforeBuildCommand": "bun run build:tauri:store"
 	},
 	"bundle": {
-		"resources": null
+		"resources": {
+			"../../extension/.output/chrome-mv3/": null,
+			"resources/": "resources/"
+		}
 	}
 }

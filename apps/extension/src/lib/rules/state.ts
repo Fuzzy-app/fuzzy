@@ -1,8 +1,4 @@
-import {
-	type DuplicateGroupListItem,
-	MockApiClient,
-	type RuleViolationListItem,
-} from "@fuzzy/shared";
+import { ApiError, type DuplicateGroupListItem, type RuleViolationListItem } from "@fuzzy/shared";
 import { createBackgroundRuleManagementApi } from "./backgroundApi";
 import type {
 	RuleManagementApi,
@@ -34,7 +30,7 @@ export class RuleManagementStore {
 	readonly #listeners = new Set<RuleManagementStateListener>();
 	#state: RuleManagementState = { ...initialState };
 
-	constructor(api: RuleManagementApi = new MockApiClient()) {
+	constructor(api: RuleManagementApi) {
 		this.#api = api;
 	}
 
@@ -116,7 +112,27 @@ export class RuleManagementStore {
 }
 
 export function createRuleManagementStore(): RuleManagementStore {
-	return new RuleManagementStore(createBackgroundRuleManagementApi() ?? new MockApiClient());
+	return new RuleManagementStore(
+		createBackgroundRuleManagementApi() ?? createUnavailableRuleManagementApi(),
+	);
+}
+
+function createUnavailableRuleManagementApi(): RuleManagementApi {
+	const unavailable = (): Promise<never> =>
+		Promise.reject(
+			new ApiError(
+				"NO_NATIVE_HOST",
+				"拡張機能のbackgroundへ接続できません。ページを再読み込みしてから再試行してください。",
+			),
+		);
+	return {
+		mode: "native",
+		getRules: unavailable,
+		updateGlobalRule: unavailable,
+		updateCourseRuleOverride: unavailable,
+		getRuleViolations: unavailable,
+		getDuplicateGroups: unavailable,
+	};
 }
 
 function cloneState(state: RuleManagementState): RuleManagementState {

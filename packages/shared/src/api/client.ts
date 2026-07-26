@@ -12,9 +12,11 @@ import type {
 	ExtractZipResult,
 	ImportDataRequest,
 	ImportDataResult,
+	LibraryMaintenanceSummary,
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
+	RebuildLibraryRequest,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolationListItem,
@@ -24,6 +26,7 @@ import type {
 	SearchResult,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
+	SyncMoodleAssignmentsRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
@@ -34,12 +37,12 @@ import type {
  * 拡張機能・初期セットアップアプリが利用するAPIの共通インターフェース。
  * 実装は2種類:
  *  - NativeApiClient: Native Messaging経由で native-host と通信する本番実装
- *  - MockApiClient:   サンプルデータを返すフォールバック実装（native-host未起動時）
+ *  - MockApiClient:   テスト・画面開発で明示利用するサンプル実装
  *
- * 画面側のコードはこのインターフェースだけに依存し、どちらの実装かを意識しない。
+ * 本番ではnative-host未接続をエラーとして扱い、MockApiClientへ暗黙に切り替えない。
  */
 export interface FuzzyApiClient {
-	/** "native" = 実バックエンドに接続中 / "mock" = サンプルデータにフォールバック中 */
+	/** "native" = 実バックエンドに接続中 / "mock" = 明示的な開発用サンプル */
 	readonly mode: "native" | "mock";
 
 	ping(): Promise<boolean>;
@@ -78,6 +81,9 @@ export interface FuzzyApiClient {
 
 	updateNotificationRules(rules: NotificationRuleInput[]): Promise<NotificationRuleUpdateResult>;
 
+	/** Moodleコースページから得た課題の完全snapshotをSQLiteへ同期する。 */
+	syncMoodleAssignments(request: SyncMoodleAssignmentsRequest): Promise<DataSyncEvent>;
+
 	/** 直近の同期（Moodleからのデータ取得）結果。データ取得通知の表示に使う。同期実績が無ければnull */
 	getLatestSyncEvent(): Promise<DataSyncEvent | null>;
 
@@ -89,6 +95,9 @@ export interface FuzzyApiClient {
 
 	/** SQLiteバックアップを読み込み、再スキャンが必要なことを返す */
 	importData(request: ImportDataRequest): Promise<ImportDataResult>;
+
+	/** 保存ルートを再走査し、SQLite注釈と全文索引を実ファイルへ整合させる */
+	rebuildLibrary(request: RebuildLibraryRequest): Promise<LibraryMaintenanceSummary>;
 }
 
 export class ApiError extends Error {

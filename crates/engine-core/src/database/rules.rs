@@ -162,6 +162,7 @@ impl Database {
 				 FROM files f
 				 LEFT JOIN courses c ON c.id = f.course_id
 				 WHERE f.rule_compliant = 0
+					AND f.missing_at IS NULL
 				 ORDER BY f.id",
 			)
 			.map_err(db_err)?;
@@ -199,13 +200,14 @@ impl Database {
 		load_course_folder_resolutions(&self.conn)
 	}
 
-	/// 利用者が編集したコースフォルダ名を保存し、全コース間の一意性を検証する。
+	/// 利用者が編集したコースフォルダ名を保存し、ルール適合注釈を再計算する。
 	///
-	/// `None` は上書き解除を表す。同名になる場合はトランザクションをロールバックする。
+	/// `None` は上書き解除を表す。同名または再計算失敗時はトランザクションをロールバックする。
 	pub fn update_course_folder_name(
 		&mut self,
 		course_id: i64,
 		folder_name: Option<&str>,
+		engine: &impl RuleEngine,
 	) -> EngineResult<CourseFolderNameResolution> {
 		let normalized = folder_name
 			.map(normalize_course_folder_override)
@@ -248,6 +250,7 @@ impl Database {
 			.ok_or_else(|| EngineError::Internal {
 				message: format!("コースID {course_id} の保存名を解決できませんでした"),
 			})?;
+		apply_rule_compliance(&transaction, engine)?;
 		transaction.commit().map_err(db_err)?;
 		Ok(resolution)
 	}
@@ -270,7 +273,7 @@ impl Database {
 	}
 }
 
-fn apply_rule_compliance(
+pub(super) fn apply_rule_compliance(
 	conn: &Connection,
 	engine: &impl RuleEngine,
 ) -> EngineResult<RuleComplianceSummary> {
@@ -442,6 +445,7 @@ fn load_rule_files(conn: &Connection) -> EngineResult<Vec<RuleFileEntry>> {
 				f.section_no
 			 FROM files f
 			 LEFT JOIN courses c ON c.id = f.course_id
+			 WHERE f.missing_at IS NULL
 			 ORDER BY f.id",
 		)
 		.map_err(db_err)?;
@@ -674,11 +678,11 @@ mod tests {
 		database.conn().execute_batch(SEED_SQL).unwrap();
 
 		let updated = database
-			.update_course_folder_name(1, Some("共通ゼミ"))
+			.update_course_folder_name(1, Some("共通ゼミ"), &DefaultRuleEngine)
 			.unwrap();
 		assert_eq!(updated.folder_name, "共通ゼミ");
 		assert!(matches!(
-			database.update_course_folder_name(2, Some("共通ゼミ")),
+			database.update_course_folder_name(2, Some("共通ゼミ"), &DefaultRuleEngine),
 			Err(EngineError::RuleConflict { .. })
 		));
 
@@ -699,7 +703,7 @@ mod tests {
 		database.conn().execute_batch(SEED_SQL).unwrap();
 
 		assert!(matches!(
-			database.update_course_folder_name(1, Some("データベース")),
+			database.update_course_folder_name(1, Some("データベース"), &DefaultRuleEngine),
 			Err(EngineError::RuleConflict { .. })
 		));
 		let first_override: Option<String> = database
@@ -711,6 +715,70 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(first_override, None);
+	}
+
+	#[test]
+	fn course_folder_update_revalidates_existing_file_annotations() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+
+		let updated = database
+			.update_course_folder_name(1, Some("情報設計"), &DefaultRuleEngine)
+			.unwrap();
+		assert_eq!(updated.folder_name, "情報設計");
+		let mut statement = database
+			.conn()
+			.prepare("SELECT id, rule_compliant FROM files WHERE id IN (1, 2) ORDER BY id")
+			.unwrap();
+		let annotations = statement
+			.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+			.unwrap()
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.unwrap();
+		assert_eq!(annotations, vec![(1, 0), (2, 0)]);
+	}
+
+	#[test]
+	fn course_folder_update_rolls_back_when_revalidation_fails() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+		let annotation_before: (i64, Option<String>) = database
+			.conn()
+			.query_row(
+				"SELECT rule_compliant, violation_reason FROM files WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		database
+			.conn()
+			.execute(
+				"UPDATE global_rule SET pattern_template = '{course}/{unknown}' WHERE id = 1",
+				[],
+			)
+			.unwrap();
+
+		assert!(database
+			.update_course_folder_name(1, Some("情報設計"), &DefaultRuleEngine)
+			.is_err());
+		let override_after: Option<String> = database
+			.conn()
+			.query_row(
+				"SELECT folder_name_override FROM courses WHERE id = 1",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		let annotation_after: (i64, Option<String>) = database
+			.conn()
+			.query_row(
+				"SELECT rule_compliant, violation_reason FROM files WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(override_after, None);
+		assert_eq!(annotation_after, annotation_before);
 	}
 
 	#[test]

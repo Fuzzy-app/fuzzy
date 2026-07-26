@@ -1,4 +1,5 @@
 import {
+	ApiError,
 	type CheckSimilarFilesRequest,
 	type DataSyncEvent,
 	type FuzzyApiClient,
@@ -17,6 +18,12 @@ import {
 	checkMoodleFileFromBackground,
 	saveMoodleFilesFromBackground,
 } from "../lib/api/backgroundFileSave";
+import { createRecoveringApiClientProvider } from "../lib/api/recoveringClient";
+import { readDashboardCache, writeDashboardCache } from "../lib/cache/dashboardCache";
+import {
+	type DashboardCacheReadResponseMessage,
+	isDashboardCacheReadRequestMessage,
+} from "../lib/cache/dashboardCacheMessaging";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
 	isRuleManagementRequestMessage,
@@ -26,17 +33,21 @@ import {
 	isExtensionRuntimeReportRequestMessage,
 	reportCurrentExtensionRuntime,
 } from "../lib/runtime/extensionRuntime";
+import { MOODLE_NATIVE_SESSION_PORT } from "../lib/runtime/moodleNativeSession";
 import { buildSyncResultNotificationMessage } from "../lib/ui/screenCopy";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
 const SYNC_CHECK_INTERVAL_MINUTES = 1;
+let syncNotificationQueue: Promise<void> = Promise.resolve();
 
 function syncChangeTotal(event: DataSyncEvent): number {
 	return event.newAssignmentCount + event.changedAssignmentCount + event.removedAssignmentCount;
 }
 
 async function notifyWhenSyncEventIsNew(client: FuzzyApiClient): Promise<void> {
+	// 画面開発用のサンプル同期履歴から実通知を生成しない。
+	if (client.mode === "mock") return;
 	const event = await client.getLatestSyncEvent();
 	if (!event) return;
 
@@ -49,28 +60,65 @@ async function notifyWhenSyncEventIsNew(client: FuzzyApiClient): Promise<void> {
 		await browser.storage.local.set({ [storageKey]: event.id });
 		return;
 	}
-	if (previousEventId === event.id) return;
+	if (previousEventId !== undefined && previousEventId >= event.id) return;
 
+	await queueSyncEventNotification(client.mode, event);
+}
+
+function queueSyncEventNotification(
+	mode: FuzzyApiClient["mode"],
+	event: DataSyncEvent,
+): Promise<void> {
+	const queued = syncNotificationQueue.then(() => deliverSyncEventNotification(mode, event));
+	syncNotificationQueue = queued.catch(() => undefined);
+	return queued;
+}
+
+async function deliverSyncEventNotification(
+	mode: FuzzyApiClient["mode"],
+	event: DataSyncEvent,
+): Promise<void> {
+	// 呼び出し元のsyncMoodleAssignmentsが成功したeventは初回baselineと区別し、
+	// 必ずその場で通知する。同じIDはChrome側で同じ通知を置き換える。
+	if (mode === "mock") return;
 	const total = syncChangeTotal(event);
-	await browser.notifications.create(`fuzzy-sync-${client.mode}-${event.id}`, {
+	await browser.notifications.create(`fuzzy-sync-${mode}-${event.id}`, {
 		type: "basic",
 		iconUrl: browser.runtime.getURL("/icon/128.png"),
 		title: "Fuzzy: Moodleデータを取得しました",
 		message: buildSyncResultNotificationMessage(total),
 	});
-	await browser.storage.local.set({ [storageKey]: event.id });
+	const storageKey = `${SYNC_NOTIFICATION_KEY_PREFIX}:${mode}`;
+	const stored = await browser.storage.local.get(storageKey);
+	const previousEventId =
+		typeof stored[storageKey] === "number" ? (stored[storageKey] as number) : 0;
+	await browser.storage.local.set({
+		[storageKey]: Math.max(previousEventId, event.id),
+	});
 }
 
 // Native Messaging接続（native-host疎通）はbackgroundに集約する（仕様書3.4節）。
 // content script側は lib/api/backgroundApi.ts の BackgroundApiClient から
 // runtimeメッセージでここへ委譲する。
 export default defineBackground(() => {
-	let clientPromise: Promise<FuzzyApiClient> | null = null;
-	const getClient = (): Promise<FuzzyApiClient> => {
-		if (!clientPromise) clientPromise = createApiClient();
-		return clientPromise;
+	const activeMoodleSessions = new Set<unknown>();
+	const hasActiveMoodleSession = () => activeMoodleSessions.size > 0;
+	const clientProvider = createRecoveringApiClientProvider({
+		createClient: () => createApiClient(),
+	});
+	const getClient = (): Promise<FuzzyApiClient> => clientProvider.getClient();
+	const handleClientError = (error: unknown): void => {
+		if (
+			error instanceof ApiError &&
+			(error.code === "NO_NATIVE_HOST" || error.code === "TIMEOUT")
+		) {
+			clientProvider.invalidate();
+		}
 	};
-	const deadlineNotificationMonitor = createDeadlineNotificationMonitor(getClient);
+	const deadlineNotificationMonitor = createDeadlineNotificationMonitor(getClient, {
+		shouldCheck: hasActiveMoodleSession,
+		onError: handleClientError,
+	});
 	let runtimeReportPromise: Promise<boolean> | null = null;
 
 	const reportExtensionRuntimeOnce = (): Promise<boolean> => {
@@ -90,9 +138,11 @@ export default defineBackground(() => {
 	};
 
 	const checkLatestSyncEvent = async () => {
+		if (!hasActiveMoodleSession()) return;
 		try {
 			await notifyWhenSyncEventIsNew(await getClient());
 		} catch (error) {
+			handleClientError(error);
 			console.warn("[fuzzy] 同期結果の通知確認に失敗しました", error);
 		}
 	};
@@ -112,6 +162,18 @@ export default defineBackground(() => {
 
 	browser.runtime.onInstalled.addListener(startNotificationMonitoring);
 	browser.runtime.onStartup.addListener(startNotificationMonitoring);
+	browser.runtime.onConnect.addListener((port) => {
+		if (port.name !== MOODLE_NATIVE_SESSION_PORT) return;
+		activeMoodleSessions.add(port);
+		if (activeMoodleSessions.size === 1) {
+			void checkLatestSyncEvent();
+			void deadlineNotificationMonitor.check();
+		}
+		port.onDisconnect.addListener(() => {
+			activeMoodleSessions.delete(port);
+			if (!hasActiveMoodleSession()) clientProvider.dispose();
+		});
+	});
 	browser.alarms.onAlarm.addListener((alarm) => {
 		if (alarm.name === SYNC_CHECK_ALARM) void checkLatestSyncEvent();
 		if (alarm.name === deadlineNotificationMonitor.alarmName) {
@@ -125,15 +187,24 @@ export default defineBackground(() => {
 			void reportExtensionRuntimeOnce().then((ok) => sendResponse({ ok }));
 			return true;
 		}
+		if (isDashboardCacheReadRequestMessage(message)) {
+			void respondToDashboardCacheReadRequest().then(sendResponse);
+			return true;
+		}
 		if (isRuleManagementRequestMessage(message)) {
-			void respondToRuleManagementRequest(getClient(), message).then(sendResponse);
+			void respondToRuleManagementRequest(getClient(), message, handleClientError).then(
+				sendResponse,
+			);
 			return true;
 		}
 		if (!isFuzzyApiRequestMessage(message)) return false;
 
-		void respondToApiRequest(getClient(), message, sender.tab?.url ?? sender.url ?? "").then(
-			sendResponse,
-		);
+		void respondToApiRequest(
+			getClient(),
+			message,
+			sender.tab?.url ?? sender.url ?? "",
+			handleClientError,
+		).then(sendResponse);
 		return true; // sendResponse を非同期に呼ぶため、メッセージチャネルを維持する
 	});
 });
@@ -142,6 +213,7 @@ async function respondToApiRequest(
 	clientPromise: Promise<FuzzyApiClient>,
 	message: FuzzyApiRequestMessage,
 	senderUrl = "",
+	onError?: (error: unknown) => void,
 ): Promise<FuzzyApiResponseMessage> {
 	if (!hasValidFuzzyApiRequestPayload(message)) {
 		return {
@@ -164,12 +236,30 @@ async function respondToApiRequest(
 							message.request as CheckSimilarFilesRequest,
 							pageOrigin(senderUrl),
 						)
-					: await callBackgroundApi(client, message);
+					: await callBackgroundApi(client, message, {
+							writeDashboardCache,
+							notifySyncEvent: (event) => queueSyncEventNotification(client.mode, event),
+							onSyncNotificationError: (error) => {
+								console.warn("[fuzzy] 同期結果を通知できませんでした", error);
+							},
+						});
 		return { ok: true, data, mode: client.mode };
 	} catch (error) {
+		onError?.(error);
 		return {
 			ok: false,
 			error: toBackgroundApiError(error),
+		};
+	}
+}
+
+async function respondToDashboardCacheReadRequest(): Promise<DashboardCacheReadResponseMessage> {
+	try {
+		return { ok: true, data: await readDashboardCache() };
+	} catch {
+		return {
+			ok: false,
+			error: { code: "CACHE_READ_FAILED", message: "キャッシュを読み込めませんでした。" },
 		};
 	}
 }

@@ -1,4 +1,4 @@
--- Fuzzy サンプルデータ（開発・デモ・モックフォールバック用）
+-- Fuzzy サンプルデータ（開発・テストで明示利用）
 -- 投入手順: sqlite3 fuzzy.db ".read schema.sql" ".read seed.sql"
 -- 科目名は Fuzzy.pdf のダッシュボード画面モックアップに合わせている
 

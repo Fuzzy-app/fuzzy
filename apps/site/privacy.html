@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="theme-color" content="#6c3cff" />
+		<meta
+			name="description"
+			content="Fuzzyが取り扱う学習情報、ローカル保存、ブラウザ権限について説明するプライバシーポリシーです。"
+		/>
+		<title>プライバシーポリシー — Fuzzy</title>
+		<link rel="icon" href="./assets/fuzzy.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="./styles.css" />
+	</head>
+	<body>
+		<a class="skip-link" href="#main-content">本文へ移動</a>
+
+		<header class="site-header">
+			<div class="shell header-inner">
+				<a class="brand" href="./index.html" aria-label="Fuzzy トップへ">
+					<img src="./assets/fuzzy.svg" width="42" height="42" alt="" />
+					<span>Fuzzy</span>
+				</a>
+				<nav class="header-nav policy-nav" aria-label="プライバシーポリシー">
+					<a href="#data">取り扱う情報</a>
+					<a href="#storage">保存と共有</a>
+					<a href="#permissions">ブラウザ権限</a>
+					<a href="#control">利用者による管理</a>
+				</nav>
+				<a class="button button-small" href="./index.html">トップへ戻る</a>
+			</div>
+		</header>
+
+		<main id="main-content" class="policy-main">
+			<section class="policy-hero">
+				<div class="shell policy-hero-inner">
+					<p class="eyebrow"><span></span>Privacy Policy</p>
+					<h1>プライバシーポリシー</h1>
+					<p>
+						Fuzzyは、Moodleの授業資料と課題情報を利用者自身のWindows PCで整理するアプリです。
+						学習情報をFuzzy運営者のサーバーへ送信せず、SQLiteを正本としてローカルで取り扱います。
+					</p>
+					<p class="policy-updated">最終更新日：2026年7月25日</p>
+				</div>
+			</section>
+
+			<div class="shell policy-layout">
+				<aside class="policy-summary" aria-label="要点">
+					<h2>要点</h2>
+					<ul>
+						<li>利用データは利用者のPC内に保存</li>
+						<li>広告、解析、第三者販売を行わない</li>
+						<li>Moodleへのアクセスは同一サイト内だけ</li>
+						<li>資料の自動移動・自動削除を行わない</li>
+					</ul>
+				</aside>
+
+				<article class="policy-content">
+					<section id="scope">
+						<h2>1. 適用範囲</h2>
+						<p>
+							本ポリシーは、FuzzyのWindowsアプリ、Native Messaging Host、ブラウザ拡張機能に適用されます。
+							利用者がアクセスするMoodleやブラウザストアなど、第三者が運営するサービスには各サービスのポリシーが適用されます。
+						</p>
+					</section>
+
+					<section id="data">
+						<h2>2. 取り扱う情報と目的</h2>
+						<p>Fuzzyは、機能の提供に必要な範囲で次の情報を利用者のPC上で処理します。</p>
+						<ul>
+							<li>コース名、コースID、年度、学期、課題名、締切、提出状態</li>
+							<li>資料の名称、Moodle上のURL、種類、サイズ、利用者が保存を選んだ資料内容</li>
+							<li>利用者が選んだ保存先、整理ルール、通知設定、バックアップ先</li>
+							<li>検索索引、ファイルのBLAKE3・SimHash、重複候補、ルール適合結果</li>
+							<li>ランダムに生成した端末内インストール識別子、拡張機能と通信仕様のバージョン、最終接続日時</li>
+							<li>通知の重複防止情報、最終確認日時、直近の課題同期イベント位置</li>
+						</ul>
+						<p>
+							これらは、資料保存、全文検索、課題・締切表示、通知、重複確認、初期設定と接続診断のためだけに使用します。
+							広告配信、利用者追跡、行動解析、プロファイリングには使用しません。
+						</p>
+					</section>
+
+					<section id="storage">
+						<h2>3. 保存場所、外部送信、第三者提供</h2>
+						<p>
+							設定と学習情報は通常
+							<code>%LOCALAPPDATA%\Fuzzy\fuzzy.db</code>
+							のSQLiteへ保存し、全文検索索引も同じアプリデータ領域へ保存します。資料本体は利用者が画面で選んだフォルダーへ保存します。
+							ブラウザ拡張機能のIndexedDBには、SQLiteから取得したダッシュボードの表示用キャッシュだけを保存します。
+						</p>
+						<p>
+							Fuzzyは、これらの利用データをFuzzy運営者や第三者のサーバーへ送信しません。販売、貸与、広告事業者との共有も行いません。
+							資料取得時の通信は、利用者が開いている対応Moodleサイトに対し、ブラウザの既存ログイン状態を使って同一サイト内で行われます。
+							Cookieや認証情報をNative Messaging Hostへ渡さず、取得に成功した資料内容だけをローカルプロセスへ転送します。
+						</p>
+						<p>
+							バックアップを書き出す場合は、利用者がOSのファイルダイアログで選んだ場所へSQLiteのコピーを保存します。
+							クラウド同期フォルダーを選んだ場合、その後の同期は当該サービスと利用者の設定に従います。
+						</p>
+					</section>
+
+					<section id="permissions">
+						<h2>4. ブラウザ拡張機能の権限</h2>
+						<dl class="permission-list">
+							<div>
+								<dt>対応Moodleサイトへのアクセス</dt>
+								<dd>コース、課題、資料候補を画面から読み取り、利用者が選んだ資料を取得するために使います。</dd>
+							</div>
+							<div>
+								<dt>Native Messaging</dt>
+								<dd>ブラウザから同じPC上のFuzzy Native Messaging Hostへデータを渡し、SQLiteと資料保存を利用するために使います。</dd>
+							</div>
+							<div>
+								<dt>Storage</dt>
+								<dd>保存パネルの表示状態、直近の保存先、ランダムなインストール識別子、通知・同期の処理状態、実データ由来の表示用キャッシュを端末内に保持するために使います。</dd>
+							</div>
+							<div>
+								<dt>Alarms / Notifications</dt>
+								<dd>利用者が有効にした締切通知をブラウザ上で表示するために使います。</dd>
+							</div>
+						</dl>
+					</section>
+
+					<section id="control">
+						<h2>5. 保存期間と利用者による管理</h2>
+						<p>
+							データは、利用者が削除または置き換えるまでPC上に保持されます。Fuzzyは保存済みの授業資料を自動で移動・削除しません。
+							バックアップの書き出し・復元、保存先の再走査、検索索引の再構築は、Fuzzyの画面とOSダイアログから明示的に実行できます。
+						</p>
+						<p>
+							ブラウザ拡張機能の端末内データは、ブラウザの拡張機能管理画面からFuzzyを削除して管理できます。
+							Windowsアプリをアンインストールしても、誤削除を避けるため、利用者が保存した授業資料、SQLite本体・バックアップ、検索索引を自動削除しません。
+							不要になった資料やバックアップは、内容を確認したうえで通常のWindowsファイル操作から削除してください。
+							Fuzzyの利用データを全て消す場合は、アプリとブラウザを終了してから、エクスプローラーで
+							<code>%LOCALAPPDATA%\Fuzzy</code>
+							の内容を確認して削除できます。授業資料は利用者が選んだ別の保存先にあるため、この操作では削除されません。
+						</p>
+					</section>
+
+					<section id="security">
+						<h2>6. 安全管理</h2>
+						<p>
+							Native Messagingの接続元はFuzzy拡張機能のIDに限定し、保存先をローカルの指定ルート以下に制限します。
+							受信サイズ、ファイル名、ZIP項目、相対パスを検証し、既存ファイルを上書きしません。
+							破損したSQLiteや検索索引は、利用者の確認を伴うGUI復旧で保全・再構築します。
+						</p>
+					</section>
+
+					<section id="changes">
+						<h2>7. ポリシーの変更</h2>
+						<p>
+							機能や権限の変更に合わせて本ポリシーを更新する場合は、このページの最終更新日を変更します。
+							取り扱う情報や外部送信の方針に重要な変更がある場合は、公開ページまたはリリース情報で案内します。
+						</p>
+					</section>
+
+					<section id="contact">
+						<h2>8. お問い合わせ</h2>
+						<p>
+							プライバシーに関する質問や不具合は、
+							<a href="https://github.com/Fuzzy-app/fuzzy/issues">FuzzyのGitHub Issues</a>
+							からお知らせください。公開Issueへ個人情報、授業資料、認証情報を添付しないでください。
+						</p>
+					</section>
+				</article>
+			</div>
+		</main>
+
+		<footer class="site-footer">
+			<div class="shell footer-inner">
+				<a class="brand footer-brand" href="./index.html">
+					<img src="./assets/fuzzy.svg" width="36" height="36" alt="" />
+					<span>Fuzzy</span>
+				</a>
+				<p>Moodleの授業資料と課題情報を、このPCで探しやすく。</p>
+				<nav aria-label="関連リンク">
+					<a href="./index.html">トップ</a>
+					<a href="./privacy.html" aria-current="page">プライバシー</a>
+					<a href="https://github.com/Fuzzy-app/fuzzy">GitHub</a>
+				</nav>
+			</div>
+		</footer>
+	</body>
+</html>

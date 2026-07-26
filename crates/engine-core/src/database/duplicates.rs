@@ -29,6 +29,7 @@ impl Database {
 				 FROM duplicate_groups dg
 				 JOIN duplicate_members dm ON dm.group_id = dg.id
 				 JOIN files f ON f.id = dm.file_id
+				 WHERE f.missing_at IS NULL
 				 ORDER BY dg.id, f.id",
 			)
 			.map_err(db_err)?;
@@ -86,7 +87,9 @@ impl Database {
 		let saved_path = self
 			.conn
 			.query_row(
-				"SELECT saved_path FROM files WHERE id = ?1",
+				"SELECT saved_path
+				 FROM files
+				 WHERE id = ?1 AND missing_at IS NULL",
 				[file_id],
 				|row| row.get::<_, String>(0),
 			)
@@ -155,7 +158,12 @@ fn validate_duplicate_member(method: &str, member: &DuplicateFileRecord) -> Engi
 
 fn load_file_fingerprints(conn: &Connection) -> EngineResult<Vec<StoredFileFingerprint>> {
 	let mut statement = conn
-		.prepare("SELECT id, hash_blake3, simhash FROM files ORDER BY id")
+		.prepare(
+			"SELECT id, hash_blake3, simhash
+			 FROM files
+			 WHERE missing_at IS NULL
+			 ORDER BY id",
+		)
 		.map_err(db_err)?;
 	let fingerprints = statement
 		.query_map([], |row| {

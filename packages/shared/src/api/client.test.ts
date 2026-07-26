@@ -3,10 +3,11 @@ import type { NotificationRule, NotificationRuleInput } from "../types";
 import { createApiClient } from "./index";
 import { MockApiClient } from "./mockClient";
 
-describe("createApiClient フォールバック機構", () => {
-	test("native-hostが存在しない環境ではmockモードにフォールバックする", async () => {
-		const api = await createApiClient({ timeoutMs: 100, verbose: false });
-		expect(api.mode).toBe("mock");
+describe("createApiClient 本番接続", () => {
+	test("native-hostが存在しない環境ではサンプルへ切り替えず明示エラーにする", async () => {
+		await expect(createApiClient({ timeoutMs: 100, verbose: false })).rejects.toMatchObject({
+			code: "NO_NATIVE_HOST",
+		});
 	});
 });
 

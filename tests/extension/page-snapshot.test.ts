@@ -25,6 +25,23 @@ describe("Moodle資料のDOM解析", () => {
 		expect(snapshot.term).toBe("2026前期");
 	});
 
+	test("コース名から学期を補う場合も科目名全体をtermへ混ぜない", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="course-412">
+				<body>
+					<main>
+						<h1>2026年度前期 データベース（担当: 山田）</h1>
+					</main>
+				</body>
+			</html>
+		`);
+
+		const snapshot = collectMoodlePageSnapshot(document);
+		expect(snapshot.courseName).toBe("2026年度前期 データベース（担当: 山田）");
+		expect(snapshot.academicYear).toBe(2026);
+		expect(snapshot.term).toBe("2026年度前期");
+	});
+
 	test("未認識のバッジでもMP3・EXEアイコンから種別を推定する", () => {
 		expect(
 			resolveMoodleActivityMimeHint(

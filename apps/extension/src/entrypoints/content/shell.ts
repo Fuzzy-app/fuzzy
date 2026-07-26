@@ -8,16 +8,16 @@
 // dataset を経由し、HTML文字列の組み立て（innerHTML等）には一切混ぜないこと。
 // このモジュールでは動的データを含むHTML文字列を組み立てる箇所を意図的に無くしている。
 
-import {
-	type Assignment,
-	type AssignmentChange,
-	type DashboardSummary,
-	type DataSyncEvent,
-	type FuzzyApiClient,
-	type SearchResult,
-	createApiClient,
+import type {
+	Assignment,
+	AssignmentChange,
+	DashboardSummary,
+	DataSyncEvent,
+	FuzzyApiClient,
+	SearchResult,
 } from "@fuzzy/shared";
-import { readDashboardCache, writeDashboardCache } from "../../lib/cache/dashboardCache";
+import { BackgroundApiClient } from "../../lib/api/backgroundApi";
+import { readDashboardCacheFromBackground } from "../../lib/cache/dashboardCacheMessaging";
 import { createRuleManagementStore } from "../../lib/rules/state";
 import {
 	DEADLINE_REVIEW_HELP_TEXT,
@@ -122,7 +122,7 @@ export function mountFuzzyShell(): void {
 	mainHost.after(stash);
 
 	// --- 状態 ---
-	const apiPromise = createApiClient();
+	const apiPromise = Promise.resolve(new BackgroundApiClient());
 	const ruleStore = createRuleManagementStore();
 	let page: HTMLElement | null = null;
 	let mainEl: HTMLElement | null = null;
@@ -185,6 +185,10 @@ export function mountFuzzyShell(): void {
 				: mode === "mock"
 					? "完全ローカル・サンプル表示"
 					: "接続確認中";
+	};
+
+	const setTopModeFromApi = (api: BackgroundApiClient) => {
+		if (api.mode !== "unknown") setTopMode(api.mode);
 	};
 
 	const applyShellFrame = () => {
@@ -367,7 +371,7 @@ export function mountFuzzyShell(): void {
 			searchState.results = results;
 			searchState.executedQuery = query;
 			searchState.selectedResultKey = results[0] ? getResultKey(results[0], 0) : null;
-			setTopMode(api.mode);
+			setTopModeFromApi(api);
 		} catch (error) {
 			if (requestId !== searchRequestId) return;
 			searchState.error = error instanceof Error ? error.message : String(error);
@@ -448,7 +452,7 @@ export function mountFuzzyShell(): void {
 				loadCourses: async () => {
 					const api = await apiPromise;
 					const summary = await api.getDashboard();
-					setTopMode(api.mode);
+					setTopModeFromApi(api);
 					return summary.courses;
 				},
 			});
@@ -464,7 +468,7 @@ export function mountFuzzyShell(): void {
 			assignments = await api.getDeadlines({ includePast: true });
 			assignmentsLoaded = true;
 			deadlineError = null;
-			setTopMode(api.mode);
+			setTopModeFromApi(api);
 		} catch (error) {
 			deadlineError = error instanceof Error ? error.message : String(error);
 			assignmentsLoaded = false;
@@ -473,26 +477,35 @@ export function mountFuzzyShell(): void {
 
 	const loadDashboard = async () => {
 		if (dashboardLoaded) return;
-		const cached = await readDashboardCache();
+		const cached = await readDashboardCacheFromBackground().catch((error) => {
+			console.warn("[fuzzy] backgroundからダッシュボードキャッシュを取得できませんでした", error);
+			return null;
+		});
 		try {
 			const api = await apiPromise;
-			if (api.mode === "mock" && cached) {
+			const latestDashboard = await api.getDashboard();
+			setTopModeFromApi(api);
+			if (api.mode === "mock") {
+				if (!cached) {
+					dashboard = null;
+					dashboardLoaded = false;
+					dashboardError =
+						"オフラインキャッシュがありません。native-hostへ接続した状態でMoodleのダッシュボードを一度開いてください。";
+					return;
+				}
 				dashboard = cached.dashboard;
 				dashboardCachedAt = cached.cachedAt;
 				dashboardUsesCache = true;
 				dashboardLoaded = true;
 				dashboardError = null;
-				setTopMode(api.mode);
 				return;
 			}
 
-			dashboard = await api.getDashboard();
+			dashboard = latestDashboard;
 			dashboardCachedAt = new Date().toISOString();
 			dashboardUsesCache = false;
 			dashboardLoaded = true;
 			dashboardError = null;
-			setTopMode(api.mode);
-			await writeDashboardCache(dashboard);
 		} catch (error) {
 			if (cached) {
 				dashboard = cached.dashboard;
@@ -516,7 +529,7 @@ export function mountFuzzyShell(): void {
 			assignmentChanges = syncEvent ? await api.getAssignmentChanges() : [];
 			syncSummaryLoaded = true;
 			syncSummaryError = null;
-			setTopMode(api.mode);
+			setTopModeFromApi(api);
 		} catch (error) {
 			syncSummaryError = error instanceof Error ? error.message : String(error);
 			syncSummaryLoaded = false;
@@ -1033,7 +1046,7 @@ export function mountFuzzyShell(): void {
 
 		// 接続モードの表示だけ非同期で更新する（検索は自動では実行しない）
 		void apiPromise.then(
-			(api) => setTopMode(api.mode),
+			(api) => setTopModeFromApi(api),
 			() => setTopMode("checking"),
 		);
 

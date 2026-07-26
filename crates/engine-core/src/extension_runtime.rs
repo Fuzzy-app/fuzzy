@@ -10,7 +10,7 @@ use ts_rs::TS;
 use crate::{EngineError, EngineResult};
 
 /// 現在のNative Messaging契約バージョン。
-pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 2;
+pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 3;
 /// 正常状態として扱う拡張機能の最低バージョン。
 pub const MINIMUM_COMPATIBLE_EXTENSION_VERSION: &str = "0.1.0";
 /// 最終応答を「最近」とみなす期間（24時間）。
@@ -18,7 +18,7 @@ pub const EXTENSION_RUNTIME_RECENT_SECONDS: u64 = 24 * 60 * 60;
 
 /// 拡張機能がnative-hostへ報告する実行情報。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct ExtensionRuntimeReport {
 	/// ブラウザプロファイル内の拡張機能インストールを区別するローカルID。

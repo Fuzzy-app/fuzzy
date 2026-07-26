@@ -1,4 +1,5 @@
 import type { ExtensionRuntimeObservation, ExtensionSetupStatus } from "@fuzzy/shared";
+import distributionConfig from "../../../distribution.config.json";
 
 export type ExtensionInstallChannel = "bundled" | "store";
 
@@ -31,6 +32,11 @@ export type ExtensionStatusRuntime = {
 	invoke: <T>(command: string, args: Record<string, unknown>) => Promise<T>;
 };
 
+export type NativeHostInstallationStatus = {
+	ready: boolean;
+	message: string;
+};
+
 export type ExtensionInstallErrorCode =
 	| "DESTINATION_UNAVAILABLE"
 	| "RESOURCE_UNAVAILABLE"
@@ -47,11 +53,15 @@ export class ExtensionInstallError extends Error {
 	}
 }
 
-const bundledManifestResourcePath = "extension/chrome-mv3/manifest.json";
+const bundledManifestResourcePath = "resources/extension/chrome-mv3/manifest.json";
+const allowedExtensionIds = new Set(distributionConfig.extensionIds);
 
 // 公式配布開始後は、利用する1つの配布ページを設定する。
 // ブラウザの種類は判定せず、既定ブラウザでページを開く。
-export const extensionStoreUrl: string | null = null;
+const configuredExtensionStoreUrl: unknown = (distributionConfig as { extensionStoreUrl?: unknown })
+	.extensionStoreUrl;
+export const extensionStoreUrl: string | null =
+	typeof configuredExtensionStoreUrl === "string" ? configuredExtensionStoreUrl : null;
 
 export function isTauriRuntime(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -70,7 +80,8 @@ export function isAllowedExtensionStoreUrl(value: string | null): value is strin
 
 		const segments = url.pathname.split("/").filter(Boolean);
 		const extensionId = segments.at(-1) ?? "";
-		const hasValidExtensionId = /^[a-p]{32}$/.test(extensionId);
+		const hasValidExtensionId =
+			/^[a-p]{32}$/.test(extensionId) && allowedExtensionIds.has(extensionId);
 
 		if (url.hostname === "chromewebstore.google.com") {
 			return segments.length === 3 && segments[0] === "detail" && hasValidExtensionId;
@@ -270,4 +281,54 @@ export async function getExtensionSetupStatusClient(
 			"SQLiteから拡張機能の応答情報を読み込めませんでした。Fuzzyを再起動してから再試行してください。",
 		);
 	}
+}
+
+export function parseNativeHostInstallationStatus(
+	value: unknown,
+): NativeHostInstallationStatus | null {
+	if (!value || typeof value !== "object") return null;
+	const status = value as Record<string, unknown>;
+	if (typeof status.ready !== "boolean" || typeof status.message !== "string") {
+		return null;
+	}
+	return {
+		ready: status.ready,
+		message: status.message,
+	};
+}
+
+async function invokeNativeHostInstallationCommand(
+	command: "get_native_host_installation_status" | "repair_native_host_installation",
+	runtime?: ExtensionStatusRuntime | null,
+): Promise<NativeHostInstallationStatus> {
+	const statusRuntime = runtime === undefined ? await createStatusRuntime() : runtime;
+	if (!statusRuntime) {
+		return {
+			ready: false,
+			message: "ブラウザプレビューではNative Messagingホストを登録しません。",
+		};
+	}
+	try {
+		const value = await statusRuntime.invoke<unknown>(command, {});
+		const status = parseNativeHostInstallationStatus(value);
+		if (!status) throw new Error("invalid response");
+		return status;
+	} catch {
+		throw new ExtensionInstallError(
+			"STATUS_UNAVAILABLE",
+			"Native Messagingホストの状態を確認できませんでした。Fuzzyを再起動してください。",
+		);
+	}
+}
+
+export function getNativeHostInstallationStatusClient(
+	runtime?: ExtensionStatusRuntime | null,
+): Promise<NativeHostInstallationStatus> {
+	return invokeNativeHostInstallationCommand("get_native_host_installation_status", runtime);
+}
+
+export function repairNativeHostInstallationClient(
+	runtime?: ExtensionStatusRuntime | null,
+): Promise<NativeHostInstallationStatus> {
+	return invokeNativeHostInstallationCommand("repair_native_host_installation", runtime);
 }

@@ -8,6 +8,7 @@ export type { CourseFolderNameWarningCode } from "./generated/CourseFolderNameWa
 export type { DuplicateFileListItem } from "./generated/DuplicateFileListItem";
 export type { DuplicateGroupListItem } from "./generated/DuplicateGroupListItem";
 export type { DuplicateMethod } from "./generated/DuplicateMethod";
+export type { DataSyncEvent } from "./generated/DataSyncEvent";
 export type { ExportDataRequest } from "./generated/ExportDataRequest";
 export type { ExportDataResult } from "./generated/ExportDataResult";
 export type { ExtensionRecoveryState } from "./generated/ExtensionRecoveryState";
@@ -18,9 +19,16 @@ export type { ExtensionSetupState } from "./generated/ExtensionSetupState";
 export type { ExtensionSetupStatus } from "./generated/ExtensionSetupStatus";
 export type { ImportDataRequest } from "./generated/ImportDataRequest";
 export type { ImportDataResult } from "./generated/ImportDataResult";
+export type { LibraryMaintenanceSummary } from "./generated/LibraryMaintenanceSummary";
+export type { LibraryMaintenanceWarning } from "./generated/LibraryMaintenanceWarning";
+export type { PingResult } from "./generated/PingResult";
+export type { RebuildLibraryRequest } from "./generated/RebuildLibraryRequest";
 export type { RuleViolationListItem } from "./generated/RuleViolationListItem";
 export type { SearchRequest } from "./generated/SearchRequest";
 export type { SearchResult } from "./generated/SearchResult";
+export type { SyncMoodleAssignmentRequest } from "./generated/SyncMoodleAssignmentRequest";
+export type { SyncMoodleAssignmentsRequest } from "./generated/SyncMoodleAssignmentsRequest";
+export type { SyncMoodleCourseRequest } from "./generated/SyncMoodleCourseRequest";
 export type { UpdateCourseFolderNameRequest } from "./generated/UpdateCourseFolderNameRequest";
 export type { UpdateCourseFolderNameResult } from "./generated/UpdateCourseFolderNameResult";
 
@@ -214,22 +222,13 @@ export interface DeadlineFilter {
 	needsReviewOnly?: boolean;
 }
 
-/** Moodleからの課題・締切データ取得（同期）1回分の結果。データ取得通知に使う */
-export interface DataSyncEvent {
-	id: number;
-	syncedAt: string; // ISO8601
-	trigger: "manual" | "auto";
-	newAssignmentCount: number;
-	changedAssignmentCount: number;
-	removedAssignmentCount: number;
-}
-
 export type AssignmentChangeField =
 	| "dueAt"
 	| "title"
 	| "submissionMode"
 	| "dueAtStatus"
-	| "submitted";
+	| "submitted"
+	| "removedAt";
 
 /** 同期のたびに検出された課題1件・1フィールド分の変更点。変更点表示に使う */
 export interface AssignmentChange {
@@ -243,4 +242,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 2 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 3 as const;

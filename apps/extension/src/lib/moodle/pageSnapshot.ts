@@ -19,10 +19,13 @@ export interface MoodleFolderLink {
 }
 
 export interface MoodleAssignmentHint {
+	/** course-module URL等から得たコース内で安定したID。推測できない文面候補はnull。 */
+	moodleAssignmentId: string | null;
 	title: string;
 	dueText: string | null;
 	sourceText: string;
 	source: "page_text" | "dashboard_widget";
+	submitted: boolean;
 }
 
 export interface MoodlePageSnapshot {
@@ -44,6 +47,7 @@ export const MOODLE_PAGE_SNAPSHOT_MESSAGE = "fuzzy:getMoodlePageSnapshot";
 const MOODLE_DIRECT_FILE_PATTERN = /\/pluginfile\.php\//i;
 const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
 const MOODLE_FOLDER_PATTERN = /\/mod\/folder\/view\.php/i;
+const MOODLE_ASSIGNMENT_PATTERN = /\/mod\/(assign|quiz)\/view\.php/i;
 const MOODLE_ACTIVITY_SELECTOR = "li.activity, .activity, [data-activityname]";
 const MOODLE_SECTION_CONTAINER_SELECTOR = [
 	"[data-section-name]",
@@ -73,6 +77,8 @@ const ASSIGNMENT_KEYWORD_PATTERN =
 	/(課題|レポート|提出|締切|期限|小テスト|quiz|assignment|report|due)/i;
 const DUE_TEXT_PATTERN =
 	/(?:提出期限|締切|期限|due\s*date|due)[:：\s]*(\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:\s+\d{1,2}:\d{2})?|[0-9０-９]{1,2}月[0-9０-９]{1,2}日(?:\s*[0-9０-９]{1,2}[:：][0-9０-９]{2})?|[^。．\n]{1,40})/i;
+const ACADEMIC_TERM_PATTERN =
+	/(?:(?:19|20)\d{2}\s*(?:年度)?\s*(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)|(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)(?:\s*(?:19|20)\d{2})?|(?:19|20)\d{2}\s*(?:spring|fall|autumn)(?:\s+(?:semester|term))?|(?:spring|fall|autumn)(?:\s+(?:semester|term))?\s*(?:19|20)\d{2}|(?:first|second|1st|2nd)\s+semester)/i;
 const NON_COURSE_LINK_CONTAINER_SELECTOR = [
 	"nav",
 	"header",
@@ -103,6 +109,7 @@ export function collectMoodlePageSnapshot(root: Document | Element = document): 
 		pageText,
 		dashboardText,
 		assignmentHints: [
+			...extractStructuredAssignmentHints(root),
 			...extractAssignmentHints(pageText, "page_text"),
 			...extractAssignmentHints(dashboardText, "dashboard_widget"),
 		],
@@ -150,11 +157,11 @@ export function extractAcademicTerm(root: Document | Element = document): string
 		root.querySelector("[data-academic-term]")?.getAttribute("data-academic-term"),
 	);
 	if (structured) return structured;
-	return (
-		[...extractBreadcrumbs(root), extractCourseName(root) ?? ""].find((value) =>
-			/(?:前期|後期|通年|第[12一二]学期|spring|fall|autumn|semester)/i.test(value),
-		) ?? null
-	);
+	for (const candidate of [...extractBreadcrumbs(root), extractCourseName(root) ?? ""]) {
+		const term = normalizeText(candidate).match(ACADEMIC_TERM_PATTERN)?.[0]?.trim();
+		if (term) return term;
+	}
+	return null;
 }
 
 export function extractCourseName(root: Document | Element = document): string | null {
@@ -264,12 +271,115 @@ export function extractAssignmentHints(
 
 	return dedupeBy(
 		lines.map((line) => ({
+			moodleAssignmentId: null,
 			title: extractAssignmentTitle(line),
 			dueText: extractDueText(line),
 			sourceText: line,
 			source,
+			submitted: false,
 		})),
 		(hint) => `${hint.source}:${hint.sourceText}`,
+	);
+}
+
+/**
+ * Moodleのcourse-moduleリンクから、同期に使える安定ID付き課題だけを抽出する。
+ * 文面だけの類似課題を同一視しないため、IDはURL/構造化属性からのみ取得する。
+ */
+export function extractStructuredAssignmentHints(
+	root: Document | Element = document,
+): MoodleAssignmentHint[] {
+	const links = findMoodleAssignmentLinks(root);
+	const hints = links.flatMap((link): MoodleAssignmentHint[] => {
+		const url = normalizeUrl(link.href, root);
+		const moodleAssignmentId = extractMoodleAssignmentId(link, url);
+		if (!moodleAssignmentId) return [];
+
+		const container =
+			link.closest(
+				[
+					"[data-activityname]",
+					"li.activity",
+					".activity",
+					"[data-region='event-list-item']",
+					"[data-event-id]",
+					".event",
+				].join(", "),
+			) ?? link;
+		const sourceText = normalizeText(container.textContent);
+		const structuredTitle = normalizeText(container.getAttribute("data-activityname"));
+		const title = structuredTitle || extractLinkTitle(link);
+		if (!title) return [];
+
+		return [
+			{
+				moodleAssignmentId,
+				title,
+				dueText: extractDueText(sourceText),
+				sourceText,
+				source: isDashboardAssignment(link) ? "dashboard_widget" : "page_text",
+				submitted: /(?:提出済み|提出しました|submitted|graded)/i.test(sourceText),
+			},
+		];
+	});
+
+	return dedupeBy(hints, (hint) => hint.moodleAssignmentId ?? "");
+}
+
+/**
+ * 表示中の課題リンクがすべて安定ID付きhintへ変換されたかを確認する。
+ * 1件でも取りこぼしたsnapshotは完全一覧ではないため、removed判定へ送らない。
+ */
+export function hasCompleteAssignmentHintExtraction(
+	root: Document | Element,
+	hints: readonly MoodleAssignmentHint[],
+): boolean {
+	const extractedIds = new Set(
+		hints.flatMap((hint) => (hint.moodleAssignmentId ? [hint.moodleAssignmentId] : [])),
+	);
+	for (const link of findMoodleAssignmentLinks(root)) {
+		const stableId = extractMoodleAssignmentId(link, normalizeUrl(link.href, root));
+		if (!stableId || !extractedIds.has(stableId)) return false;
+	}
+	return true;
+}
+
+function findMoodleAssignmentLinks(root: Document | Element): HTMLAnchorElement[] {
+	return Array.from(
+		findMoodleContentRoot(root).querySelectorAll<HTMLAnchorElement>("a[href]"),
+	).filter((link) => MOODLE_ASSIGNMENT_PATTERN.test(normalizeUrl(link.href, root)));
+}
+
+function extractMoodleAssignmentId(link: HTMLAnchorElement, url: string): string | null {
+	const parsed = safeUrl(url);
+	const moduleName = parsed?.pathname.match(MOODLE_ASSIGNMENT_PATTERN)?.[1]?.toLowerCase();
+	if (!moduleName) return null;
+
+	const container = link.closest<HTMLElement>(
+		"[data-cmid], [data-activityid], [data-course-module-id], [data-event-id]",
+	);
+	const stableId =
+		parsed?.searchParams.get("id") ??
+		container?.dataset.cmid ??
+		container?.dataset.activityid ??
+		container?.dataset.courseModuleId ??
+		null;
+	if (!stableId || !/^[A-Za-z0-9._:-]{1,120}$/.test(stableId)) return null;
+	return `${moduleName}:${stableId}`;
+}
+
+function isDashboardAssignment(link: HTMLAnchorElement): boolean {
+	return Boolean(
+		link.closest(
+			[
+				"[data-fuzzy-dashboard-widget]",
+				".block_timeline",
+				".block_calendar_upcoming",
+				".block_myoverview",
+				"[data-region='event-list-content']",
+				"[data-region='course-events-container']",
+			].join(", "),
+		),
 	);
 }
 

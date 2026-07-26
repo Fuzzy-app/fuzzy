@@ -21,6 +21,7 @@ pub mod error;
 pub mod extension_runtime;
 pub mod folder_names;
 pub mod index;
+pub mod library;
 pub mod pattern;
 pub mod rule;
 pub mod scan;
@@ -43,6 +44,6 @@ pub use extension_runtime::{
 /// 実体は [`crates/engine-core/fixtures/schema.sql`]。
 pub const SCHEMA_SQL: &str = include_str!("../fixtures/schema.sql");
 
-/// 開発・デモ・モックフォールバック用のサンプルデータ（seed）。
+/// 開発・テストで明示利用するサンプルデータ（seed）。
 /// 6科目の世界観（docs/データベース設計.md）。スキーマ適用後に投入する。
 pub const SEED_SQL: &str = include_str!("../fixtures/seed.sql");

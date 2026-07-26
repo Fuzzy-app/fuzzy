@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import wxtConfig from "../../apps/extension/wxt.config";
+import { createHash } from "node:crypto";
+import wxtConfig, {
+	FUZZY_EXTENSION_ID,
+	FUZZY_EXTENSION_PUBLIC_KEY,
+} from "../../apps/extension/wxt.config";
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
 const MOODLE_HTTPS_MATCH_PATTERN = "https://*.wakayama-u.ac.jp/*";
 
 type ManifestConfig = {
+	key?: string;
 	web_accessible_resources?: Array<{
 		resources?: string[];
 		matches?: string[];
@@ -54,5 +59,32 @@ describe("Moodle向け公開範囲", () => {
 		).text();
 		expect(contentScriptSource).toContain(`matches: ["${MOODLE_HTTPS_MATCH_PATTERN}"]`);
 		expect(contentScriptSource).not.toContain("*://*.wakayama-u.ac.jp/*");
+	});
+
+	test("Native Messagingの許可元に使う固定拡張IDをmanifest公開鍵から導出できる", () => {
+		const manifest = (wxtConfig as { manifest?: ManifestConfig }).manifest;
+		expect(manifest?.key).toBe(FUZZY_EXTENSION_PUBLIC_KEY);
+
+		const digest = createHash("sha256")
+			.update(Buffer.from(FUZZY_EXTENSION_PUBLIC_KEY, "base64"))
+			.digest()
+			.subarray(0, 16);
+		const derivedId = [...digest]
+			.flatMap((byte) => [byte >> 4, byte & 0x0f])
+			.map((nibble) => String.fromCharCode("a".charCodeAt(0) + nibble))
+			.join("");
+		expect(derivedId).toBe(FUZZY_EXTENSION_ID);
+	});
+
+	test("content scriptはNative Messagingへ直接接続せずbackground APIを使う", async () => {
+		const shellSource = await Bun.file(
+			new URL("../../apps/extension/src/entrypoints/content/shell.ts", import.meta.url),
+		).text();
+		expect(shellSource).toContain("new BackgroundApiClient()");
+		expect(shellSource).not.toContain("createApiClient()");
+		expect(shellSource).not.toContain("connectNative");
+		expect(shellSource).toContain("readDashboardCacheFromBackground()");
+		expect(shellSource).not.toContain('from "../../lib/cache/dashboardCache"');
+		expect(shellSource).not.toContain("writeDashboardCache(");
 	});
 });

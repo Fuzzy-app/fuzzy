@@ -5,7 +5,10 @@ CREATE TABLE app_settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
--- 例: base_folder_path（初期セットアップで選んだ保存先実パス）, app_version, last_full_scan_at
+-- 例: base_folder_path（初期セットアップで選んだ保存先実パス）,
+-- initial_scan_pattern_id, initial_scan_course_segment_index,
+-- initial_course_overrides, initial_setup_saved_at,
+-- app_version, last_full_scan_at
 -- suggestSavePathはbase_folder_pathを含む実パスと、UI表示用のルート相対パスを返す。
 
 -- 拡張機能からNative Messagingで受信した、インストール・バージョン単位の実応答。
@@ -68,11 +71,14 @@ CREATE TABLE files (
 	text_extracted   INTEGER NOT NULL DEFAULT 0,
 	rule_compliant   INTEGER NOT NULL DEFAULT 1,
 	violation_reason TEXT,
+	-- 再スキャン時に実体を確認できない行は履歴として保持し、通常表示・索引・判定から除外する。
+	missing_at       TEXT,
 	downloaded_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_files_course ON files(course_id);
 CREATE INDEX idx_files_hash ON files(hash_blake3);
 CREATE INDEX idx_files_violation ON files(rule_compliant);
+CREATE INDEX idx_files_missing ON files(missing_at);
 
 CREATE TABLE duplicate_groups (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,6 +96,7 @@ CREATE TABLE duplicate_members (
 CREATE TABLE assignments (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
 	course_id        INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+	moodle_assignment_id TEXT,
 	title            TEXT NOT NULL,
 	source           TEXT NOT NULL CHECK (source IN ('moodle_dashboard', 'moodle_text', 'file_content')),
 	due_at           TEXT,
@@ -104,6 +111,9 @@ CREATE TABLE assignments (
 CREATE INDEX idx_assignments_due ON assignments(due_at);
 CREATE INDEX idx_assignments_course ON assignments(course_id);
 CREATE INDEX idx_assignments_active ON assignments(removed_at);
+CREATE UNIQUE INDEX idx_assignments_moodle_identity
+	ON assignments(course_id, moodle_assignment_id)
+	WHERE moodle_assignment_id IS NOT NULL;
 
 CREATE TABLE notification_rules (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,7 +144,7 @@ CREATE TABLE assignment_changes (
 	id            INTEGER PRIMARY KEY AUTOINCREMENT,
 	sync_event_id INTEGER NOT NULL REFERENCES sync_events(id) ON DELETE CASCADE,
 	assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-	field         TEXT NOT NULL CHECK (field IN ('due_at', 'title', 'submission_mode', 'due_at_status', 'submitted')),
+	field         TEXT NOT NULL CHECK (field IN ('due_at', 'title', 'submission_mode', 'due_at_status', 'submitted', 'removed_at')),
 	old_value     TEXT,
 	new_value     TEXT,
 	detected_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -142,4 +152,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 3;
+PRAGMA user_version = 1;

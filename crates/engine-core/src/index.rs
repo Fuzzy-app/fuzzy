@@ -4,6 +4,7 @@
 //! 実ファイルの移動・削除は行わず、索引とSQLiteの補助メタ情報だけを更新する。
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::database::Database;
 use crate::error::{EngineError, EngineResult};
@@ -26,6 +27,8 @@ use extraction::{extract_document, ExtractedPage};
 const INDEX_PATH_ENV: &str = "FUZZY_INDEX_PATH";
 const TOKENIZER_NAME: &str = "fuzzy_ngram";
 const INDEX_WRITER_MEMORY_BYTES: usize = 20_000_000;
+const TRANSIENT_INDEX_IO_ATTEMPTS: usize = 8;
+const TRANSIENT_INDEX_IO_DELAY: Duration = Duration::from_millis(20);
 
 /// 全文索引の構築・更新・検索を担うトレイト。
 pub trait IndexEngine {
@@ -75,7 +78,7 @@ impl DefaultIndexEngine {
 		register_tokenizer(&index)?;
 		let reader = index
 			.reader_builder()
-			.reload_policy(ReloadPolicy::Manual)
+			.reload_policy(ReloadPolicy::OnCommitWithDelay)
 			.try_into()
 			.map_err(index_err)?;
 
@@ -93,22 +96,27 @@ impl DefaultIndexEngine {
 			field: "fileId".to_string(),
 			reason: "0以上の整数で指定してください".to_string(),
 		})?;
-		let mut writer: IndexWriter<TantivyDocument> = self
-			.index
-			.writer(INDEX_WRITER_MEMORY_BYTES)
-			.map_err(index_err)?;
-		writer.delete_term(Term::from_field_u64(self.file_id_field, stored_file_id));
-		for page in pages.iter().filter(|page| !page.text.trim().is_empty()) {
-			let mut document = TantivyDocument::new();
-			document.add_u64(self.file_id_field, stored_file_id);
-			if let Some(page_number) = page.page {
-				document.add_u64(self.page_field, u64::from(page_number));
+		retry_transient_index_io(|| {
+			let mut writer: IndexWriter<TantivyDocument> =
+				self.index.writer(INDEX_WRITER_MEMORY_BYTES)?;
+			writer.garbage_collect_files().wait()?;
+			writer.delete_term(Term::from_field_u64(self.file_id_field, stored_file_id));
+			for page in pages.iter().filter(|page| !page.text.trim().is_empty()) {
+				let mut document = TantivyDocument::new();
+				document.add_u64(self.file_id_field, stored_file_id);
+				if let Some(page_number) = page.page {
+					document.add_u64(self.page_field, u64::from(page_number));
+				}
+				document.add_text(self.body_field, &page.text);
+				writer.add_document(document)?;
 			}
-			document.add_text(self.body_field, &page.text);
-			writer.add_document(document).map_err(index_err)?;
-		}
-		writer.commit().map_err(index_err)?;
-		self.reader.reload().map_err(index_err)
+			let commit_result = writer.commit();
+			let merge_result = writer.wait_merging_threads();
+			commit_result?;
+			merge_result?;
+			self.reader.reload()
+		})
+		.map_err(index_err)
 	}
 }
 
@@ -130,13 +138,18 @@ impl IndexEngine for DefaultIndexEngine {
 	}
 
 	fn clear(&mut self) -> EngineResult<()> {
-		let mut writer: IndexWriter<TantivyDocument> = self
-			.index
-			.writer(INDEX_WRITER_MEMORY_BYTES)
-			.map_err(index_err)?;
-		writer.delete_all_documents().map_err(index_err)?;
-		writer.commit().map_err(index_err)?;
-		self.reader.reload().map_err(index_err)
+		retry_transient_index_io(|| {
+			let mut writer: IndexWriter<TantivyDocument> =
+				self.index.writer(INDEX_WRITER_MEMORY_BYTES)?;
+			writer.garbage_collect_files().wait()?;
+			writer.delete_all_documents()?;
+			let commit_result = writer.commit();
+			let merge_result = writer.wait_merging_threads();
+			commit_result?;
+			merge_result?;
+			self.reader.reload()
+		})
+		.map_err(index_err)
 	}
 
 	fn search(&self, query: &str, limit: usize) -> EngineResult<Vec<SearchHit>> {
@@ -151,6 +164,9 @@ impl IndexEngine for DefaultIndexEngine {
 			return Ok(Vec::new());
 		}
 
+		// 別プロセスのコミットと、Windowsで一時的に遅延したreader更新の両方を
+		// 検索直前に取り込む。SQLite側の有効行フィルターと合わせ、古いヒットを公開しない。
+		retry_transient_index_io(|| self.reader.reload()).map_err(index_err)?;
 		let searcher = self.reader.searcher();
 		let parser = QueryParser::for_index(&self.index, vec![self.body_field]);
 		let parsed_query = parser.parse_query(query).map_err(index_err)?;
@@ -197,14 +213,62 @@ impl DefaultIndexEngine {
 			field: "fileId".to_string(),
 			reason: "0以上の整数で指定してください".to_string(),
 		})?;
-		let mut writer: IndexWriter<TantivyDocument> = self
-			.index
-			.writer(INDEX_WRITER_MEMORY_BYTES)
-			.map_err(index_err)?;
-		writer.delete_term(Term::from_field_u64(self.file_id_field, stored_file_id));
-		writer.commit().map_err(index_err)?;
-		self.reader.reload().map_err(index_err)
+		retry_transient_index_io(|| {
+			let mut writer: IndexWriter<TantivyDocument> =
+				self.index.writer(INDEX_WRITER_MEMORY_BYTES)?;
+			writer.garbage_collect_files().wait()?;
+			writer.delete_term(Term::from_field_u64(self.file_id_field, stored_file_id));
+			let commit_result = writer.commit();
+			let merge_result = writer.wait_merging_threads();
+			commit_result?;
+			merge_result?;
+			self.reader.reload()
+		})
+		.map_err(index_err)
 	}
+}
+
+fn retry_transient_index_io<T>(
+	mut operation: impl FnMut() -> tantivy::Result<T>,
+) -> tantivy::Result<T> {
+	for attempt in 0..TRANSIENT_INDEX_IO_ATTEMPTS {
+		match operation() {
+			Ok(value) => return Ok(value),
+			Err(error)
+				if is_transient_index_io(&error) && attempt + 1 < TRANSIENT_INDEX_IO_ATTEMPTS =>
+			{
+				std::thread::sleep(TRANSIENT_INDEX_IO_DELAY * (attempt as u32 + 1));
+			}
+			Err(error) => return Err(error),
+		}
+	}
+	unreachable!("索引I/Oの再試行は成功またはエラーで終了する")
+}
+
+fn is_transient_index_io(error: &tantivy::TantivyError) -> bool {
+	use tantivy::directory::error::{LockError, OpenDirectoryError, OpenReadError, OpenWriteError};
+
+	match error {
+		tantivy::TantivyError::IoError(source) => is_permission_denied(source),
+		tantivy::TantivyError::OpenWriteError(OpenWriteError::IoError { io_error, .. })
+		| tantivy::TantivyError::OpenReadError(OpenReadError::IoError { io_error, .. })
+		| tantivy::TantivyError::OpenDirectoryError(OpenDirectoryError::IoError {
+			io_error, ..
+		})
+		| tantivy::TantivyError::OpenDirectoryError(OpenDirectoryError::FailedToCreateTempDir(
+			io_error,
+		))
+		| tantivy::TantivyError::LockFailure(LockError::IoError(io_error), _) => {
+			is_permission_denied(io_error)
+		}
+		tantivy::TantivyError::LockFailure(LockError::LockBusy, _) => true,
+		tantivy::TantivyError::OpenWriteError(OpenWriteError::FileAlreadyExists(_)) => true,
+		_ => false,
+	}
+}
+
+fn is_permission_denied(error: &std::io::Error) -> bool {
+	error.kind() == std::io::ErrorKind::PermissionDenied
 }
 
 fn index_schema() -> (Schema, Field, Field, Field) {
@@ -261,6 +325,8 @@ mod tests {
 	use rusqlite::params;
 	use std::fs::File;
 	use std::io::Write;
+	use std::thread;
+	use std::time::Duration;
 	use std::time::{SystemTime, UNIX_EPOCH};
 	use zip::write::SimpleFileOptions;
 
@@ -435,6 +501,39 @@ mod tests {
 	}
 
 	#[test]
+	fn observes_commits_from_another_index_engine() {
+		let directory = test_directory("cross-process-reload");
+		std::fs::create_dir_all(&directory).unwrap();
+		let document_path = directory.join("visibility.txt");
+		std::fs::write(&document_path, "cross process search visibility").unwrap();
+		let database = Database::open_in_memory().unwrap();
+		insert_file(&database, 51, &document_path);
+		let index_path = directory.join("index");
+		let search_engine = DefaultIndexEngine::open(&index_path).unwrap();
+		let mut save_engine = DefaultIndexEngine::open(&index_path).unwrap();
+
+		assert!(search_engine.search("visibility", 10).unwrap().is_empty());
+		save_engine
+			.index_file(&database, 51, &document_path)
+			.unwrap();
+
+		let mut hits = Vec::new();
+		for _ in 0..100 {
+			hits = search_engine.search("visibility", 10).unwrap();
+			if !hits.is_empty() {
+				break;
+			}
+			thread::sleep(Duration::from_millis(20));
+		}
+		assert_eq!(hits.len(), 1);
+		assert_eq!(hits[0].file_id, 51);
+
+		drop(save_engine);
+		drop(search_engine);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
 	fn remove_and_clear_do_not_touch_source_files() {
 		let directory = test_directory("remove");
 		std::fs::create_dir_all(&directory).unwrap();
@@ -455,5 +554,53 @@ mod tests {
 		assert!(document_path.exists());
 		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn retries_transient_windows_index_io_errors() {
+		let mut attempts = 0;
+		let result = retry_transient_index_io(|| {
+			attempts += 1;
+			if attempts == 1 {
+				return Err(tantivy::TantivyError::IoError(std::sync::Arc::new(
+					std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+				)));
+			}
+			if attempts == 2 {
+				return Err(tantivy::TantivyError::OpenWriteError(
+					tantivy::directory::error::OpenWriteError::IoError {
+						io_error: std::sync::Arc::new(std::io::Error::from(
+							std::io::ErrorKind::PermissionDenied,
+						)),
+						filepath: PathBuf::from("segment.idx"),
+					},
+				));
+			}
+			if attempts == 3 {
+				return Err(tantivy::TantivyError::OpenWriteError(
+					tantivy::directory::error::OpenWriteError::FileAlreadyExists(PathBuf::from(
+						"segment.del",
+					)),
+				));
+			}
+			Ok("indexed")
+		});
+
+		assert_eq!(result.unwrap(), "indexed");
+		assert_eq!(attempts, 4);
+	}
+
+	#[test]
+	fn does_not_retry_permanent_index_io_errors() {
+		let mut attempts = 0;
+		let result = retry_transient_index_io(|| {
+			attempts += 1;
+			Err::<(), _>(tantivy::TantivyError::IoError(std::sync::Arc::new(
+				std::io::Error::from(std::io::ErrorKind::NotFound),
+			)))
+		});
+
+		assert!(result.is_err());
+		assert_eq!(attempts, 1);
 	}
 }

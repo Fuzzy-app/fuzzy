@@ -12,15 +12,49 @@ use serde_json::Value;
 /// ブラウザ→ホスト方向のメッセージ長上限（Chromeの仕様上64MB）。
 /// 異常な長さを受け取った際に巨大アロケーションで落ちないための防御。
 const MAX_INCOMING_LEN: u32 = 64 * 1024 * 1024;
+const MAX_REQUEST_ID_LEN: usize = 128;
+const MAX_COMMAND_LEN: usize = 64;
 
 /// リクエストenvelope: `{ "id": "uuid", "command": "search", "payload": { ... } }`
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Request {
 	pub id: String,
 	pub command: String,
 	/// コマンドごとの引数。省略時は `null` として扱う。
 	#[serde(default)]
 	pub payload: Value,
+}
+
+/// envelopeの識別子を検証し、不正なIDはレスポンスへ反射しない。
+pub fn validate_request(request: Request) -> Result<Request, Response> {
+	if request.id.is_empty()
+		|| request.id.len() > MAX_REQUEST_ID_LEN
+		|| !request
+			.id
+			.chars()
+			.all(|character| character.is_ascii_alphanumeric() || "._:-".contains(character))
+	{
+		return Err(Response::err(
+			None,
+			"INVALID_REQUEST",
+			"リクエストIDが不正です。",
+		));
+	}
+	if request.command.is_empty()
+		|| request.command.len() > MAX_COMMAND_LEN
+		|| !request
+			.command
+			.chars()
+			.all(|character| character.is_ascii_alphanumeric())
+	{
+		return Err(Response::err(
+			Some(request.id),
+			"INVALID_REQUEST",
+			"コマンド名が不正です。",
+		));
+	}
+	Ok(request)
 }
 
 /// レスポンスenvelope（成功: `{id, ok:true, data}` ／ 失敗: `{id, ok:false, error}`）。
@@ -125,6 +159,64 @@ mod tests {
 		assert_eq!(req.id, "a");
 		assert_eq!(req.command, "ping");
 		assert_eq!(req.payload, json!({}));
+	}
+
+	#[test]
+	fn request_rejects_unknown_envelope_fields() {
+		let parsed = serde_json::from_value::<Request>(json!({
+			"id": "request-1",
+			"command": "ping",
+			"payload": {},
+			"unexpected": true
+		}));
+		assert!(parsed.is_err());
+	}
+
+	#[test]
+	fn validation_does_not_reflect_invalid_request_ids() {
+		for id in [
+			String::new(),
+			"../request".to_string(),
+			"a".repeat(MAX_REQUEST_ID_LEN + 1),
+		] {
+			let response = validate_request(Request {
+				id,
+				command: "ping".to_string(),
+				payload: json!({}),
+			})
+			.unwrap_err();
+			assert_eq!(response.id, None);
+			assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+		}
+	}
+
+	#[test]
+	fn validation_rejects_invalid_commands_after_accepting_the_id() {
+		for command in [
+			String::new(),
+			"ping!".to_string(),
+			"a".repeat(MAX_COMMAND_LEN + 1),
+		] {
+			let response = validate_request(Request {
+				id: "request-1".to_string(),
+				command,
+				payload: json!({}),
+			})
+			.unwrap_err();
+			assert_eq!(response.id.as_deref(), Some("request-1"));
+			assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+		}
+	}
+
+	#[test]
+	fn validation_accepts_contract_identifiers() {
+		let request = validate_request(Request {
+			id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+			command: "appendCheckSimilarFileChunk".to_string(),
+			payload: json!({}),
+		})
+		.unwrap();
+		assert_eq!(request.command, "appendCheckSimilarFileChunk");
 	}
 
 	/// クリーンなEOF（ポート切断）で `None` を返すこと。

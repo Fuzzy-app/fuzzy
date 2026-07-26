@@ -139,6 +139,8 @@ export function assignmentChangeFieldLabel(field: AssignmentChange["field"]): st
 			return "期限判定";
 		case "submitted":
 			return "提出状況";
+		case "removedAt":
+			return "同期状態";
 	}
 }
 
@@ -146,6 +148,9 @@ export function assignmentChangeValueLabel(
 	field: AssignmentChange["field"],
 	value: string | null,
 ): string {
+	if (field === "removedAt") {
+		return value === null || value === "" ? "同期対象" : `同期対象外（${formatSyncDate(value)}）`;
+	}
 	if (value === null || value === "") return "未設定";
 	if (field === "dueAt") return formatDate(value);
 	if (field === "dueAtStatus") return value === "needs_review" ? "締切日を確認" : "通常";

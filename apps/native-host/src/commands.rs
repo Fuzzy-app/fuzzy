@@ -3,12 +3,14 @@
 use std::io::Write;
 use std::path::Path;
 
+use engine_core::database::ExtractedFileRegistration;
 use engine_core::duplicate::{
 	DefaultDuplicateDetector, DuplicateDetector, DEFAULT_SIMILARITY_THRESHOLD,
 };
 use engine_core::index::IndexEngine;
+use engine_core::library::{document_mime_type, is_indexable_document, LibraryMaintenance};
 use engine_core::rule::{DefaultRuleEngine, RuleEngine};
-use engine_core::section::parse_section_name;
+use engine_core::section::{parse_section_file_prefix, parse_section_name};
 use engine_core::types::RuleContext;
 use engine_core::{Database, EngineError, EngineResult, ExtensionRuntimeReport};
 use serde::de::DeserializeOwned;
@@ -20,16 +22,19 @@ use crate::api_types::{
 	CourseFolderNameResolution, DashboardSummary, DataSyncEvent, DuplicateGroupListItem,
 	EmptyRequest, ExportDataRequest, ExportDataResult, ExtractZipRequest, ExtractZipResult,
 	GetAssignmentChangesRequest, GetDeadlinesRequest, ImportDataRequest, ImportDataResult,
-	NotificationRule, NotificationRuleUpdateResult, OkResult, RuleSet, RuleViolationListItem,
-	SaveFilesRequest, SaveSuggestion, SearchRequest, SearchResult, SimilarFileMatch,
-	SuggestSavePathRequest, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
-	UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest, UpdateNotificationRulesRequest,
-	UpdateSubmissionStatusRequest,
+	LibraryMaintenanceSummary, NotificationRule, NotificationRuleUpdateResult, OkResult,
+	PingResult, RebuildLibraryRequest, RuleSet, RuleViolationListItem, SaveFilesRequest,
+	SaveFilesResult, SaveSuggestion, SearchRequest, SearchResult, SimilarFileMatch,
+	SuggestSavePathRequest, SyncMoodleAssignmentsRequest, UpdateCourseFolderNameRequest,
+	UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest,
+	UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
 };
-use crate::file_transfer::{extract_zip_archive, FileTransferManager};
+use crate::file_transfer::{extract_zip_archive, FileTransferCommitResult, FileTransferManager};
 use crate::protocol::{Request, Response};
+use engine_core::EXTENSION_RUNTIME_PROTOCOL_VERSION;
 
 const DEFAULT_SEARCH_LIMIT: usize = 50;
+const MAX_SEARCH_QUERY_CHARS: usize = 256;
 
 pub fn dispatch_with_services(
 	database: &mut Database,
@@ -43,33 +48,35 @@ pub fn dispatch_with_services(
 		"search" => search(database, index_engine, request),
 		"exportData" => export_data(database, request),
 		"importData" => import_data(database, index_engine, request),
+		"rebuildLibrary" => rebuild_library(database, index_engine, request),
+		"saveFiles" => save_files(database, index_engine, file_transfers, request),
+		"extractZip" => extract_zip(database, index_engine, request),
 		_ => dispatch_with_file_transfers(database, file_transfers, request),
 	}
 }
 
 /// コマンド名に応じて処理を振り分ける。
 #[cfg(test)]
-pub fn dispatch(database: &mut Database, request: Request) -> Response {
+fn dispatch(database: &mut Database, request: Request) -> Response {
 	let mut file_transfers = FileTransferManager::default();
 	dispatch_with_file_transfers(database, &mut file_transfers, request)
 }
 
-pub fn dispatch_with_file_transfers(
+fn dispatch_with_file_transfers(
 	database: &mut Database,
 	file_transfers: &mut FileTransferManager,
 	request: Request,
 ) -> Response {
 	match request.command.as_str() {
-		"ping" => ping(request.id),
+		"ping" => ping(request),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
+		"syncMoodleAssignments" => sync_moodle_assignments(database, request),
 		"suggestSavePath" => suggest_save_path(database, request),
 		"beginCheckSimilarFile" => begin_check_similar_file(file_transfers, request),
 		"appendCheckSimilarFileChunk" => append_check_similar_file_chunk(file_transfers, request),
 		"checkSimilarFiles" => check_similar_files(database, file_transfers, request),
 		"beginSaveFiles" => begin_save_files(database, file_transfers, request),
 		"appendSaveFileChunk" => append_save_file_chunk(file_transfers, request),
-		"saveFiles" => save_files(database, file_transfers, request),
-		"extractZip" => extract_zip(database, request),
 		"updateCourseFolderName" => update_course_folder_name(database, request),
 		"getDashboard" => get_dashboard(database, request),
 		"getDeadlines" => get_deadlines(database, request),
@@ -139,13 +146,79 @@ fn get_assignment_changes(database: &Database, request: Request) -> Response {
 	respond(request.id, Ok(changes))
 }
 
+fn sync_moodle_assignments(database: &mut Database, request: Request) -> Response {
+	let payload = match parse_payload::<SyncMoodleAssignmentsRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = (|| {
+		if !valid_moodle_identifier(&payload.course.moodle_course_id) {
+			return Err(EngineError::InvalidInput {
+				field: "course.moodleCourseId".to_string(),
+				reason: "1文字以上128文字以下の安定IDを指定してください".to_string(),
+			});
+		}
+		if payload.course.name.trim().is_empty() || payload.course.name.chars().count() > 1_000 {
+			return Err(EngineError::InvalidInput {
+				field: "course.name".to_string(),
+				reason: "1文字以上1000文字以下で指定してください".to_string(),
+			});
+		}
+		if payload
+			.course
+			.term
+			.as_deref()
+			.is_some_and(|term| term.trim().is_empty() || term.chars().count() > 256)
+		{
+			return Err(EngineError::InvalidInput {
+				field: "course.term".to_string(),
+				reason: "1文字以上256文字以下で指定してください".to_string(),
+			});
+		}
+		let assignments = payload
+			.assignments
+			.into_iter()
+			.map(Into::into)
+			.collect::<Vec<_>>();
+		Database::validate_moodle_assignment_snapshot(&payload.trigger, &assignments)?;
+		let course = database.resolve_course_context(
+			Some(&payload.course.moodle_course_id),
+			Some(&payload.course.name),
+			payload.course.academic_year,
+			payload.course.term.as_deref(),
+		)?;
+		database
+			.sync_moodle_assignments(&payload.trigger, course.course_id, &assignments)
+			.map(DataSyncEvent::from)
+	})();
+	respond(request.id, result)
+}
+
+fn valid_moodle_identifier(value: &str) -> bool {
+	!value.is_empty()
+		&& value.len() <= 128
+		&& value
+			.chars()
+			.all(|character| character.is_ascii_alphanumeric() || "._:-".contains(character))
+}
+
 fn search(database: &Database, index_engine: &dyn IndexEngine, request: Request) -> Response {
 	let payload = match parse_payload::<SearchRequest>(&request) {
 		Ok(payload) => payload,
 		Err(response) => return response,
 	};
+	let query = payload.query.trim();
+	if query.is_empty() || query.chars().count() > MAX_SEARCH_QUERY_CHARS {
+		return engine_error_response(
+			request.id,
+			EngineError::InvalidInput {
+				field: "query".to_string(),
+				reason: format!("1〜{MAX_SEARCH_QUERY_CHARS}文字で指定してください"),
+			},
+		);
+	}
 	let result = index_engine
-		.search(&payload.query, DEFAULT_SEARCH_LIMIT)
+		.search(query, DEFAULT_SEARCH_LIMIT)
 		.and_then(|hits| {
 			hits.into_iter()
 				.filter_map(|hit| match database.search_document_metadata(hit.file_id) {
@@ -209,14 +282,45 @@ fn import_data(
 	}
 	let result = database
 		.import_from(Path::new(&payload.file_path))
-		.and_then(|()| {
-			index_engine.clear()?;
-			Ok(ImportDataResult {
+		.map(|()| {
+			// import_fromは置換前のステージングDBでsearch_index_metaを全削除する。
+			// そのため物理索引の削除に失敗しても検索APIは古い文書を公開しない。
+			// DBだけ復元済みの状態を「復元失敗」と誤報せず、物理索引の削除は
+			// ベストエフォートとしてローカルログへ残す。
+			if let Err(error) = index_engine.clear() {
+				eprintln!("バックアップ復元後の物理索引削除に失敗しました: {error}");
+			}
+			// 別プロセスの保存がDB復元と物理索引削除の間に完了しても、
+			// 削除済みの索引を有効と扱わない。次回の再走査で安全に再構築する。
+			if let Err(error) = database.clear_search_index_meta() {
+				eprintln!("バックアップ復元後の索引メタデータ再無効化に失敗しました: {error}");
+			}
+			ImportDataResult {
 				ok: true,
 				reindex_required: true,
-			})
+			}
 		});
 	respond(request.id, result)
+}
+
+fn rebuild_library(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<RebuildLibraryRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	respond(
+		request.id,
+		LibraryMaintenance::reconcile(
+			database,
+			index_engine,
+			payload.rebuild_index.unwrap_or(false),
+		)
+		.map(LibraryMaintenanceSummary::from),
+	)
 }
 
 fn suggest_save_path(database: &mut Database, request: Request) -> Response {
@@ -336,7 +440,11 @@ fn check_similar_files(
 	respond(request.id, result)
 }
 
-fn extract_zip(database: &Database, request: Request) -> Response {
+fn extract_zip(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	request: Request,
+) -> Response {
 	let payload = match parse_payload::<ExtractZipRequest>(&request) {
 		Ok(payload) => payload,
 		Err(response) => return response,
@@ -347,7 +455,7 @@ fn extract_zip(database: &Database, request: Request) -> Response {
 			.moodle_file_id
 			.as_deref()
 			.unwrap_or(&payload.file_meta.url);
-		let source = database.saved_file_path_by_moodle_id(file_id)?;
+		let source = database.saved_zip_source_by_moodle_id(file_id)?;
 		let target = std::fs::canonicalize(Path::new(&payload.target_path)).map_err(|_| {
 			EngineError::InvalidInput {
 				field: "targetPath".to_string(),
@@ -355,6 +463,7 @@ fn extract_zip(database: &Database, request: Request) -> Response {
 			}
 		})?;
 		let source_parent = source
+			.saved_path
 			.parent()
 			.and_then(|parent| std::fs::canonicalize(parent).ok())
 			.ok_or_else(|| EngineError::InvalidInput {
@@ -368,13 +477,67 @@ fn extract_zip(database: &Database, request: Request) -> Response {
 			});
 		}
 		let base_folder = database.base_folder_path()?;
-		extract_zip_archive(
+		let pending = extract_zip_archive(
 			&base_folder,
-			&source,
+			&source.saved_path,
 			&payload.destination_path,
 			payload.flatten,
-		)
-		.map(|extracted_paths| ExtractZipResult { extracted_paths })
+		)?;
+		let registrations = pending
+			.paths()
+			.iter()
+			.map(|path| {
+				let path = Path::new(path);
+				let metadata = path.metadata().map_err(EngineError::Io)?;
+				let fingerprint = DefaultDuplicateDetector::default().fingerprint(path)?;
+				let original_name = path
+					.file_name()
+					.and_then(|name| name.to_str())
+					.ok_or_else(|| EngineError::InvalidInput {
+						field: "destinationPath".to_string(),
+						reason: "展開ファイル名をSQLiteへ登録できません".to_string(),
+					})?
+					.to_string();
+				Ok(ExtractedFileRegistration {
+					section_no: parse_section_file_prefix(&original_name)
+						.and_then(|section| section.number)
+						.map(i64::from),
+					original_name,
+					saved_path: path.to_path_buf(),
+					size_bytes: i64::try_from(metadata.len()).map_err(|_| {
+						EngineError::InvalidInput {
+							field: "fileMeta".to_string(),
+							reason: "展開ファイルのサイズをSQLiteへ登録できません".to_string(),
+						}
+					})?,
+					mime_type: document_mime_type(path).map(str::to_string),
+					hash_blake3: fingerprint.hash_blake3,
+					simhash: fingerprint.simhash,
+				})
+			})
+			.collect::<EngineResult<Vec<_>>>()?;
+		let database_ids =
+			database.register_extracted_files_from_source(source.file_id, &registrations)?;
+		let extracted_paths = pending.commit();
+		for (database_id, path) in database_ids.iter().copied().zip(&extracted_paths) {
+			let path = Path::new(path);
+			if is_indexable_document(path) {
+				if let Err(error) = index_engine.index_file(database, database_id, path) {
+					eprintln!(
+						"ZIP展開済みファイルを全文索引へ追加できませんでした（file_id={database_id}）: {error}"
+					);
+				}
+			}
+		}
+		if database_ids.len() != extracted_paths.len() {
+			eprintln!(
+				"ZIP展開後のSQLite ID数とファイル数が一致しませんでした（ids={}, paths={}）",
+				database_ids.len(),
+				extracted_paths.len()
+			);
+		}
+		refresh_saved_file_derivatives(database, "ZIP展開後");
+		Ok(ExtractZipResult { extracted_paths })
 	})();
 	respond(request.id, result)
 }
@@ -409,7 +572,8 @@ fn append_save_file_chunk(file_transfers: &mut FileTransferManager, request: Req
 }
 
 fn save_files(
-	database: &Database,
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
 	file_transfers: &mut FileTransferManager,
 	request: Request,
 ) -> Response {
@@ -417,10 +581,46 @@ fn save_files(
 		Ok(payload) => payload,
 		Err(response) => return response,
 	};
-	let result = database.base_folder_path().and_then(|base_folder| {
-		file_transfers.commit(database, &base_folder, &payload.transfer_id)
-	});
+	let result = database
+		.base_folder_path()
+		.and_then(|base_folder| file_transfers.commit(database, &base_folder, &payload.transfer_id))
+		.map(|committed| index_committed_files(database, index_engine, committed));
 	respond(request.id, result)
+}
+
+fn index_committed_files(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	committed: FileTransferCommitResult,
+) -> SaveFilesResult {
+	let has_saved_files = !committed.response.saved_file_ids.is_empty();
+	for file in committed.files_to_index {
+		if let Err(error) = index_engine.index_file(database, file.database_id, &file.path) {
+			// 保存とSQLite登録は完了済みなので、索引失敗で利用者のファイルを
+			// 削除しない。search_index_metaはindex_file成功時だけ作られるため、
+			// 未索引ファイルが誤った検索結果として公開されることもない。
+			eprintln!(
+				"保存済みファイルを全文索引へ追加できませんでした（file_id={}）: {error}",
+				file.database_id
+			);
+		}
+	}
+	if has_saved_files {
+		refresh_saved_file_derivatives(database, "保存後");
+	}
+	committed.response
+}
+
+fn refresh_saved_file_derivatives(database: &mut Database, operation: &str) {
+	if let Err(error) = database.refresh_rule_compliance(&DefaultRuleEngine) {
+		eprintln!("{operation}のルール適合状況を更新できませんでした: {error}");
+	}
+	if let Err(error) = database.refresh_duplicate_groups(
+		&DefaultDuplicateDetector::default(),
+		DEFAULT_SIMILARITY_THRESHOLD,
+	) {
+		eprintln!("{operation}の重複グループを更新できませんでした: {error}");
+	}
 }
 
 fn get_dashboard(database: &Database, request: Request) -> Response {
@@ -574,7 +774,11 @@ fn update_course_folder_name(database: &mut Database, request: Request) -> Respo
 	respond(
 		request.id,
 		database
-			.update_course_folder_name(update.course_id, update.folder_name.as_deref())
+			.update_course_folder_name(
+				update.course_id,
+				update.folder_name.as_deref(),
+				&DefaultRuleEngine,
+			)
 			.map(|course_folder| UpdateCourseFolderNameResult {
 				ok: true,
 				course_folder: CourseFolderNameResolution::from(course_folder),
@@ -631,32 +835,52 @@ fn engine_error_response(id: String, error: EngineError) -> Response {
 	Response::err(Some(id), code, error.user_message())
 }
 
-/// `ping`：疎通確認（docs/api/contract.md 1.2節）。`{}` → `{ version }`。
-fn ping(id: String) -> Response {
-	Response::ok(
-		id,
-		serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
+/// `ping`：疎通確認（docs/api/contract.md 1.2節）。`{}` → `{ version, protocolVersion }`。
+fn ping(request: Request) -> Response {
+	if let Err(response) = parse_payload::<EmptyRequest>(&request) {
+		return response;
+	}
+	respond(
+		request.id,
+		Ok(PingResult {
+			version: env!("CARGO_PKG_VERSION").to_string(),
+			protocol_version: EXTENSION_RUNTIME_PROTOCOL_VERSION,
+		}),
 	)
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use engine_core::types::SearchHit;
+	use engine_core::types::{AssignmentSyncInput, SavedFileRegistration, SearchHit};
 	use std::time::{SystemTime, UNIX_EPOCH};
+	use zip::write::SimpleFileOptions;
 
 	#[derive(Default)]
 	struct TestIndexEngine {
 		clear_count: usize,
+		fail_clear: bool,
+		fail_index: bool,
+		indexed_file_ids: Vec<i64>,
+		indexed_paths: Vec<std::path::PathBuf>,
+		search_hits: Vec<SearchHit>,
 	}
 
 	impl IndexEngine for TestIndexEngine {
 		fn index_file(
 			&mut self,
-			_database: &Database,
-			_file_id: i64,
-			_path: &Path,
+			database: &Database,
+			file_id: i64,
+			path: &Path,
 		) -> EngineResult<()> {
+			if self.fail_index {
+				return Err(EngineError::Index {
+					message: "テスト用の索引追加失敗".to_string(),
+				});
+			}
+			self.indexed_file_ids.push(file_id);
+			self.indexed_paths.push(path.to_path_buf());
+			database.mark_search_indexed(file_id, None)?;
 			Ok(())
 		}
 
@@ -666,11 +890,16 @@ mod tests {
 
 		fn clear(&mut self) -> EngineResult<()> {
 			self.clear_count += 1;
+			if self.fail_clear {
+				return Err(EngineError::Index {
+					message: "テスト用の索引削除失敗".to_string(),
+				});
+			}
 			Ok(())
 		}
 
 		fn search(&self, _query: &str, _limit: usize) -> EngineResult<Vec<SearchHit>> {
-			Ok(Vec::new())
+			Ok(self.search_hits.clone())
 		}
 	}
 
@@ -697,6 +926,55 @@ mod tests {
 		);
 		assert!(!response.ok);
 		assert_eq!(response.error.unwrap().code, "INTERNAL");
+	}
+
+	#[test]
+	fn every_native_api_command_is_routed_by_the_runtime_dispatcher() {
+		let mut database = seeded_database();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+		for command in [
+			"ping",
+			"reportExtensionRuntime",
+			"suggestSavePath",
+			"beginCheckSimilarFile",
+			"appendCheckSimilarFileChunk",
+			"checkSimilarFiles",
+			"beginSaveFiles",
+			"appendSaveFileChunk",
+			"saveFiles",
+			"extractZip",
+			"search",
+			"getDashboard",
+			"getDeadlines",
+			"updateSubmissionStatus",
+			"getRules",
+			"updateGlobalRule",
+			"updateCourseRuleOverride",
+			"updateCourseFolderName",
+			"getRuleViolations",
+			"getDuplicateGroups",
+			"getNotificationRules",
+			"updateNotificationRules",
+			"syncMoodleAssignments",
+			"getLatestSyncEvent",
+			"getAssignmentChanges",
+			"exportData",
+			"importData",
+			"rebuildLibrary",
+		] {
+			let response = dispatch_with_services(
+				&mut database,
+				&mut index,
+				&mut transfers,
+				request(command, serde_json::json!({})),
+			);
+			assert_ne!(
+				response.error.as_ref().map(|error| error.message.as_str()),
+				Some("指定されたコマンドは利用できません。"),
+				"{command} was not routed"
+			);
+		}
 	}
 
 	#[test]
@@ -793,7 +1071,46 @@ mod tests {
 		let mut database = Database::open_in_memory().unwrap();
 		let response = dispatch(&mut database, request("ping", serde_json::json!({})));
 		assert!(response.ok);
-		assert_eq!(response.data.unwrap()["version"], env!("CARGO_PKG_VERSION"));
+		let data = response.data.unwrap();
+		assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
+		assert_eq!(data["protocolVersion"], EXTENSION_RUNTIME_PROTOCOL_VERSION);
+	}
+
+	#[test]
+	fn ping_rejects_non_empty_payload() {
+		let mut database = Database::open_in_memory().unwrap();
+		let response = dispatch(
+			&mut database,
+			request("ping", serde_json::json!({ "unexpected": true })),
+		);
+		assert!(!response.ok);
+		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+	}
+
+	#[test]
+	fn search_rejects_empty_and_oversized_queries_at_the_host_boundary() {
+		let database = Database::open_in_memory().unwrap();
+		let index = TestIndexEngine::default();
+
+		for query in [" \t".to_string(), "あ".repeat(MAX_SEARCH_QUERY_CHARS + 1)] {
+			let response = search(
+				&database,
+				&index,
+				request("search", serde_json::json!({ "query": query })),
+			);
+			assert!(!response.ok);
+			assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+		}
+
+		let response = search(
+			&database,
+			&index,
+			request(
+				"search",
+				serde_json::json!({ "query": "あ".repeat(MAX_SEARCH_QUERY_CHARS) }),
+			),
+		);
+		assert!(response.ok, "{:?}", response.error);
 	}
 
 	#[test]
@@ -969,10 +1286,472 @@ mod tests {
 	}
 
 	#[test]
+	fn rebuild_library_registers_existing_files_and_rebuilds_the_index() {
+		let root = unique_temp_dir();
+		let course = root.join("データベース");
+		std::fs::create_dir_all(&course).unwrap();
+		std::fs::write(course.join("第4回_正規化.txt"), "normalization").unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let rebuilt = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"rebuildLibrary",
+				serde_json::json!({ "rebuildIndex": true }),
+			),
+		);
+
+		assert!(rebuilt.ok, "{:?}", rebuilt.error);
+		let summary = rebuilt.data.unwrap();
+		assert_eq!(summary["scannedFileCount"], 1);
+		assert_eq!(summary["registeredFileCount"], 1);
+		assert_eq!(summary["indexedFileCount"], 1);
+		assert_eq!(summary["warnings"], serde_json::json!([]));
+		assert_eq!(index.clear_count, 1);
+		assert_eq!(index.indexed_file_ids.len(), 1);
+		assert_eq!(database.dashboard().unwrap().total_files, 1);
+
+		let invalid = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request("rebuildLibrary", serde_json::json!({ "unexpected": true })),
+		);
+		assert!(!invalid.ok);
+		assert_eq!(invalid.error.unwrap().code, "INVALID_REQUEST");
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn extract_zip_registers_context_and_indexes_only_supported_documents_immediately() {
+		let root = unique_temp_dir();
+		let course = root.join("データベース");
+		std::fs::create_dir_all(&course).unwrap();
+		let archive_path = course.join("第4回_資料.zip");
+		let archive = std::fs::File::create(&archive_path).unwrap();
+		let mut writer = zip::ZipWriter::new(archive);
+		writer
+			.start_file("第4回_正規化.txt", SimpleFileOptions::default())
+			.unwrap();
+		writer.write_all(b"normalization").unwrap();
+		writer
+			.start_file("第4回_添付.bin", SimpleFileOptions::default())
+			.unwrap();
+		writer.write_all(b"normalization").unwrap();
+		writer.finish().unwrap();
+
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let canonical_root = database.base_folder_path().unwrap();
+		let canonical_course = canonical_root.join("データベース");
+		let canonical_archive_path = canonical_course.join("第4回_資料.zip");
+		let fingerprint = DefaultDuplicateDetector::default()
+			.fingerprint(&canonical_archive_path)
+			.unwrap();
+		let course_context = database
+			.resolve_course_context(
+				Some("moodle-course-db"),
+				Some("データベース"),
+				Some(2026),
+				Some("前期"),
+			)
+			.unwrap();
+		let archive_size = canonical_archive_path.metadata().unwrap().len();
+		database
+			.register_saved_file(&SavedFileRegistration {
+				course_id: Some(course_context.course_id),
+				section_no: Some(4),
+				moodle_file_id: Some("zip-4".to_string()),
+				original_name: "第4回_資料.zip".to_string(),
+				saved_path: canonical_archive_path,
+				size_bytes: i64::try_from(archive_size).unwrap(),
+				mime_type: Some("application/zip".to_string()),
+				hash_blake3: fingerprint.hash_blake3,
+				simhash: fingerprint.simhash,
+			})
+			.unwrap();
+		let destination = canonical_course.join("展開済み");
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let response = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"extractZip",
+				serde_json::json!({
+					"fileMeta": {
+						"title": "第4回_資料.zip",
+						"url": "https://moodle.example/pluginfile.php/4/material.zip",
+						"moodleFileId": "zip-4",
+						"sectionTitle": "第4回",
+						"mimeHint": "application/zip"
+					},
+					"targetPath": canonical_course.to_string_lossy(),
+					"destinationPath": destination.to_string_lossy(),
+					"flatten": false
+				}),
+			),
+		);
+
+		assert!(response.ok, "{:?}", response.error);
+		let text_path = destination.join("第4回_正規化.txt");
+		let binary_path = destination.join("第4回_添付.bin");
+		assert!(text_path.is_file());
+		assert!(binary_path.is_file());
+		assert_eq!(database.dashboard().unwrap().total_files, 3);
+		assert_eq!(database.registered_library_files().unwrap().len(), 3);
+		assert_eq!(index.indexed_paths, vec![text_path.clone()]);
+		let text_file_id = database
+			.registered_library_files()
+			.unwrap()
+			.into_iter()
+			.find(|file| file.saved_path == text_path)
+			.unwrap()
+			.file_id;
+		let metadata = database
+			.search_document_metadata(text_file_id)
+			.unwrap()
+			.unwrap();
+		assert_eq!(metadata.course_name.as_deref(), Some("データベース"));
+		let rule_file = database
+			.load_rule_files()
+			.unwrap()
+			.into_iter()
+			.find(|file| file.saved_path == text_path)
+			.unwrap();
+		assert_eq!(rule_file.context.course_id, Some(course_context.course_id));
+		assert!(database
+			.rule_violations()
+			.unwrap()
+			.into_iter()
+			.any(|violation| violation.file_id == text_file_id));
+		assert_eq!(database.duplicate_groups().unwrap().len(), 1);
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn extract_zip_keeps_files_and_db_rows_when_immediate_indexing_fails() {
+		let root = unique_temp_dir();
+		let course = root.join("認知科学概論");
+		std::fs::create_dir_all(&course).unwrap();
+		let archive_path = course.join("第3回_資料.zip");
+		let archive = std::fs::File::create(&archive_path).unwrap();
+		let mut writer = zip::ZipWriter::new(archive);
+		writer
+			.start_file("第3回_講義メモ.txt", SimpleFileOptions::default())
+			.unwrap();
+		writer.write_all(b"cognition").unwrap();
+		writer.finish().unwrap();
+
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let canonical_course = database.base_folder_path().unwrap().join("認知科学概論");
+		let canonical_archive = canonical_course.join("第3回_資料.zip");
+		let fingerprint = DefaultDuplicateDetector::default()
+			.fingerprint(&canonical_archive)
+			.unwrap();
+		database
+			.register_saved_file(&SavedFileRegistration {
+				course_id: None,
+				section_no: Some(3),
+				moodle_file_id: Some("zip-3".to_string()),
+				original_name: "第3回_資料.zip".to_string(),
+				saved_path: canonical_archive.clone(),
+				size_bytes: i64::try_from(canonical_archive.metadata().unwrap().len()).unwrap(),
+				mime_type: Some("application/zip".to_string()),
+				hash_blake3: fingerprint.hash_blake3,
+				simhash: fingerprint.simhash,
+			})
+			.unwrap();
+		let destination = canonical_course.join("展開済み");
+		let mut index = TestIndexEngine {
+			fail_index: true,
+			..Default::default()
+		};
+		let mut transfers = FileTransferManager::default();
+
+		let response = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"extractZip",
+				serde_json::json!({
+					"fileMeta": {
+						"title": "第3回_資料.zip",
+						"url": "https://moodle.example/pluginfile.php/3/material.zip",
+						"moodleFileId": "zip-3",
+						"sectionTitle": "第3回",
+						"mimeHint": "application/zip"
+					},
+					"targetPath": canonical_course.to_string_lossy(),
+					"destinationPath": destination.to_string_lossy(),
+					"flatten": false
+				}),
+			),
+		);
+
+		assert!(response.ok, "{:?}", response.error);
+		let extracted_path = destination.join("第3回_講義メモ.txt");
+		assert!(extracted_path.is_file());
+		assert_eq!(database.dashboard().unwrap().total_files, 2);
+		let extracted_id = database
+			.registered_library_files()
+			.unwrap()
+			.into_iter()
+			.find(|file| file.saved_path == extracted_path)
+			.unwrap()
+			.file_id;
+		assert!(database
+			.search_document_metadata(extracted_id)
+			.unwrap()
+			.is_none());
+		assert!(index.indexed_file_ids.is_empty());
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn committed_files_are_indexed_and_immediately_searchable() {
+		let root = unique_temp_dir();
+		std::fs::create_dir_all(&root).unwrap();
+		let path = root.join("第4回_正規化.txt");
+		std::fs::write(&path, "正規化").unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		let database_id = database
+			.register_saved_file(&SavedFileRegistration {
+				course_id: None,
+				section_no: Some(4),
+				moodle_file_id: Some("moodle-41".to_string()),
+				original_name: "第4回_正規化.txt".to_string(),
+				saved_path: path.clone(),
+				size_bytes: 9,
+				mime_type: Some("text/plain".to_string()),
+				hash_blake3: "b3:test-41".to_string(),
+				simhash: 41,
+			})
+			.unwrap();
+		let committed = FileTransferCommitResult {
+			response: SaveFilesResult {
+				saved_file_ids: vec!["moodle-41".to_string()],
+				failed_files: Vec::new(),
+			},
+			files_to_index: vec![crate::file_transfer::SavedFileForIndex { database_id, path }],
+		};
+		let mut index = TestIndexEngine::default();
+
+		let response = index_committed_files(&mut database, &mut index, committed);
+		assert_eq!(response.saved_file_ids, vec!["moodle-41"]);
+		assert_eq!(index.indexed_file_ids, vec![database_id]);
+
+		index.search_hits.push(SearchHit {
+			file_id: database_id,
+			snippet: "正規化".to_string(),
+			page: None,
+			score: 1.0,
+		});
+		let searched = search(
+			&database,
+			&index,
+			request("search", serde_json::json!({ "query": "正規化" })),
+		);
+		assert!(searched.ok, "{:?}", searched.error);
+		assert_eq!(searched.data.unwrap().as_array().unwrap().len(), 1);
+
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn index_failure_keeps_the_saved_file_but_does_not_publish_a_stale_hit() {
+		let root = unique_temp_dir();
+		std::fs::create_dir_all(&root).unwrap();
+		let path = root.join("講義メモ.txt");
+		std::fs::write(&path, "認知科学").unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		let database_id = database
+			.register_saved_file(&SavedFileRegistration {
+				course_id: None,
+				section_no: None,
+				moodle_file_id: Some("moodle-99".to_string()),
+				original_name: "講義メモ.txt".to_string(),
+				saved_path: path.clone(),
+				size_bytes: 12,
+				mime_type: Some("text/plain".to_string()),
+				hash_blake3: "b3:test-99".to_string(),
+				simhash: 99,
+			})
+			.unwrap();
+		let committed = FileTransferCommitResult {
+			response: SaveFilesResult {
+				saved_file_ids: vec!["moodle-99".to_string()],
+				failed_files: Vec::new(),
+			},
+			files_to_index: vec![crate::file_transfer::SavedFileForIndex {
+				database_id,
+				path: path.clone(),
+			}],
+		};
+		let mut index = TestIndexEngine {
+			fail_index: true,
+			search_hits: vec![SearchHit {
+				file_id: database_id,
+				snippet: "古い本文".to_string(),
+				page: None,
+				score: 1.0,
+			}],
+			..Default::default()
+		};
+
+		let response = index_committed_files(&mut database, &mut index, committed);
+		assert_eq!(response.saved_file_ids, vec!["moodle-99"]);
+		assert!(path.exists());
+		let searched = search(
+			&database,
+			&index,
+			request("search", serde_json::json!({ "query": "古い" })),
+		);
+		assert!(searched.ok, "{:?}", searched.error);
+		assert_eq!(searched.data.unwrap(), serde_json::json!([]));
+
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn import_succeeds_and_hides_stale_hits_when_physical_index_clear_fails() {
+		let root = unique_temp_dir();
+		std::fs::create_dir_all(&root).unwrap();
+		let source_path = root.join("source.sqlite3");
+		let backup_path = root.join("backup.sqlite3");
+		let target_path = root.join("target.sqlite3");
+
+		let source = Database::open(&source_path).unwrap();
+		source.apply_development_seed().unwrap();
+		source.export_to(&backup_path).unwrap();
+		drop(source);
+
+		let mut database = Database::open(&target_path).unwrap();
+		let mut index = TestIndexEngine {
+			clear_count: 0,
+			fail_clear: true,
+			fail_index: false,
+			indexed_file_ids: Vec::new(),
+			indexed_paths: Vec::new(),
+			search_hits: vec![SearchHit {
+				file_id: 1,
+				snippet: "復元前の古い本文".to_string(),
+				page: Some(1),
+				score: 1.0,
+			}],
+		};
+		let mut transfers = FileTransferManager::default();
+
+		let imported = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"importData",
+				serde_json::json!({ "filePath": backup_path.to_string_lossy() }),
+			),
+		);
+		assert!(imported.ok, "{:?}", imported.error);
+		assert_eq!(imported.data.unwrap()["reindexRequired"], true);
+		assert_eq!(index.clear_count, 1);
+
+		let dashboard = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request("getDashboard", serde_json::json!({})),
+		);
+		assert!(dashboard.ok, "{:?}", dashboard.error);
+		assert!(
+			dashboard.data.unwrap()["totalFiles"]
+				.as_u64()
+				.is_some_and(|count| count > 0),
+			"復元済みDBのデータが参照できること"
+		);
+
+		let searched = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request("search", serde_json::json!({ "query": "復元前" })),
+		);
+		assert!(searched.ok, "{:?}", searched.error);
+		assert_eq!(searched.data.unwrap(), serde_json::json!([]));
+
+		drop(database);
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
 	fn service_dispatcher_preserves_sync_commands_after_merge() {
 		let mut database = seeded_database();
 		let mut index = TestIndexEngine::default();
 		let mut transfers = FileTransferManager::default();
+
+		let synced = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"syncMoodleAssignments",
+				serde_json::json!({
+					"trigger": "auto",
+					"course": {
+						"moodleCourseId": "course-412",
+						"name": "データベース",
+						"academicYear": 2026,
+						"term": "2026前期"
+					},
+					"assignments": [{
+						"moodleAssignmentId": "cm-412-101",
+						"title": "第3正規形レポート",
+						"dueAt": "2026-07-31T23:59:00+09:00",
+						"source": "moodle_dashboard",
+						"dueAtStatus": "normal",
+						"submissionMode": "moodle_auto",
+						"submitted": false
+					}]
+				}),
+			),
+		);
+		assert!(synced.ok, "{:?}", synced.error);
+		assert_eq!(synced.data.as_ref().unwrap()["newAssignmentCount"], 1);
 
 		let latest = dispatch_with_services(
 			&mut database,
@@ -997,6 +1776,48 @@ mod tests {
 	}
 
 	#[test]
+	fn assignment_change_command_converts_removed_at_to_camel_case() {
+		let mut database = Database::open_in_memory().unwrap();
+		let course = database
+			.resolve_course_context(
+				Some("course-1"),
+				Some("認知科学概論"),
+				Some(2026),
+				Some("2026前期"),
+			)
+			.unwrap();
+		let assignment = AssignmentSyncInput {
+			id: 1,
+			course_id: course.course_id,
+			title: "期末レポート".to_string(),
+			source: "moodle_dashboard".to_string(),
+			due_at: None,
+			due_at_status: "normal".to_string(),
+			submission_mode: "moodle_auto".to_string(),
+			submitted: false,
+		};
+		database
+			.sync_assignments("auto", std::slice::from_ref(&assignment))
+			.unwrap();
+		let no_assignments: &[AssignmentSyncInput] = &[];
+		let removed = database.sync_assignments("auto", no_assignments).unwrap();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let response = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request("getAssignmentChanges", serde_json::json!({})),
+		);
+		assert!(response.ok, "{:?}", response.error);
+		let changes = response.data.unwrap();
+		assert_eq!(changes[0]["field"], "removedAt");
+		assert_eq!(changes[0]["oldValue"], serde_json::Value::Null);
+		assert_eq!(changes[0]["newValue"], removed.synced_at);
+	}
+
+	#[test]
 	fn report_extension_runtime_persists_observation() {
 		let mut database = Database::open_in_memory().unwrap();
 		let response = dispatch(
@@ -1006,7 +1827,7 @@ mod tests {
 				serde_json::json!({
 					"installationId": "550e8400-e29b-41d4-a716-446655440000",
 					"extensionVersion": "0.1.0",
-					"protocolVersion": 2
+					"protocolVersion": EXTENSION_RUNTIME_PROTOCOL_VERSION
 				}),
 			),
 		);
@@ -1034,7 +1855,22 @@ mod tests {
 				serde_json::json!({
 					"installationId": "../invalid",
 					"extensionVersion": "0.1.0",
-					"protocolVersion": 2
+					"protocolVersion": EXTENSION_RUNTIME_PROTOCOL_VERSION
+				}),
+			),
+		);
+		assert!(!response.ok);
+		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
+
+		let response = dispatch(
+			&mut database,
+			request(
+				"reportExtensionRuntime",
+				serde_json::json!({
+					"installationId": "550e8400-e29b-41d4-a716-446655440000",
+					"extensionVersion": "0.1.0",
+					"protocolVersion": EXTENSION_RUNTIME_PROTOCOL_VERSION,
+					"unexpected": true
 				}),
 			),
 		);

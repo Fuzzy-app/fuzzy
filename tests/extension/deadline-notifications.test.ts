@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Assignment, NotificationRule } from "@fuzzy/shared";
+import type { Assignment, FuzzyApiClient, NotificationRule } from "@fuzzy/shared";
+import { createDeadlineNotificationMonitor } from "../../apps/extension/src/lib/notifications/deadlineNotificationMonitor";
 import {
 	deadlineNotificationCandidates,
 	deadlineNotificationStorageKey,
@@ -24,6 +25,35 @@ const rules: NotificationRule[] = [
 ];
 
 describe("締切通知判定", () => {
+	test("mockフォールバックのサンプルから実通知を生成しない", async () => {
+		let dataRead = false;
+		const client = {
+			mode: "mock",
+			getDeadlines: async () => {
+				dataRead = true;
+				throw new Error("サンプル締切を通知判定へ渡してはいけません");
+			},
+		} as unknown as FuzzyApiClient;
+		const monitor = createDeadlineNotificationMonitor(async () => client);
+
+		await monitor.check();
+		expect(dataRead).toBe(false);
+	});
+
+	test("認証済みMoodleタブがない間はhostクライアントを取得しない", async () => {
+		let clientRequested = false;
+		const monitor = createDeadlineNotificationMonitor(
+			async () => {
+				clientRequested = true;
+				throw new Error("Moodleタブがない間は接続しない");
+			},
+			{ shouldCheck: () => false },
+		);
+
+		await monitor.check();
+		expect(clientRequested).toBe(false);
+	});
+
 	test("有効な通知タイミングに達した未提出課題だけを返す", () => {
 		const result = deadlineNotificationCandidates([assignment], rules, now);
 		expect(result).toHaveLength(1);

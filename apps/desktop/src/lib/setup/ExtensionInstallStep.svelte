@@ -4,13 +4,18 @@
 	import {
 		ExtensionInstallError,
 		getExtensionInstallDestination,
+		getNativeHostInstallationStatusClient,
 		getExtensionSetupStatusClient,
 		getPreferredExtensionInstallChannel,
 		openExtensionInstallDestinationClient,
+		repairNativeHostInstallationClient,
 	} from "./extension-install";
+	import type { NativeHostInstallationStatus } from "./extension-install";
+	import type { LibraryMaintenanceSummary } from "./library-maintenance";
 
 	export let onBack: () => void = () => undefined;
 	export let verificationStartedAt: string = new Date().toISOString();
+	export let maintenanceSummary: LibraryMaintenanceSummary | null = null;
 
 	const selectedChannel = getPreferredExtensionInstallChannel();
 	const destination = getExtensionInstallDestination(selectedChannel);
@@ -25,8 +30,11 @@
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let nativeHostStatus: NativeHostInstallationStatus | null = null;
+	let isRepairingNativeHost = false;
 
 	onMount(() => {
+		void refreshNativeHostStatus();
 		void refreshStatus();
 		pollTimer = setInterval(() => {
 			void refreshStatus();
@@ -36,6 +44,42 @@
 			if (pollTimer) clearInterval(pollTimer);
 		};
 	});
+
+	async function refreshNativeHostStatus(): Promise<void> {
+		try {
+			nativeHostStatus = await getNativeHostInstallationStatusClient();
+		} catch (error) {
+			nativeHostStatus = {
+				ready: false,
+				message:
+					error instanceof Error
+						? error.message
+						: "Native Messagingホストの状態を確認できませんでした。",
+			};
+		}
+	}
+
+	async function handleRepairNativeHost(): Promise<void> {
+		isRepairingNativeHost = true;
+		errorMessage = null;
+		successMessage = null;
+		try {
+			nativeHostStatus = await repairNativeHostInstallationClient();
+			if (nativeHostStatus.ready) {
+				successMessage =
+					"Native Messagingホストを自動修復しました。拡張機能の導入を続けてください。";
+			} else {
+				errorMessage = nativeHostStatus.message;
+			}
+		} catch (error) {
+			errorMessage =
+				error instanceof Error
+					? error.message
+					: "Native Messagingホストを自動修復できませんでした。";
+		} finally {
+			isRepairingNativeHost = false;
+		}
+	}
 
 	function formatDate(value: string): string {
 		return new Intl.DateTimeFormat("ja-JP", {
@@ -128,6 +172,33 @@
 		</div>
 	</section>
 
+	{#if maintenanceSummary}
+		<section
+			class="scan-result-card"
+			aria-labelledby="initial-scan-result-heading"
+		>
+			<div>
+				<p class="section-label">既存資料の取り込み</p>
+				<h2 id="initial-scan-result-heading">
+					保存先をスキャンし、ローカル検索を準備しました
+				</h2>
+				<p>
+					{maintenanceSummary.scannedFileCount}件を確認し、新規
+					{maintenanceSummary.registeredFileCount}件、更新
+					{maintenanceSummary.updatedFileCount}件、索引化
+					{maintenanceSummary.indexedFileCount}件、見つからない資料
+					{maintenanceSummary.missingFileCount}件を処理しました。保存済み資料の移動・削除は行っていません。
+				</p>
+				{#if maintenanceSummary.warnings.length > 0}
+					<p class="scan-warning">
+						確認が必要な項目が{maintenanceSummary.warnings
+							.length}件あります。セットアップ完了後、Fuzzyを再起動すると保守画面から再スキャンできます。
+					</p>
+				{/if}
+			</div>
+		</section>
+	{/if}
+
 	<section class="distribution-card" aria-labelledby="distribution-heading">
 		<div>
 			<p class="section-label">現在の導入方法</p>
@@ -144,6 +215,29 @@
 			{selectedChannel === "store" ? "公式配布" : "アプリ同梱"}
 		</span>
 	</section>
+
+	{#if nativeHostStatus && !nativeHostStatus.ready}
+		<section
+			class="host-error-card"
+			aria-labelledby="native-host-error-heading"
+		>
+			<div>
+				<p class="section-label">自動セットアップを確認してください</p>
+				<h2 id="native-host-error-heading">
+					Native Messagingホストを準備できませんでした
+				</h2>
+				<p>{nativeHostStatus.message}</p>
+			</div>
+			<button
+				class="refresh-button"
+				type="button"
+				on:click={handleRepairNativeHost}
+				disabled={isRepairingNativeHost}
+			>
+				{isRepairingNativeHost ? "自動修復中..." : "自動修復を再実行"}
+			</button>
+		</section>
+	{/if}
 
 	<section class="guide-card" aria-labelledby="install-guide-heading">
 		<div class="guide-heading">
@@ -359,7 +453,9 @@
 	}
 
 	.safety-card,
+	.scan-result-card,
 	.distribution-card,
+	.host-error-card,
 	.guide-card,
 	.response-card,
 	.error-banner,
@@ -376,6 +472,41 @@
 		background: #f5f2ff;
 		border: 1px solid rgba(124, 104, 246, 0.24);
 		color: #525978;
+	}
+
+	.scan-result-card {
+		padding: 16px 18px;
+		background: #edf8f1;
+		border: 1px solid #b9e2c7;
+		color: #315f41;
+	}
+
+	.scan-result-card p:not(.section-label) {
+		margin: 5px 0 0;
+		font-size: 0.78rem;
+		line-height: 1.65;
+	}
+
+	.scan-result-card .scan-warning {
+		color: #805f00;
+		font-weight: 700;
+	}
+
+	.host-error-card {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		padding: 16px 18px;
+		border: 1px solid #efb5b5;
+		background: #fff5f5;
+		color: #7a3030;
+	}
+
+	.host-error-card p:not(.section-label) {
+		margin: 5px 0 0;
+		font-size: 0.78rem;
+		line-height: 1.65;
 	}
 
 	.safety-card p,
