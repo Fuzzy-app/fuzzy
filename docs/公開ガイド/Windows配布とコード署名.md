@@ -84,6 +84,16 @@ QA用ファイルを一般利用者向けダウンロードとして案内しま
 
 ## GitHub Release
 
+公開審査前QA版:
+
+- Tag: `v0.1.0-qa.1`
+- Release title: `Fuzzy v0.1.0-qa.1 — QAプレリリース（未署名）`
+- Pre-releaseとして作成し、Latest releaseにはしない
+- Asset: `Fuzzy-Setup.exe`
+- Asset: `Fuzzy-0.1.0-qa.1-windows-unsigned.zip`
+- Asset: `SHA256SUMS.txt`
+- Release本文とAsset名の両方で未署名・QA専用と明示する
+
 初回正式版:
 
 - Tag: `v0.1.0`

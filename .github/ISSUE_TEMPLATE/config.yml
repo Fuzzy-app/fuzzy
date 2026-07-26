@@ -5,6 +5,9 @@ blank_issues_enabled: true
 
 # ユーザーへ案内するための参考リンク設定
 contact_links:
-  - name: "📄 ドキュメント参照（外部サイト）"
-    url: "https://qiita.com/konatsu_p/items/dfe199ebe3a7d2010b3e"
-    about: "質問する前に、まずこちらのドキュメントを確認してください。"
+  - name: "📄 Fuzzy公式ガイド"
+    url: "https://fuzzy-app.github.io/fuzzy/"
+    about: "導入方法、対応環境、プライバシー方針を確認してください。"
+  - name: "🔒 セキュリティ問題を非公開で報告"
+    url: "https://github.com/Fuzzy-app/fuzzy/security/advisories/new"
+    about: "攻撃方法や情報漏えいを含む問題は公開Issueに書かず、こちらから報告してください。"

@@ -26,9 +26,17 @@ describe("Fuzzy GitHub Pages site", () => {
 		const disabledDownloads = [...document.querySelectorAll('[aria-disabled="true"]')];
 
 		expect(document.querySelectorAll('a[href*="/releases/latest/download/"]')).toHaveLength(0);
+		expect(
+			document.querySelectorAll(
+				'a[href="https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.1"]',
+			),
+		).toHaveLength(2);
 		expect(disabledDownloads).toHaveLength(4);
 		expect(disabledDownloads.every((element) => element.tagName === "SPAN")).toBe(true);
 		expect(html).toContain("公開予定");
+		expect(html).toContain("QA PRE-RELEASE");
+		expect(html).toContain("GitHub Pre-release・未署名");
+		expect(html).toContain("正式版ではありません");
 		expect(html).toContain("Fuzzy-Setup.exe");
 		expect(html).toContain("公式ブラウザストア");
 		expect(html).toContain("Windows 11");
