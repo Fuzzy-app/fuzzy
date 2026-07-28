@@ -86,6 +86,13 @@ export function submissionLabel(assignment: Assignment): string {
 	}
 }
 
+export function submissionAvailabilityLabel(assignment: Assignment): string | null {
+	if (!isOverdue(assignment)) return null;
+	if (assignment.submissionAvailability === "available") return "提出可能";
+	if (assignment.submissionAvailability === "unknown") return "Moodleで確認";
+	return null;
+}
+
 export function sourceLabel(assignment: Assignment): string {
 	switch (assignment.source) {
 		case "moodle_dashboard":

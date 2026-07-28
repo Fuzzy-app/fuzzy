@@ -1,11 +1,11 @@
 :root {
-	--primary: #6c3cff;
-	--primary-strong: #5426d9;
-	--primary-soft: #f0ebff;
+	--primary: #0878c9;
+	--primary-strong: #075985;
+	--primary-soft: #e8f5ff;
 	--surface: #ffffff;
 	--surface-muted: #eef0fb;
 	--page: #f7f8ff;
-	--text: #20243a;
+	--text: #163247;
 	--text-strong: #151728;
 	--text-muted: #5c6480;
 	--border: #e4e7f4;
@@ -14,7 +14,7 @@
 	--info: #238ee8;
 	--warning: #c48109;
 	--warning-soft: #fff6d8;
-	--sidebar: #20243a;
+	--sidebar: #102b3d;
 	--shadow-card: 0 22px 70px rgba(54, 58, 97, 0.11);
 	--shadow-floating: 0 28px 80px rgba(65, 48, 126, 0.2);
 	--font: "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, -apple-system, sans-serif;
@@ -180,7 +180,7 @@ img {
 	align-items: flex-start;
 	padding: 11px 23px;
 	background: linear-gradient(135deg, var(--primary), #4d73f6);
-	box-shadow: 0 15px 32px rgba(108, 60, 255, 0.26);
+	box-shadow: 0 15px 32px rgba(8, 120, 201, 0.26);
 	color: white;
 }
 
@@ -200,7 +200,7 @@ img {
 	position: relative;
 	overflow: hidden;
 	padding: 92px 0 78px;
-	background: radial-gradient(circle at 10% 20%, rgba(108, 60, 255, 0.1), transparent 24%),
+	background: radial-gradient(circle at 10% 20%, rgba(8, 120, 201, 0.1), transparent 24%),
 		radial-gradient(circle at 88% 18%, rgba(35, 142, 232, 0.12), transparent 24%), var(--page);
 }
 
@@ -210,9 +210,9 @@ img {
 	bottom: -210px;
 	width: 460px;
 	height: 460px;
-	border: 1px solid rgba(108, 60, 255, 0.12);
+	border: 1px solid rgba(8, 120, 201, 0.12);
 	border-radius: 50%;
-	box-shadow: 0 0 0 55px rgba(108, 60, 255, 0.025), 0 0 0 110px rgba(35, 142, 232, 0.018);
+	box-shadow: 0 0 0 55px rgba(8, 120, 201, 0.025), 0 0 0 110px rgba(35, 142, 232, 0.018);
 	content: "";
 }
 
@@ -695,7 +695,7 @@ img {
 }
 
 .download-card:nth-child(2) {
-	background: linear-gradient(145deg, rgba(35, 142, 232, 0.08), rgba(108, 60, 255, 0.05)),
+	background: linear-gradient(145deg, rgba(35, 142, 232, 0.08), rgba(23, 169, 133, 0.05)),
 		var(--page);
 }
 
@@ -872,7 +872,7 @@ img {
 	padding: 68px;
 	border-radius: 30px;
 	background: radial-gradient(circle at 90% 15%, rgba(35, 142, 232, 0.28), transparent 28%),
-		linear-gradient(135deg, #2c2466, #20243a 70%);
+		linear-gradient(135deg, #124b72, #102b3d 70%);
 	box-shadow: var(--shadow-floating);
 	color: white;
 }
@@ -1341,7 +1341,7 @@ img {
 
 .policy-hero {
 	border-bottom: 1px solid var(--border);
-	background: radial-gradient(circle at 82% 12%, rgba(108, 60, 255, 0.13), transparent 30%),
+	background: radial-gradient(circle at 82% 12%, rgba(8, 120, 201, 0.13), transparent 30%),
 		linear-gradient(180deg, #fff 0%, var(--page) 100%);
 	padding: 92px 0 76px;
 }

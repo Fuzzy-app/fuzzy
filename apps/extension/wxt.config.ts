@@ -20,6 +20,8 @@ export default defineConfig({
 		host_permissions: ["https://*.wakayama-u.ac.jp/*"],
 		web_accessible_resources: [
 			{
+				// Moodle DOMへ挿入する画面用SVGだけを公開する。
+				// 通知・拡張機能メニュー用PNGはextension内部から参照するため公開不要。
 				resources: ["icon/fuzzy.svg"],
 				matches: ["https://*.wakayama-u.ac.jp/*"],
 			},

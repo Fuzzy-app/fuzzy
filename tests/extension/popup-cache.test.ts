@@ -26,8 +26,10 @@ describe("popupのオフラインダッシュボード", () => {
 		const view = createPopupDashboardView(null);
 		expect(view.state).toBe("missing");
 		if (view.state === "missing") {
-			expect(view.message).toContain("キャッシュがありません");
+			expect(view.message).toContain("整理状況");
 			expect(view.message).toContain("Moodle");
+			expect(view.message).not.toContain("native-host");
+			expect(view.message).not.toContain("キャッシュ");
 		}
 	});
 

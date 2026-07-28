@@ -16,26 +16,26 @@ void readDashboardCache().then((cached) => {
 
 function buildLoadingView(): HTMLElement {
 	const main = element("main", "fuzzy-popup");
+	main.append(brand());
 	main.append(
-		element("p", "fuzzy-popup-kicker", "Fuzzy"),
-		element("h1", "", "保存済みの表示情報を確認中"),
-		element("p", "fuzzy-popup-body", "オフラインキャッシュを読み込んでいます…"),
+		element("h1", "", "前回の整理状況を確認中"),
+		element("p", "fuzzy-popup-body", "このPCに保存した表示情報を確認しています。"),
 	);
 	return main;
 }
 
 function buildPopup(view: ReturnType<typeof createPopupDashboardView>): HTMLElement {
 	const main = element("main", "fuzzy-popup");
-	main.append(element("p", "fuzzy-popup-kicker", "Fuzzy"));
+	main.append(brand());
 
 	if (view.state === "missing") {
 		main.append(
-			element("h1", "", "キャッシュがありません"),
+			element("h1", "", "表示できる情報がありません"),
 			element("p", "fuzzy-popup-body", view.message),
 		);
 	} else {
 		main.append(
-			element("h1", "", "前回のダッシュボード"),
+			element("h1", "", "前回の整理状況"),
 			element("p", "fuzzy-popup-cache-date", `最終更新: ${view.updatedAt}`),
 		);
 		const metrics = element("section", "fuzzy-popup-metrics");
@@ -87,6 +87,16 @@ function buildPopup(view: ReturnType<typeof createPopupDashboardView>): HTMLElem
 	guide.append(steps);
 	main.append(guide);
 	return main;
+}
+
+function brand(): HTMLElement {
+	const wrap = element("div", "fuzzy-popup-brand");
+	const icon = element("img", "fuzzy-popup-brand-icon");
+	icon.src = browser.runtime.getURL("/icon/fuzzy.svg");
+	icon.alt = "";
+	icon.setAttribute("aria-hidden", "true");
+	wrap.append(icon, element("p", "fuzzy-popup-kicker", "Fuzzy"));
+	return wrap;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(

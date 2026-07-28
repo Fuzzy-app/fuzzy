@@ -148,6 +148,10 @@ export interface Assignment {
 	dueAtStatus: DueAtStatus;
 	submissionMode: SubmissionMode;
 	submitted: boolean;
+	/** #116の詳細取得結果。未取得の旧レスポンスでは省略される。 */
+	submissionAvailability?: "available" | "unavailable" | "unknown";
+	/** 利用者が明示操作で開くMoodle課題詳細URL。 */
+	moodleUrl?: string | null;
 }
 
 export interface CourseDashboardEntry {

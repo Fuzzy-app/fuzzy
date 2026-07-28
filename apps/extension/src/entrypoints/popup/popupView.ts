@@ -23,7 +23,7 @@ export function createPopupDashboardView(cached: CachedDashboard | null): PopupD
 		return {
 			state: "missing",
 			message:
-				"オフラインキャッシュがありません。native-hostへ接続した状態でMoodleのFuzzyダッシュボードを一度開くと、ここからも確認できます。",
+				"Moodleを開き、上部の「Fuzzy」から「整理状況」を一度表示すると、ここでも前回の情報を確認できます。",
 		};
 	}
 

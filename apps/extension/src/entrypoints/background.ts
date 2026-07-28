@@ -34,10 +34,11 @@ import {
 	reportCurrentExtensionRuntime,
 } from "../lib/runtime/extensionRuntime";
 import { MOODLE_NATIVE_SESSION_PORT } from "../lib/runtime/moodleNativeSession";
-import { buildSyncResultNotificationMessage } from "../lib/ui/screenCopy";
+import { buildSyncResultNotificationMessage, shouldNotifySyncResult } from "../lib/ui/screenCopy";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
+const SYNC_NOTIFICATION_ID_PREFIX = "fuzzy-sync-";
 const SYNC_CHECK_INTERVAL_MINUTES = 1;
 let syncNotificationQueue: Promise<void> = Promise.resolve();
 
@@ -78,22 +79,36 @@ async function deliverSyncEventNotification(
 	mode: FuzzyApiClient["mode"],
 	event: DataSyncEvent,
 ): Promise<void> {
-	// 呼び出し元のsyncMoodleAssignmentsが成功したeventは初回baselineと区別し、
-	// 必ずその場で通知する。同じIDはChrome側で同じ通知を置き換える。
+	// 変更がある同期だけを通知する。同じIDはChrome側で同じ通知を置き換える。
 	if (mode === "mock") return;
 	const total = syncChangeTotal(event);
-	await browser.notifications.create(`fuzzy-sync-${mode}-${event.id}`, {
-		type: "basic",
-		iconUrl: browser.runtime.getURL("/icon/128.png"),
-		title: "Fuzzy: Moodleデータを取得しました",
-		message: buildSyncResultNotificationMessage(total),
-	});
+	if (shouldNotifySyncResult(total)) {
+		await browser.notifications.create(`${SYNC_NOTIFICATION_ID_PREFIX}${mode}-${event.id}`, {
+			type: "basic",
+			iconUrl: browser.runtime.getURL("/icon/128.png"),
+			title: "Fuzzy: 課題・締切に変更があります",
+			message: buildSyncResultNotificationMessage(total),
+		});
+	}
+
+	// 変更0件でも確認済みIDは進める。進めないと同じ同期を毎分確認し続けてしまう。
 	const storageKey = `${SYNC_NOTIFICATION_KEY_PREFIX}:${mode}`;
 	const stored = await browser.storage.local.get(storageKey);
 	const previousEventId =
 		typeof stored[storageKey] === "number" ? (stored[storageKey] as number) : 0;
 	await browser.storage.local.set({
 		[storageKey]: Math.max(previousEventId, event.id),
+	});
+}
+
+async function openDeadlineChangesFromNotification(): Promise<void> {
+	const tabs = await browser.tabs.query({ url: "https://*.wakayama-u.ac.jp/*" });
+	const target = tabs.find((tab) => tab.active) ?? tabs[0];
+	if (target?.id === undefined) return;
+	await browser.tabs.update(target.id, { active: true });
+	await browser.tabs.sendMessage(target.id, {
+		type: "fuzzy:open-screen",
+		screen: "deadlines",
 	});
 }
 
@@ -179,6 +194,12 @@ export default defineBackground(() => {
 		if (alarm.name === deadlineNotificationMonitor.alarmName) {
 			void deadlineNotificationMonitor.check();
 		}
+	});
+	browser.notifications.onClicked.addListener((notificationId) => {
+		if (!notificationId.startsWith(SYNC_NOTIFICATION_ID_PREFIX)) return;
+		void openDeadlineChangesFromNotification().catch((error) => {
+			console.warn("[fuzzy] 通知から課題・締切画面を開けませんでした", error);
+		});
 	});
 	startNotificationMonitoring();
 

@@ -30,6 +30,11 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe("共通テーマのコントラスト", () => {
+	test("旧紫色を主要色として残さない", () => {
+		expect(themeCss.toLowerCase()).not.toContain("#6c3cff");
+		expect(themeCss.toLowerCase()).not.toContain("#5426d9");
+	});
+
 	test("semantic色の通常文字がsoft背景で4.5:1以上になる", () => {
 		const semanticPairs = [
 			["--fuzzy-color-primary-strong", "--fuzzy-color-primary-soft"],

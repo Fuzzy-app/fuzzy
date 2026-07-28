@@ -251,8 +251,8 @@ Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issue
 Moodleから課題・締切データを取得（同期）した直後、拡張機能は次の手順で「データ取得通知」と「変更点の表示」を行う（`docs/仕様書.md` 1.3節）。
 
 1. native-host側は同期完了ごとに `sync_events` に1行追加し、変更を検出した課題ごとに `assignment_changes` へ差分を記録する。同期対象外化・復帰も`removedAt`の差分として含める（`データベース設計.md` 参照）
-2. 拡張機能は同期完了を検知したら `getLatestSyncEvent` を呼び、`new/changed/removed_assignment_count` の合計を使ってブラウザ通知を出す（例:「Moodleからデータを取得しました（変更2件）」）。削除・復帰を`changed`へ重複計上せず、変更が0件でも取得したこと自体は通知する
-3. 通知または締切ハブから「変更点を見る」操作をした際は `getAssignmentChanges({ sinceSyncEventId })` で対象同期以降の差分一覧を取得し、`field` ごとに変更前後の値（`oldValue` → `newValue`）を表示する
+2. 拡張機能は同期完了を検知したら `getLatestSyncEvent` を呼び、`new/changed/removed_assignment_count` の合計を求める。合計が1件以上の場合だけブラウザ通知を出す（例:「変更が2件あります」）。合計が0件の場合は通知を出さないが、同じ同期結果を後から通知しないよう最終通知確認済みIDは更新する。削除・復帰を`changed`へ重複計上しない
+3. 通知を押した場合はFuzzyの「課題・締切」画面を開く。通知または同画面から「変更点を見る」操作をした際は `getAssignmentChanges({ sinceSyncEventId })` で対象同期以降の差分一覧を取得し、`field` ごとに変更前後の値（`oldValue` → `newValue`）を表示する
 4. `sinceSyncEventId` を省略した場合は直近の同期1回分、指定した場合はその同期IDより後に検出された差分を返す。同期履歴がない場合、`getLatestSyncEvent` は `null`、変更点一覧は空配列を返す
 5. Moodle取得パイプラインは取得した全課題スナップショットを共有エンジンの同期処理へ渡す。同期処理は、課題更新・フィールド差分・削除扱い・集計を同一トランザクションで確定する
 

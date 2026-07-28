@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
 	assignmentChangeFieldLabel,
 	assignmentChangeValueLabel,
+	submissionAvailabilityLabel,
 	syncChangeTotal,
 } from "../../apps/extension/src/entrypoints/content/shellPresentation";
+import type { Assignment } from "../../packages/shared/src/types";
 
 describe("課題同期の変更件数と削除表示", () => {
 	test("削除・復帰を変更件数へ二重計上せず同期状態として表示する", () => {
@@ -30,5 +32,34 @@ describe("課題同期の変更件数と削除表示", () => {
 		expect(assignmentChangeFieldLabel("removedAt")).toBe("同期状態");
 		expect(assignmentChangeValueLabel("removedAt", null)).toBe("同期対象");
 		expect(assignmentChangeValueLabel("removedAt", "2026-07-25T09:00:00Z")).toContain("同期対象外");
+	});
+
+	test("期限切れ課題の提出可否を利用者向けに表示する", () => {
+		const assignment: Assignment = {
+			id: 1,
+			courseId: 2,
+			courseName: "データベース",
+			title: "レポート",
+			source: "moodle_dashboard",
+			dueAt: "2020-01-01T00:00:00Z",
+			dueAtStatus: "normal",
+			submissionMode: "moodle_auto",
+			submitted: false,
+			submissionAvailability: "available",
+		};
+
+		expect(submissionAvailabilityLabel(assignment)).toBe("提出可能");
+		expect(
+			submissionAvailabilityLabel({
+				...assignment,
+				submissionAvailability: "unknown",
+			}),
+		).toBe("Moodleで確認");
+		expect(
+			submissionAvailabilityLabel({
+				...assignment,
+				submitted: true,
+			}),
+		).toBeNull();
 	});
 });

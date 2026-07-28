@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import fuzzyIconUrl from "../../../extension/public/icon/fuzzy.svg?url";
 	import {
 		RULE_PRESETS,
 		createRulePreviewValues,
@@ -332,7 +333,7 @@
 <main class="window">
 	<header class="titlebar">
 		<div class="brand">
-			<div class="brand-mark">F</div>
+			<img class="brand-mark" src={fuzzyIconUrl} alt="" aria-hidden="true" />
 			<div class="brand-copy">
 				<strong>Fuzzy</strong>
 				<span>{isRecoveryMode ? "拡張機能の確認" : "初期セットアップ"}</span>
@@ -349,8 +350,8 @@
 		<section class="startup-check-panel" aria-live="polite">
 			<div class="startup-spinner" aria-hidden="true"></div>
 			<div>
-				<p class="eyebrow">ローカルデータを確認中</p>
-				<h1>SQLite正本と検索索引を確認しています</h1>
+				<p class="eyebrow">このPCのデータを確認中</p>
+				<h1>資料の検索・整理情報を確認しています</h1>
 				<p>保存済みの資料ファイルは変更しません。</p>
 			</div>
 		</section>
@@ -814,14 +815,9 @@
 	.brand-mark {
 		width: 18px;
 		height: 18px;
-		display: grid;
-		place-items: center;
 		border-radius: 6px;
-		background: linear-gradient(180deg, #8d7bff 0%, #6b5bf6 100%);
-		color: #fff;
-		font-size: 0.72rem;
-		font-weight: 700;
-		box-shadow: 0 5px 14px rgba(109, 92, 246, 0.35);
+		object-fit: cover;
+		box-shadow: var(--fuzzy-shadow-card);
 	}
 
 	.brand-copy {

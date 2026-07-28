@@ -47,6 +47,7 @@ import {
 	isUpcoming,
 	parseDueAt,
 	sourceLabel,
+	submissionAvailabilityLabel,
 	submissionLabel,
 	syncChangeTotal,
 	syncTriggerLabel,
@@ -181,10 +182,10 @@ export function mountFuzzyShell(): void {
 		statusBadge.dataset.mode = mode;
 		statusBadge.textContent =
 			mode === "native"
-				? "完全ローカル・実データ接続"
+				? "このPCのデータを表示中"
 				: mode === "mock"
-					? "完全ローカル・サンプル表示"
-					: "接続確認中";
+					? "サンプルデータを表示中"
+					: "表示する情報を確認中";
 	};
 
 	const setTopModeFromApi = (api: BackgroundApiClient) => {
@@ -319,9 +320,10 @@ export function mountFuzzyShell(): void {
 			: "キーワードを入力してください";
 
 		if (searchState.error) {
-			resultsHost.replaceChildren(
-				el("p", "fuzzy-error", `検索に失敗しました: ${searchState.error}`),
-			);
+			const userMessage = searchState.executedQuery
+				? "資料を検索できませんでした。時間をおいて再度お試しください。"
+				: searchState.error;
+			resultsHost.replaceChildren(el("p", "fuzzy-error", userMessage));
 		} else if (searchState.loading) {
 			resultsHost.replaceChildren(el("p", "fuzzy-loading", "検索中…"));
 		} else if (searchState.results.length === 0) {
@@ -374,6 +376,7 @@ export function mountFuzzyShell(): void {
 			setTopModeFromApi(api);
 		} catch (error) {
 			if (requestId !== searchRequestId) return;
+			console.warn("[fuzzy] 資料検索に失敗しました", error);
 			searchState.error = error instanceof Error ? error.message : String(error);
 			searchState.executedQuery = query;
 			searchState.results = [];
@@ -470,6 +473,7 @@ export function mountFuzzyShell(): void {
 			deadlineError = null;
 			setTopModeFromApi(api);
 		} catch (error) {
+			console.warn("[fuzzy] 課題・締切の取得に失敗しました", error);
 			deadlineError = error instanceof Error ? error.message : String(error);
 			assignmentsLoaded = false;
 		}
@@ -490,7 +494,7 @@ export function mountFuzzyShell(): void {
 					dashboard = null;
 					dashboardLoaded = false;
 					dashboardError =
-						"オフラインキャッシュがありません。native-hostへ接続した状態でMoodleのダッシュボードを一度開いてください。";
+						"表示できる情報がありません。Moodleを開いた状態で、もう一度お試しください。";
 					return;
 				}
 				dashboard = cached.dashboard;
@@ -507,6 +511,7 @@ export function mountFuzzyShell(): void {
 			dashboardLoaded = true;
 			dashboardError = null;
 		} catch (error) {
+			console.warn("[fuzzy] 整理状況の取得に失敗しました", error);
 			if (cached) {
 				dashboard = cached.dashboard;
 				dashboardCachedAt = cached.cachedAt;
@@ -531,6 +536,7 @@ export function mountFuzzyShell(): void {
 			syncSummaryError = null;
 			setTopModeFromApi(api);
 		} catch (error) {
+			console.warn("[fuzzy] Moodleの更新情報を確認できませんでした", error);
 			syncSummaryError = error instanceof Error ? error.message : String(error);
 			syncSummaryLoaded = false;
 		}
@@ -577,6 +583,16 @@ export function mountFuzzyShell(): void {
 			badges.append(el("span", "fuzzy-badge is-review", "締切日を確認"));
 		}
 		if (isOverdue(assignment)) badges.append(el("span", "fuzzy-badge is-overdue", "期限切れ"));
+		const availability = submissionAvailabilityLabel(assignment);
+		if (availability) {
+			badges.append(
+				el(
+					"span",
+					availability === "提出可能" ? "fuzzy-badge is-available" : "fuzzy-badge is-review",
+					availability,
+				),
+			);
+		}
 		badges.append(
 			el(
 				"span",
@@ -612,10 +628,8 @@ export function mountFuzzyShell(): void {
 					item.id === assignment.id ? { ...item, submitted } : item,
 				);
 			} catch (error) {
-				submissionError =
-					error instanceof Error
-						? `提出状態の更新に失敗しました: ${error.message}`
-						: "提出状態の更新に失敗しました。";
+				console.warn("[fuzzy] 提出状態の更新に失敗しました", error);
+				submissionError = "提出状態を更新できませんでした。時間をおいて再度お試しください。";
 			}
 			renderScreen();
 		});
@@ -624,7 +638,17 @@ export function mountFuzzyShell(): void {
 			el("span", "", assignment.submitted ? "未提出に戻す" : "提出済みにする"),
 		);
 
-		card.append(head, body, checkLabel);
+		const actions = el("div", "fuzzy-deadline-actions");
+		actions.append(checkLabel);
+		if (assignment.moodleUrl) {
+			const openMoodle = el("a", "fuzzy-secondary-link", "Moodleで課題を確認");
+			openMoodle.href = assignment.moodleUrl;
+			openMoodle.target = "_blank";
+			openMoodle.rel = "noopener noreferrer";
+			actions.append(openMoodle);
+		}
+
+		card.append(head, body, actions);
 		return card;
 	};
 
@@ -657,7 +681,7 @@ export function mountFuzzyShell(): void {
 		if (syncSummaryError) {
 			const errorRow = el("div", "fuzzy-sync-error");
 			errorRow.append(
-				el("p", "", `Moodleの更新情報を確認できませんでした: ${syncSummaryError}`),
+				el("p", "", "Moodleの更新情報を確認できませんでした。"),
 				el("p", "", "締切一覧は表示できます。変更点だけ後でもう一度確認してください。"),
 			);
 			panel.append(errorRow);
@@ -673,10 +697,7 @@ export function mountFuzzyShell(): void {
 
 		const total = syncChangeTotal(latestSyncEvent);
 		const summary = el("div", "fuzzy-sync-summary");
-		const message =
-			total > 0
-				? `Moodleからデータを取得しました（対象${total}件）`
-				: "Moodleからデータを取得しました（対象なし）";
+		const message = total > 0 ? `Moodleからデータを取得しました（対象${total}件）` : "最新です";
 		summary.append(
 			el("p", "fuzzy-sync-message", message),
 			el(
@@ -749,7 +770,7 @@ export function mountFuzzyShell(): void {
 				renderScreen();
 			});
 			errorPanel.append(
-				el("p", "", `締切データの取得に失敗しました: ${deadlineError}`),
+				el("p", "", "課題・締切を読み込めませんでした。時間をおいて再度お試しください。"),
 				retryButton,
 			);
 			screen.append(errorPanel);
@@ -757,7 +778,7 @@ export function mountFuzzyShell(): void {
 		}
 
 		if (loadingDeadlines && !assignmentsLoaded) {
-			screen.append(el("section", "fuzzy-placeholder", "締切データを読み込んでいます…"));
+			screen.append(el("section", "fuzzy-placeholder", "課題・締切を読み込んでいます…"));
 			return screen;
 		}
 
@@ -847,7 +868,7 @@ export function mountFuzzyShell(): void {
 				renderScreen();
 			});
 			errorPanel.append(
-				el("p", "", `ダッシュボードの取得に失敗しました: ${dashboardError}`),
+				el("p", "", "整理状況を読み込めませんでした。時間をおいて再度お試しください。"),
 				retryButton,
 			);
 			screen.append(errorPanel);
@@ -855,7 +876,7 @@ export function mountFuzzyShell(): void {
 		}
 
 		if (loadingDashboard && !dashboardLoaded) {
-			screen.append(el("section", "fuzzy-placeholder", "ダッシュボードを読み込んでいます…"));
+			screen.append(el("section", "fuzzy-placeholder", "整理状況を読み込んでいます…"));
 			return screen;
 		}
 
@@ -880,7 +901,16 @@ export function mountFuzzyShell(): void {
 				),
 			);
 		} else {
-			actions.append(el("p", "fuzzy-dashboard-cache-note", "最新の集計結果を表示中"));
+			actions.append(el("p", "fuzzy-dashboard-cache-note", "最新です"));
+		}
+		if (dashboard.upcomingDeadlineCount > 0) {
+			const deadlineLink = el("button", "fuzzy-dashboard-deadline-link", "課題・締切を見る");
+			deadlineLink.type = "button";
+			deadlineLink.addEventListener("click", () => {
+				activeScreen = "deadlines";
+				renderScreen();
+			});
+			actions.append(deadlineLink);
 		}
 
 		const metrics = el("section", "fuzzy-metric-grid");
@@ -1059,6 +1089,21 @@ export function mountFuzzyShell(): void {
 		event.preventDefault();
 		if (isOpen) closeShell();
 		else openShell();
+	});
+
+	browser.runtime.onMessage.addListener((message: unknown) => {
+		if (
+			typeof message !== "object" ||
+			message === null ||
+			(message as { type?: unknown }).type !== "fuzzy:open-screen" ||
+			(message as { screen?: unknown }).screen !== "deadlines"
+		) {
+			return false;
+		}
+		activeScreen = "deadlines";
+		if (!isOpen) openShell();
+		else renderScreen();
+		return false;
 	});
 
 	ensureDrawerEntry();
@@ -1737,6 +1782,19 @@ function ensureStyle(): void {
 			text-align: right;
 		}
 
+		.fuzzy-dashboard-deadline-link {
+			margin-left: auto;
+			border: 1px solid var(--fuzzy-color-border);
+			border-radius: 10px;
+			padding: 9px 12px;
+			background: var(--fuzzy-color-surface);
+			color: var(--fuzzy-color-primary-strong);
+			font: inherit;
+			font-size: var(--fuzzy-font-size-small);
+			font-weight: 800;
+			cursor: pointer;
+		}
+
 		.fuzzy-dashboard-course-list {
 			display: grid;
 			grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2064,19 +2122,28 @@ function ensureStyle(): void {
 		}
 
 		.fuzzy-badge.is-review {
-			background: #ffe38c;
+			background: var(--fuzzy-color-warning-soft);
+			color: var(--fuzzy-color-warning);
 		}
 
 		.fuzzy-badge.is-overdue {
-			background: #ffd8cc;
+			background: var(--fuzzy-color-danger-soft);
+			color: var(--fuzzy-color-danger);
 		}
 
 		.fuzzy-badge.is-submitted {
-			background: #dff4e7;
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success-strong);
 		}
 
 		.fuzzy-badge.is-open {
-			background: #e3e8fb;
+			background: var(--fuzzy-color-info-soft);
+			color: var(--fuzzy-color-info);
+		}
+
+		.fuzzy-badge.is-available {
+			background: var(--fuzzy-color-success-soft);
+			color: var(--fuzzy-color-success-strong);
 		}
 
 		.fuzzy-deadline-body {
@@ -2100,7 +2167,7 @@ function ensureStyle(): void {
 
 		.fuzzy-deadline-source {
 			margin: 0;
-			color: #626a89;
+			color: var(--fuzzy-color-text-subtle);
 			font-size: 0.82rem;
 			line-height: 1.7;
 		}
@@ -2112,6 +2179,23 @@ function ensureStyle(): void {
 			margin-top: 14px;
 			font-size: 0.84rem;
 			font-weight: 800;
+		}
+
+		.fuzzy-deadline-actions {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+		}
+
+		.fuzzy-secondary-link {
+			margin-top: 14px;
+			color: var(--fuzzy-color-primary-strong);
+			font-size: 0.84rem;
+			font-weight: 800;
+			text-decoration: underline;
+			text-underline-offset: 3px;
 		}
 
 		.fuzzy-placeholder {
@@ -2284,6 +2368,10 @@ function ensureStyle(): void {
 
 			.fuzzy-dashboard-cache-note {
 				text-align: left;
+			}
+
+			.fuzzy-dashboard-deadline-link {
+				margin-left: 0;
 			}
 		}
 	`;

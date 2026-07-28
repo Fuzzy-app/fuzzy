@@ -112,15 +112,11 @@ export const SAVE_PANEL_STYLE = `
 		}
 
 		.fuzzy-logo {
-			display: inline-grid;
-			place-items: center;
+			display: block;
 			width: 22px;
 			height: 22px;
 			border-radius: 6px;
-			background: var(--fuzzy-color-primary);
-			color: var(--fuzzy-color-surface);
-			font-size: 13px;
-			font-weight: 900;
+			object-fit: cover;
 		}
 
 		.fuzzy-pill {
