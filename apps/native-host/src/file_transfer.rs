@@ -1454,7 +1454,7 @@ mod tests {
 		assert_eq!(std::fs::read(target.join("guide.docx")).unwrap(), docx);
 		assert_eq!(
 			database.saved_file_path_by_moodle_id("file-1").unwrap(),
-			target.join("guide.docx")
+			target.join("guide.docx").canonicalize().unwrap()
 		);
 
 		let mut invalid_manager = FileTransferManager::default();

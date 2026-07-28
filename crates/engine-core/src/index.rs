@@ -22,18 +22,33 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term};
 
 mod extraction;
 
-use extraction::{extract_document, ExtractedPage};
+use extraction::{extract_document, ExtractedDocument, ExtractedPage};
 
 const INDEX_PATH_ENV: &str = "FUZZY_INDEX_PATH";
 const TOKENIZER_NAME: &str = "fuzzy_ngram";
 const INDEX_WRITER_MEMORY_BYTES: usize = 20_000_000;
 const TRANSIENT_INDEX_IO_ATTEMPTS: usize = 8;
 const TRANSIENT_INDEX_IO_DELAY: Duration = Duration::from_millis(20);
+const MAX_EXTRACTION_WORKERS: usize = 4;
 
 /// 全文索引の構築・更新・検索を担うトレイト。
 pub trait IndexEngine {
 	/// 指定ファイルの本文を抽出して索引に追加（既存なら更新）する。
 	fn index_file(&mut self, database: &Database, file_id: i64, path: &Path) -> EngineResult<()>;
+
+	/// 複数ファイルをまとめて索引へ追加し、入力順の結果を返す。
+	///
+	/// 独自実装は必要に応じて一括コミットできる。既定では互換性のため単件処理する。
+	fn index_files(
+		&mut self,
+		database: &Database,
+		files: &[(i64, PathBuf)],
+	) -> Vec<EngineResult<()>> {
+		files
+			.iter()
+			.map(|(file_id, path)| self.index_file(database, *file_id, path))
+			.collect()
+	}
 
 	/// 指定ファイルを索引から削除する（DB上の登録解除に追従するのみ。実ファイルは触らない）。
 	fn remove_file(&mut self, database: &Database, file_id: i64) -> EngineResult<()>;
@@ -92,23 +107,36 @@ impl DefaultIndexEngine {
 	}
 
 	fn commit_pages(&mut self, file_id: i64, pages: &[ExtractedPage]) -> EngineResult<()> {
-		let stored_file_id = u64::try_from(file_id).map_err(|_| EngineError::InvalidInput {
-			field: "fileId".to_string(),
-			reason: "0以上の整数で指定してください".to_string(),
-		})?;
+		self.commit_documents(&[(file_id, pages)])
+	}
+
+	fn commit_documents(&mut self, documents: &[(i64, &[ExtractedPage])]) -> EngineResult<()> {
+		let documents = documents
+			.iter()
+			.map(|(file_id, pages)| {
+				u64::try_from(*file_id)
+					.map(|stored_file_id| (stored_file_id, *pages))
+					.map_err(|_| EngineError::InvalidInput {
+						field: "fileId".to_string(),
+						reason: "0以上の整数で指定してください".to_string(),
+					})
+			})
+			.collect::<EngineResult<Vec<_>>>()?;
 		retry_transient_index_io(|| {
 			let mut writer: IndexWriter<TantivyDocument> =
 				self.index.writer(INDEX_WRITER_MEMORY_BYTES)?;
 			writer.garbage_collect_files().wait()?;
-			writer.delete_term(Term::from_field_u64(self.file_id_field, stored_file_id));
-			for page in pages.iter().filter(|page| !page.text.trim().is_empty()) {
-				let mut document = TantivyDocument::new();
-				document.add_u64(self.file_id_field, stored_file_id);
-				if let Some(page_number) = page.page {
-					document.add_u64(self.page_field, u64::from(page_number));
+			for (stored_file_id, pages) in &documents {
+				writer.delete_term(Term::from_field_u64(self.file_id_field, *stored_file_id));
+				for page in pages.iter().filter(|page| !page.text.trim().is_empty()) {
+					let mut document = TantivyDocument::new();
+					document.add_u64(self.file_id_field, *stored_file_id);
+					if let Some(page_number) = page.page {
+						document.add_u64(self.page_field, u64::from(page_number));
+					}
+					document.add_text(self.body_field, &page.text);
+					writer.add_document(document)?;
 				}
-				document.add_text(self.body_field, &page.text);
-				writer.add_document(document)?;
 			}
 			let commit_result = writer.commit();
 			let merge_result = writer.wait_merging_threads();
@@ -130,6 +158,59 @@ impl IndexEngine for DefaultIndexEngine {
 			return Err(error);
 		}
 		Ok(())
+	}
+
+	fn index_files(
+		&mut self,
+		database: &Database,
+		files: &[(i64, PathBuf)],
+	) -> Vec<EngineResult<()>> {
+		let mut extracted = extract_documents_in_parallel(files);
+		let documents = extracted
+			.iter()
+			.filter_map(|item| {
+				item.result
+					.as_ref()
+					.and_then(|result| result.as_ref().ok())
+					.map(|document| (item.file_id, document.pages.as_slice()))
+			})
+			.collect::<Vec<_>>();
+		if !documents.is_empty() {
+			if let Err(error) = self.commit_documents(&documents) {
+				let message = error.to_string();
+				for item in &mut extracted {
+					if item.result.as_ref().is_some_and(Result::is_ok) {
+						item.result = Some(Err(EngineError::Index {
+							message: message.clone(),
+						}));
+					}
+				}
+			}
+		}
+
+		let mut cleanup_ids = Vec::new();
+		for item in &mut extracted {
+			let page_count = match item.result.as_ref() {
+				Some(Ok(document)) => document.page_count,
+				_ => continue,
+			};
+			if let Err(error) = database.mark_search_indexed(item.file_id, page_count) {
+				cleanup_ids.push(item.file_id);
+				item.result = Some(Err(error));
+			}
+		}
+		if !cleanup_ids.is_empty() {
+			let _ = self.remove_many_from_index(&cleanup_ids);
+		}
+
+		extracted
+			.into_iter()
+			.map(|item| {
+				item.result
+					.expect("並列本文抽出後は必ず結果が設定される")
+					.map(|_| ())
+			})
+			.collect()
 	}
 
 	fn remove_file(&mut self, database: &Database, file_id: i64) -> EngineResult<()> {
@@ -209,15 +290,26 @@ impl IndexEngine for DefaultIndexEngine {
 
 impl DefaultIndexEngine {
 	fn remove_from_index(&mut self, file_id: i64) -> EngineResult<()> {
-		let stored_file_id = u64::try_from(file_id).map_err(|_| EngineError::InvalidInput {
-			field: "fileId".to_string(),
-			reason: "0以上の整数で指定してください".to_string(),
-		})?;
+		self.remove_many_from_index(&[file_id])
+	}
+
+	fn remove_many_from_index(&mut self, file_ids: &[i64]) -> EngineResult<()> {
+		let stored_file_ids = file_ids
+			.iter()
+			.map(|file_id| {
+				u64::try_from(*file_id).map_err(|_| EngineError::InvalidInput {
+					field: "fileId".to_string(),
+					reason: "0以上の整数で指定してください".to_string(),
+				})
+			})
+			.collect::<EngineResult<Vec<_>>>()?;
 		retry_transient_index_io(|| {
 			let mut writer: IndexWriter<TantivyDocument> =
 				self.index.writer(INDEX_WRITER_MEMORY_BYTES)?;
 			writer.garbage_collect_files().wait()?;
-			writer.delete_term(Term::from_field_u64(self.file_id_field, stored_file_id));
+			for stored_file_id in &stored_file_ids {
+				writer.delete_term(Term::from_field_u64(self.file_id_field, *stored_file_id));
+			}
 			let commit_result = writer.commit();
 			let merge_result = writer.wait_merging_threads();
 			commit_result?;
@@ -226,6 +318,42 @@ impl DefaultIndexEngine {
 		})
 		.map_err(index_err)
 	}
+}
+
+struct PendingExtraction {
+	file_id: i64,
+	path: PathBuf,
+	result: Option<EngineResult<ExtractedDocument>>,
+}
+
+fn extract_documents_in_parallel(files: &[(i64, PathBuf)]) -> Vec<PendingExtraction> {
+	let mut pending = files
+		.iter()
+		.map(|(file_id, path)| PendingExtraction {
+			file_id: *file_id,
+			path: path.clone(),
+			result: None,
+		})
+		.collect::<Vec<_>>();
+	if pending.is_empty() {
+		return pending;
+	}
+	let worker_count = std::thread::available_parallelism()
+		.map(usize::from)
+		.unwrap_or(1)
+		.min(MAX_EXTRACTION_WORKERS)
+		.min(pending.len());
+	let chunk_size = pending.len().div_ceil(worker_count);
+	std::thread::scope(|scope| {
+		for chunk in pending.chunks_mut(chunk_size) {
+			scope.spawn(move || {
+				for item in chunk {
+					item.result = Some(extract_document(&item.path));
+				}
+			});
+		}
+	});
+	pending
 }
 
 fn retry_transient_index_io<T>(
@@ -436,6 +564,39 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(page_count, None);
+		drop(engine);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn indexes_multiple_documents_with_one_batch_api_call() {
+		let directory = test_directory("batch");
+		std::fs::create_dir_all(&directory).unwrap();
+		let first_path = directory.join("正規化.txt");
+		let second_path = directory.join("関数従属.txt");
+		std::fs::write(&first_path, "正規化は更新異常を防ぎます。").unwrap();
+		std::fs::write(&second_path, "関数従属を確認します。").unwrap();
+		let database = Database::open_in_memory().unwrap();
+		insert_file(&database, 61, &first_path);
+		insert_file(&database, 62, &second_path);
+		let mut engine = DefaultIndexEngine::open(&directory.join("index")).unwrap();
+
+		let results = engine.index_files(
+			&database,
+			&[(61, first_path.clone()), (62, second_path.clone())],
+		);
+
+		assert_eq!(results.len(), 2);
+		assert!(results.into_iter().all(|result| result.is_ok()));
+		assert_eq!(engine.search("更新異常", 10).unwrap()[0].file_id, 61);
+		assert_eq!(engine.search("関数従属", 10).unwrap()[0].file_id, 62);
+		let indexed_count: i64 = database
+			.conn()
+			.query_row("SELECT count(*) FROM search_index_meta", [], |row| {
+				row.get(0)
+			})
+			.unwrap();
+		assert_eq!(indexed_count, 2);
 		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}

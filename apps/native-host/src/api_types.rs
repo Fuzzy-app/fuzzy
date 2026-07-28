@@ -741,6 +741,7 @@ pub struct SearchResult {
 	pub course_name: Option<String>,
 	pub snippet: String,
 	pub page: Option<u32>,
+	pub page_count: Option<u32>,
 	pub score: f32,
 }
 
@@ -786,6 +787,14 @@ pub struct RebuildLibraryRequest {
 	pub rebuild_index: Option<bool>,
 }
 
+/// Moodleで表示中の1コースだけを差分走査する要求。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ReconcileCourseFilesRequest {
+	pub course: SyncMoodleCourseRequest,
+}
+
 /// 再スキャンで個別に処理できなかった相対パスと利用者向け理由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -804,6 +813,7 @@ pub struct LibraryMaintenanceSummary {
 	pub registered_file_count: usize,
 	pub updated_file_count: usize,
 	pub indexed_file_count: usize,
+	pub reused_fingerprint_count: usize,
 	pub missing_file_count: usize,
 	pub skipped_file_count: usize,
 	pub warnings: Vec<LibraryMaintenanceWarning>,
@@ -825,6 +835,7 @@ impl From<EngineLibraryMaintenanceSummary> for LibraryMaintenanceSummary {
 			registered_file_count: value.registered_file_count,
 			updated_file_count: value.updated_file_count,
 			indexed_file_count: value.indexed_file_count,
+			reused_fingerprint_count: value.reused_fingerprint_count,
 			missing_file_count: value.missing_file_count,
 			skipped_file_count: value.skipped_file_count,
 			warnings: value.warnings.into_iter().map(Into::into).collect(),
@@ -1065,10 +1076,13 @@ mod tests {
 
 		let ping = serde_json::to_value(PingResult {
 			version: "0.1.0".to_string(),
-			protocol_version: 3,
+			protocol_version: engine_core::EXTENSION_RUNTIME_PROTOCOL_VERSION,
 		})
 		.unwrap();
-		assert_eq!(ping["protocolVersion"], 3);
+		assert_eq!(
+			ping["protocolVersion"],
+			engine_core::EXTENSION_RUNTIME_PROTOCOL_VERSION
+		);
 	}
 
 	#[test]

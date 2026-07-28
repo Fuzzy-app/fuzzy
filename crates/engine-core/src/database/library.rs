@@ -1,5 +1,8 @@
 //! 保存ルートの明示再スキャンで使う、コースとファイルメタデータの冪等更新。
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 
 use super::{db_err, Database};
@@ -12,6 +15,22 @@ pub struct ScannedFileUpsertResult {
 	pub inserted: bool,
 	pub updated: bool,
 	pub needs_index: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReusableScannedFingerprint {
+	pub hash_blake3: String,
+	pub simhash: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannedFileObservation {
+	pub saved_path: String,
+	pub size_bytes: i64,
+	pub modified_at_ns: Option<i64>,
+	pub hash_blake3: String,
+	pub simhash: Option<u64>,
+	pub is_missing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +59,57 @@ enum ContextRelation {
 }
 
 impl Database {
+	/// 旧版が保存した区切り文字・Windows verbatim prefixの異なるパスを正規化する。
+	///
+	/// 同じ実体を指す行が既に複数ある場合はファイル行を自動削除せず、代表1行だけを
+	/// 正規形へ更新する。以後の走査はその行を再利用し、新たな重複登録を防ぐ。
+	pub fn normalize_stored_saved_paths(&mut self) -> EngineResult<usize> {
+		let transaction = self
+			.conn
+			.transaction_with_behavior(TransactionBehavior::Immediate)
+			.map_err(db_err)?;
+		let rows = {
+			let mut statement = transaction
+				.prepare("SELECT id, saved_path FROM files ORDER BY id")
+				.map_err(db_err)?;
+			let rows = statement
+				.query_map([], |row| {
+					Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+				})
+				.map_err(db_err)?
+				.collect::<rusqlite::Result<Vec<_>>>()
+				.map_err(db_err)?;
+			rows
+		};
+		let mut groups = BTreeMap::<String, Vec<(i64, String, String)>>::new();
+		for (file_id, stored_path) in rows {
+			let normalized_path = saved_path_key(Path::new(&stored_path));
+			groups
+				.entry(normalized_path.to_lowercase())
+				.or_default()
+				.push((file_id, stored_path, normalized_path));
+		}
+
+		let mut updated_count = 0;
+		for group in groups.values() {
+			let representative = group
+				.iter()
+				.find(|(_, stored, normalized)| stored.eq_ignore_ascii_case(normalized))
+				.unwrap_or(&group[0]);
+			if representative.1 != representative.2 {
+				transaction
+					.execute(
+						"UPDATE files SET saved_path = ?1 WHERE id = ?2",
+						params![representative.2, representative.0],
+					)
+					.map_err(db_err)?;
+				updated_count += 1;
+			}
+		}
+		transaction.commit().map_err(db_err)?;
+		Ok(updated_count)
+	}
+
 	/// ローカル走査だけで判明したコース名を、名称由来の安定IDで冪等登録する。
 	pub fn ensure_local_scan_course(&mut self, name: &str) -> EngineResult<i64> {
 		let name = validate_course_name(name)?;
@@ -206,14 +276,131 @@ impl Database {
 		&mut self,
 		file: &SavedFileRegistration,
 	) -> EngineResult<ScannedFileUpsertResult> {
+		self.upsert_scanned_file_observed(file, None)
+	}
+
+	/// ファイルシステムの更新日時を含めて、走査結果を登録または更新する。
+	pub fn upsert_scanned_file_observed(
+		&mut self,
+		file: &SavedFileRegistration,
+		modified_at_ns: Option<i64>,
+	) -> EngineResult<ScannedFileUpsertResult> {
 		validate_file_registration(file)?;
 		let transaction = self
 			.conn
 			.transaction_with_behavior(TransactionBehavior::Immediate)
 			.map_err(db_err)?;
-		let result = upsert_file_in_transaction(&transaction, file, SavedFileUpsertMode::Scan)?;
+		let result =
+			upsert_scanned_file_observed_in_transaction(&transaction, file, modified_at_ns)?;
 		transaction.commit().map_err(db_err)?;
 		Ok(result)
+	}
+
+	/// 複数の走査結果を1transactionで登録する。呼び出し側は適度なバッチに分け、
+	/// 失敗したバッチだけ単件再試行することで、性能と部分失敗継続を両立できる。
+	pub fn upsert_scanned_files_observed(
+		&mut self,
+		files: &[(SavedFileRegistration, Option<i64>)],
+	) -> EngineResult<Vec<ScannedFileUpsertResult>> {
+		if files.is_empty() {
+			return Ok(Vec::new());
+		}
+		for (file, _) in files {
+			validate_file_registration(file)?;
+		}
+		let transaction = self
+			.conn
+			.transaction_with_behavior(TransactionBehavior::Immediate)
+			.map_err(db_err)?;
+		let mut results = Vec::with_capacity(files.len());
+		for (file, modified_at_ns) in files {
+			results.push(upsert_scanned_file_observed_in_transaction(
+				&transaction,
+				file,
+				*modified_at_ns,
+			)?);
+		}
+		transaction.commit().map_err(db_err)?;
+		Ok(results)
+	}
+
+	/// パス・サイズ・更新日時が前回走査と一致する場合だけ、保存済み指紋を再利用する。
+	pub fn reusable_scanned_fingerprint(
+		&self,
+		saved_path: &std::path::Path,
+		size_bytes: i64,
+		modified_at_ns: Option<i64>,
+	) -> EngineResult<Option<ReusableScannedFingerprint>> {
+		let Some(modified_at_ns) = modified_at_ns else {
+			return Ok(None);
+		};
+		let saved_path = saved_path_key(saved_path);
+		self.conn
+			.query_row(
+				"SELECT hash_blake3, simhash
+				 FROM files
+				 WHERE saved_path = ?1 COLLATE NOCASE
+				   AND size_bytes = ?2
+				   AND scan_modified_at_ns = ?3
+				   AND simhash IS NOT NULL
+				   AND missing_at IS NULL",
+				params![saved_path, size_bytes, modified_at_ns],
+				|row| {
+					Ok(ReusableScannedFingerprint {
+						hash_blake3: row.get(0)?,
+						simhash: row.get::<_, i64>(1)? as u64,
+					})
+				},
+			)
+			.optional()
+			.map_err(db_err)
+	}
+
+	/// 前回走査の観測値を一括取得する。
+	///
+	/// 全件走査でファイルごとのSELECTを繰り返さず、呼び出し側のメモリ上で
+	/// 更新日時・サイズを照合するために使う。course_idを指定した場合は
+	/// Moodleのコース表示時に必要な行だけを読み込む。
+	pub fn scanned_file_observations(
+		&self,
+		course_id: Option<i64>,
+	) -> EngineResult<Vec<ScannedFileObservation>> {
+		let sql = if course_id.is_some() {
+			"SELECT saved_path, size_bytes, scan_modified_at_ns, hash_blake3, simhash,
+			        missing_at IS NOT NULL
+			 FROM files
+			 WHERE course_id = ?1
+			 ORDER BY id"
+		} else {
+			"SELECT saved_path, size_bytes, scan_modified_at_ns, hash_blake3, simhash,
+			        missing_at IS NOT NULL
+			 FROM files
+			 ORDER BY id"
+		};
+		let mut statement = self.conn.prepare(sql).map_err(db_err)?;
+		let map_row = |row: &rusqlite::Row<'_>| {
+			Ok(ScannedFileObservation {
+				saved_path: row.get(0)?,
+				size_bytes: row.get(1)?,
+				modified_at_ns: row.get(2)?,
+				hash_blake3: row.get(3)?,
+				simhash: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+				is_missing: row.get(5)?,
+			})
+		};
+		let observations = match course_id {
+			Some(course_id) => statement
+				.query_map([course_id], map_row)
+				.map_err(db_err)?
+				.collect::<rusqlite::Result<Vec<_>>>()
+				.map_err(db_err)?,
+			None => statement
+				.query_map([], map_row)
+				.map_err(db_err)?
+				.collect::<rusqlite::Result<Vec<_>>>()
+				.map_err(db_err)?,
+		};
+		Ok(observations)
 	}
 
 	/// 明示的なライブラリ走査の完了時刻を保存する。
@@ -228,6 +415,60 @@ impl Database {
 			.map_err(db_err)?;
 		Ok(())
 	}
+
+	/// 再分類後に参照がなくなった、自動生成ローカルコースだけを整理する。
+	///
+	/// Moodle由来コース、利用者が保存名を編集したコース、課題・ルール・ファイルから
+	/// 参照されるコースは保持する。利用者の資料ファイルには一切触れない。
+	pub fn cleanup_orphaned_local_scan_courses(&self) -> EngineResult<usize> {
+		self.conn
+			.execute(
+				"DELETE FROM courses
+				 WHERE moodle_course_id GLOB 'local-scan:*'
+				   AND folder_name_override IS NULL
+				   AND NOT EXISTS (SELECT 1 FROM files WHERE files.course_id = courses.id)
+				   AND NOT EXISTS (
+						SELECT 1 FROM assignments WHERE assignments.course_id = courses.id
+				   )
+				   AND NOT EXISTS (
+						SELECT 1 FROM course_rule_overrides
+						WHERE course_rule_overrides.course_id = courses.id
+				   )",
+				[],
+			)
+			.map_err(db_err)
+	}
+}
+
+pub(crate) fn saved_path_key(path: &Path) -> String {
+	let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+	#[cfg(windows)]
+	{
+		normalized.to_string_lossy().replace('/', "\\")
+	}
+	#[cfg(not(windows))]
+	{
+		normalized.to_string_lossy().into_owned()
+	}
+}
+
+fn upsert_scanned_file_observed_in_transaction(
+	transaction: &Transaction<'_>,
+	file: &SavedFileRegistration,
+	modified_at_ns: Option<i64>,
+) -> EngineResult<ScannedFileUpsertResult> {
+	let mut result = upsert_file_in_transaction(transaction, file, SavedFileUpsertMode::Scan)?;
+	let observation_updated = transaction
+		.execute(
+			"UPDATE files
+			 SET scan_modified_at_ns = ?1
+			 WHERE id = ?2 AND scan_modified_at_ns IS NOT ?1",
+			params![modified_at_ns, result.file_id],
+		)
+		.map_err(db_err)?
+		> 0;
+	result.updated |= observation_updated && !result.inserted;
+	Ok(result)
 }
 
 pub(super) fn validate_file_registration(file: &SavedFileRegistration) -> EngineResult<()> {
@@ -268,6 +509,7 @@ pub(super) fn upsert_file_in_transaction(
 	mode: SavedFileUpsertMode,
 ) -> EngineResult<ScannedFileUpsertResult> {
 	validate_file_registration(file)?;
+	let saved_path = saved_path_key(&file.saved_path);
 	let existing = transaction
 		.query_row(
 			"SELECT f.id, f.course_id, f.section_no, f.moodle_file_id,
@@ -278,7 +520,7 @@ pub(super) fn upsert_file_in_transaction(
 			 FROM files f
 			 LEFT JOIN courses c ON c.id = f.course_id
 			 WHERE f.saved_path = ?1 COLLATE NOCASE",
-			[file.saved_path.to_string_lossy().as_ref()],
+			[saved_path.as_str()],
 			|row| {
 				Ok((
 					row.get::<_, i64>(0)?,
@@ -398,7 +640,7 @@ pub(super) fn upsert_file_in_transaction(
 					file.section_no,
 					moodle_file_id,
 					file.original_name,
-					file.saved_path.to_string_lossy(),
+					saved_path,
 					file.size_bytes,
 					file.mime_type,
 					file.hash_blake3,

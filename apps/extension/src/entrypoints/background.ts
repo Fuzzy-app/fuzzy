@@ -4,6 +4,7 @@ import {
 	type DataSyncEvent,
 	type FuzzyApiClient,
 	type MoodleSaveFilesRequest,
+	type ReconcileCourseFilesRequest,
 	createApiClient,
 } from "@fuzzy/shared";
 import {
@@ -18,6 +19,7 @@ import {
 	checkMoodleFileFromBackground,
 	saveMoodleFilesFromBackground,
 } from "../lib/api/backgroundFileSave";
+import { createCourseFileReconcileCoordinator } from "../lib/api/courseFileReconcile";
 import { createRecoveringApiClientProvider } from "../lib/api/recoveringClient";
 import { readDashboardCache, writeDashboardCache } from "../lib/cache/dashboardCache";
 import {
@@ -41,6 +43,7 @@ const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
 const SYNC_NOTIFICATION_ID_PREFIX = "fuzzy-sync-";
 const SYNC_CHECK_INTERVAL_MINUTES = 1;
 let syncNotificationQueue: Promise<void> = Promise.resolve();
+const courseFileReconcileCoordinator = createCourseFileReconcileCoordinator();
 
 function syncChangeTotal(event: DataSyncEvent): number {
 	return event.newAssignmentCount + event.changedAssignmentCount + event.removedAssignmentCount;
@@ -257,13 +260,18 @@ async function respondToApiRequest(
 							message.request as CheckSimilarFilesRequest,
 							pageOrigin(senderUrl),
 						)
-					: await callBackgroundApi(client, message, {
-							writeDashboardCache,
-							notifySyncEvent: (event) => queueSyncEventNotification(client.mode, event),
-							onSyncNotificationError: (error) => {
-								console.warn("[fuzzy] 同期結果を通知できませんでした", error);
-							},
-						});
+					: message.method === "reconcileCourseFiles"
+						? await courseFileReconcileCoordinator.reconcile(
+								client,
+								message.request as ReconcileCourseFilesRequest,
+							)
+						: await callBackgroundApi(client, message, {
+								writeDashboardCache,
+								notifySyncEvent: (event) => queueSyncEventNotification(client.mode, event),
+								onSyncNotificationError: (error) => {
+									console.warn("[fuzzy] 同期結果を通知できませんでした", error);
+								},
+							});
 		return { ok: true, data, mode: client.mode };
 	} catch (error) {
 		onError?.(error);

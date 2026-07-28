@@ -1,12 +1,48 @@
 import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import {
+	buildCourseFileReconcilePayload,
 	buildMoodleAssignmentSyncPayload,
 	parseMoodleDueAt,
 } from "../../apps/extension/src/lib/moodle/assignmentSync";
 import { collectMoodlePageSnapshot } from "../../apps/extension/src/lib/moodle/pageSnapshot";
 
 describe("Moodle課題の実データ同期", () => {
+	test("完全コースページからコース限定差分走査要求を作る", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="412"><body>
+				<main class="course-content">
+					<section class="course-section" data-sectionid="0">
+						<h1>データベース</h1>
+						<div data-academic-year="2026" data-academic-term="前期"></div>
+					</section>
+				</main>
+			</body></html>
+		`);
+		const snapshot = collectMoodlePageSnapshot(document);
+		expect(
+			buildCourseFileReconcilePayload(
+				snapshot,
+				"https://moodle2026.wakayama-u.ac.jp/course/view.php?id=412",
+				document,
+			),
+		).toEqual({
+			course: {
+				moodleCourseId: "412",
+				name: "データベース",
+				academicYear: 2026,
+				term: "前期",
+			},
+		});
+		expect(
+			buildCourseFileReconcilePayload(
+				snapshot,
+				"https://moodle2026.wakayama-u.ac.jp/mod/resource/view.php?id=10",
+				document,
+			),
+		).toBeNull();
+	});
+
 	test("course-moduleの安定IDとJST締切を完全コースsnapshotへ変換する", () => {
 		const { document } = parseHTML(`
 			<html data-courseid="412">

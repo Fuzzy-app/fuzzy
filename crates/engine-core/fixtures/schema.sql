@@ -61,8 +61,10 @@ CREATE TABLE files (
 	section_no       INTEGER,
 	moodle_file_id   TEXT,
 	original_name    TEXT NOT NULL,
-	saved_path       TEXT NOT NULL UNIQUE,
+	saved_path       TEXT NOT NULL COLLATE NOCASE UNIQUE,
 	size_bytes       INTEGER NOT NULL,
+	-- 増分再走査で内容読取を省略するためのファイルシステム観測値（UNIXエポックからのns）
+	scan_modified_at_ns INTEGER,
 	mime_type        TEXT,
 	-- BLAKE3は b3:<64桁の小文字16進数> 形式。既存のseed値はデモ用の省略表記
 	hash_blake3      TEXT NOT NULL,

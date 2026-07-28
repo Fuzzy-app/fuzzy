@@ -22,6 +22,7 @@ export type { ImportDataResult } from "./generated/ImportDataResult";
 export type { LibraryMaintenanceSummary } from "./generated/LibraryMaintenanceSummary";
 export type { LibraryMaintenanceWarning } from "./generated/LibraryMaintenanceWarning";
 export type { PingResult } from "./generated/PingResult";
+export type { ReconcileCourseFilesRequest } from "./generated/ReconcileCourseFilesRequest";
 export type { RebuildLibraryRequest } from "./generated/RebuildLibraryRequest";
 export type { RuleViolationListItem } from "./generated/RuleViolationListItem";
 export type { SearchRequest } from "./generated/SearchRequest";
@@ -58,6 +59,36 @@ export interface SaveSuggestion {
 	similarMatches?: SimilarFileMatch[];
 	/** 保存先に使用したコースフォルダ名と、確認が必要な警告。 */
 	courseFolder: CourseFolderNameResolution;
+}
+
+/** 初期走査で推定した、利用者確認前の保存構造候補。 */
+export interface InitialScanPatternCandidate {
+	id: string;
+	name: string;
+	description: string;
+	/** この候補を実際に支持した相対フォルダーパスの代表例。 */
+	folders: string[];
+	/** 保存ルート直下から数えた科目セグメント位置。未分類ではnull。 */
+	courseSegmentIndex: number | null;
+	/** 比較評価用のファイル名規則。DBの保存ルールには自動保存しない。 */
+	fileNameTemplate: string | null;
+	/** 評価可能な母集団に対する一致度。推定不能ではnull。 */
+	matchScore: number | null;
+	/** この候補を評価できたファイル数。 */
+	evaluatedCount: number;
+	reason: string;
+	recommended: boolean;
+	/** 自動選択せず、利用者が明示的に選ぶ必要がある候補か。 */
+	requiresConfirmation: boolean;
+}
+
+/** Tauriの`library-maintenance-progress`イベント。絶対パスや本文を含めない。 */
+export interface LibraryMaintenanceProgress {
+	phase: "scanning" | "registering" | "indexing" | "finalizing" | "completed";
+	state: "running" | "completed" | "completedWithWarnings" | "failed";
+	completedCount: number;
+	totalCount: number | null;
+	warningCount: number;
 }
 
 export interface MoodleCourseContext {
@@ -246,4 +277,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 3 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 5 as const;

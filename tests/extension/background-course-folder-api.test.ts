@@ -333,6 +333,7 @@ describe("コースフォルダ名のbackground API中継", () => {
 			registeredFileCount: 2,
 			updatedFileCount: 1,
 			indexedFileCount: 5,
+			reusedFingerprintCount: 0,
 			missingFileCount: 0,
 			skippedFileCount: 1,
 			warnings: [],
@@ -353,6 +354,33 @@ describe("コースフォルダ名のbackground API中継", () => {
 
 		await expect(callBackgroundApi(client, message)).resolves.toEqual(summary);
 		expect(captured).toEqual({ rebuildIndex: true });
+	});
+
+	test("コース限定差分走査要求を検証してnative clientへ中継する", async () => {
+		let captured: unknown = null;
+		const client = {
+			mode: "native",
+			reconcileCourseFiles: async (request: unknown) => {
+				captured = request;
+				return { scannedFileCount: 1, warnings: [] };
+			},
+		} as unknown as FuzzyApiClient;
+		const message: FuzzyApiRequestMessage = {
+			type: FUZZY_API_MESSAGE_TYPE,
+			method: "reconcileCourseFiles",
+			request: {
+				course: {
+					moodleCourseId: "412",
+					name: "データベース",
+					academicYear: 2026,
+					term: "前期",
+				},
+			},
+		};
+
+		expect(hasValidFuzzyApiRequestPayload(message)).toBe(true);
+		await callBackgroundApi(client, message);
+		expect(captured).toEqual(message.request);
 	});
 
 	test("content script用キャッシュ読取メッセージを厳密に識別する", () => {

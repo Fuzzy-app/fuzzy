@@ -22,6 +22,7 @@ import type {
 	NotificationRuleUpdateResult,
 	PingResult,
 	RebuildLibraryRequest,
+	ReconcileCourseFilesRequest,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolationListItem,
@@ -56,6 +57,27 @@ type Envelope<T> =
 			error: { code: string; message: string };
 	  };
 
+type ChunkEnvelope = {
+	id: string;
+	ok: true;
+	chunk: {
+		index: number;
+		total: number;
+		encoding: "base64";
+		data: string;
+	};
+};
+
+type ChunkState = {
+	total: number;
+	chunks: Array<Uint8Array | undefined>;
+	received: number;
+	byteLength: number;
+};
+
+const MAX_RESPONSE_CHUNKS = 128;
+const MAX_REASSEMBLED_RESPONSE_BYTES = 64 * 1024 * 1024;
+
 interface NativePort {
 	onMessage: {
 		addListener(listener: (message: unknown) => void): void;
@@ -76,6 +98,7 @@ interface PendingRequest {
 	resolve(value: unknown): void;
 	reject(error: ApiError): void;
 	timeout: ReturnType<typeof setTimeout>;
+	chunkState?: ChunkState;
 }
 
 export interface NativeApiClientOptions {
@@ -160,14 +183,35 @@ export class NativeApiClient implements FuzzyApiClient {
 	}
 
 	#handleMessage(message: unknown): void {
-		if (!isEnvelope(message)) return;
-		const pending = this.#pending.get(message.id);
+		if (!isEnvelope(message) && !isChunkEnvelope(message)) return;
+		const messageId = message.id;
+		const pending = this.#pending.get(messageId);
 		if (!pending) return;
 
+		let resolvedMessage: unknown = message;
+		if (isChunkEnvelope(message)) {
+			try {
+				const completed = consumeChunk(message, pending.chunkState);
+				pending.chunkState = completed.state;
+				if (!completed.envelope) return;
+				resolvedMessage = completed.envelope;
+			} catch {
+				clearTimeout(pending.timeout);
+				this.#pending.delete(messageId);
+				pending.reject(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
+				return;
+			}
+		} else if (pending.chunkState) {
+			clearTimeout(pending.timeout);
+			this.#pending.delete(messageId);
+			pending.reject(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
+			return;
+		}
+		if (!isEnvelope(resolvedMessage)) return;
 		clearTimeout(pending.timeout);
-		this.#pending.delete(message.id);
-		if (message.ok) pending.resolve(message.data);
-		else pending.reject(new ApiError(message.error.code, message.error.message));
+		this.#pending.delete(messageId);
+		if (resolvedMessage.ok) pending.resolve(resolvedMessage.data);
+		else pending.reject(new ApiError(resolvedMessage.error.code, resolvedMessage.error.message));
 	}
 
 	#failPort(port: NativePort, error: ApiError): void {
@@ -222,6 +266,7 @@ export class NativeApiClient implements FuzzyApiClient {
 				}
 				const id = crypto.randomUUID();
 				return new Promise<T>((resolve, reject) => {
+					let chunkState: ChunkState | undefined;
 					const rejectPending = (error: ApiError) => {
 						clearTimeout(timeout);
 						port.onMessage.removeListener?.(onMessage);
@@ -232,12 +277,28 @@ export class NativeApiClient implements FuzzyApiClient {
 						rejectPending(new ApiError("TIMEOUT", `native-hostからの応答がありません: ${command}`));
 					}, timeoutMs);
 					const onMessage = (message: unknown) => {
-						if (!isEnvelope(message) || message.id !== id) return;
+						if ((!isEnvelope(message) && !isChunkEnvelope(message)) || message.id !== id) return;
+						let resolvedMessage: unknown = message;
+						if (isChunkEnvelope(message)) {
+							try {
+								const completed = consumeChunk(message, chunkState);
+								chunkState = completed.state;
+								if (!completed.envelope) return;
+								resolvedMessage = completed.envelope;
+							} catch {
+								rejectPending(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
+								return;
+							}
+						} else if (chunkState) {
+							rejectPending(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
+							return;
+						}
+						if (!isEnvelope(resolvedMessage)) return;
 						clearTimeout(timeout);
 						port.onMessage.removeListener?.(onMessage);
 						pendingRejects.delete(rejectPending);
-						if (message.ok) resolve(message.data as T);
-						else reject(new ApiError(message.error.code, message.error.message));
+						if (resolvedMessage.ok) resolve(resolvedMessage.data as T);
+						else reject(new ApiError(resolvedMessage.error.code, resolvedMessage.error.message));
 					};
 					pendingRejects.add(rejectPending);
 					port.onMessage.addListener(onMessage);
@@ -461,6 +522,17 @@ export class NativeApiClient implements FuzzyApiClient {
 			session.disconnect();
 		}
 	}
+
+	async reconcileCourseFiles(
+		request: ReconcileCourseFilesRequest,
+	): Promise<LibraryMaintenanceSummary> {
+		const session = this.openSession();
+		try {
+			return await session.send("reconcileCourseFiles", request, this.#libraryMaintenanceTimeoutMs);
+		} finally {
+			session.disconnect();
+		}
+	}
 }
 
 function decodedBase64Length(value: string): number | null {
@@ -481,6 +553,89 @@ function isEnvelope(value: unknown): value is Envelope<unknown> {
 	if (typeof candidate.id !== "string" || typeof candidate.ok !== "boolean") return false;
 	if (candidate.ok) return "data" in candidate;
 	return typeof candidate.error?.code === "string" && typeof candidate.error.message === "string";
+}
+
+function isChunkEnvelope(value: unknown): value is ChunkEnvelope {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as {
+		id?: unknown;
+		ok?: unknown;
+		chunk?: {
+			index?: unknown;
+			total?: unknown;
+			encoding?: unknown;
+			data?: unknown;
+		};
+	};
+	const chunk = candidate.chunk;
+	return (
+		typeof candidate.id === "string" &&
+		candidate.ok === true &&
+		typeof chunk === "object" &&
+		chunk !== null &&
+		Number.isInteger(chunk.index) &&
+		typeof chunk.index === "number" &&
+		Number.isInteger(chunk.total) &&
+		typeof chunk.total === "number" &&
+		chunk.encoding === "base64" &&
+		typeof chunk.data === "string"
+	);
+}
+
+function consumeChunk(
+	message: ChunkEnvelope,
+	current: ChunkState | undefined,
+): { state: ChunkState; envelope?: Envelope<unknown> } {
+	const { index, total, data } = message.chunk;
+	if (
+		total < 2 ||
+		total > MAX_RESPONSE_CHUNKS ||
+		index < 0 ||
+		index >= total ||
+		data.length === 0
+	) {
+		throw new Error("invalid chunk metadata");
+	}
+	const bytes = decodeBase64(data);
+	const state =
+		current ??
+		({
+			total,
+			chunks: Array.from({ length: total }),
+			received: 0,
+			byteLength: 0,
+		} satisfies ChunkState);
+	if (state.total !== total || state.chunks[index]) {
+		throw new Error("inconsistent chunk sequence");
+	}
+	state.chunks[index] = bytes;
+	state.received += 1;
+	state.byteLength += bytes.byteLength;
+	if (state.byteLength > MAX_REASSEMBLED_RESPONSE_BYTES) {
+		throw new Error("response too large");
+	}
+	if (state.received !== state.total) return { state };
+
+	const joined = new Uint8Array(state.byteLength);
+	let offset = 0;
+	for (const chunk of state.chunks) {
+		if (!chunk) throw new Error("missing response chunk");
+		joined.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(joined));
+	if (!isEnvelope(parsed) || parsed.id !== message.id) {
+		throw new Error("invalid rebuilt envelope");
+	}
+	return { state, envelope: parsed };
+}
+
+function decodeBase64(value: string): Uint8Array {
+	const decodedLength = decodedBase64Length(value);
+	if (decodedLength === null) throw new Error("invalid base64 length");
+	const binary = atob(value);
+	if (binary.length !== decodedLength) throw new Error("invalid base64 data");
+	return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function toNativeConnectionError(error: unknown): ApiError {

@@ -6,6 +6,7 @@
 			"courseName": "データベース",
 			"snippet": "…第3正規化の条件は、推移的関数従属が存在しないこと…",
 			"page": 12,
+			"pageCount": 24,
 			"score": 0.93
 		},
 		{
@@ -14,6 +15,7 @@
 			"courseName": "データベース",
 			"snippet": "…正規化のメリットは更新異常の防止…",
 			"page": null,
+			"pageCount": null,
 			"score": 0.81
 		}
 	]

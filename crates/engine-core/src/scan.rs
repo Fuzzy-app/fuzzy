@@ -11,6 +11,67 @@ use crate::pattern::{
 use crate::types::{FileEntry, SavePatternGuess, ScanSnapshot, ScanWarning};
 
 const ZIP_STAGING_PREFIX: &str = ".fuzzy-internal-zip-staging-";
+const IGNORED_DIRECTORY_NAMES: &[&str] = &[
+	"$recycle.bin",
+	".angular",
+	".bzr",
+	".cache-loader",
+	".cdktf.out",
+	".eggs",
+	".fossil-settings",
+	".git",
+	".hg",
+	".hypothesis",
+	".idea",
+	".ipynb_checkpoints",
+	".julia",
+	".metadata",
+	".mypy_cache",
+	".next",
+	".nox",
+	".npm",
+	".nuxt",
+	".nyc_output",
+	".output",
+	".parcel-cache",
+	".pnpm-store",
+	".pyre",
+	".pytest_cache",
+	".pytype",
+	".ruff_cache",
+	".serverless",
+	".settings",
+	".spotlight-v100",
+	".svn",
+	".svelte-kit",
+	".terraform",
+	".terragrunt-cache",
+	".tox",
+	".trashes",
+	".turbo",
+	".venv",
+	".vite",
+	".vscode",
+	".vs",
+	".yarn",
+	"_darcs",
+	"__macosx",
+	"__pycache__",
+	"allure-report",
+	"allure-results",
+	"bower_components",
+	"carthage",
+	"coverage",
+	"cvs",
+	"deriveddata",
+	"htmlcov",
+	"jspm_packages",
+	"node_modules",
+	"playwright-report",
+	"system volume information",
+	"test-results",
+	"venv",
+];
 
 /// フォルダの再帰走査と保存パターン推定を担うトレイト。
 ///
@@ -115,6 +176,55 @@ fn scan_root(root: &Path) -> EngineResult<ScanSnapshot> {
 	})
 }
 
+/// 既知の保存済みファイル1件を、保存ルート基準の走査エントリーへ変換する。
+///
+/// コース単位の差分走査で、ルール変更前の場所に残っている登録済みファイルも
+/// 更新確認できるようにする。シンボリックリンク・保存ルート外・組み込み除外対象は
+/// 対象外にする。
+pub(crate) fn scan_registered_file(root: &Path, path: &Path) -> EngineResult<Option<FileEntry>> {
+	let metadata = match fs::symlink_metadata(path) {
+		Ok(metadata) => metadata,
+		Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(source) => return Err(path_io(path, source)),
+	};
+	if metadata.file_type().is_symlink() || !metadata.is_file() {
+		return Ok(None);
+	}
+	let canonical_root = root
+		.canonicalize()
+		.map_err(|source| path_io(root, source))?;
+	let canonical_path = path
+		.canonicalize()
+		.map_err(|source| path_io(path, source))?;
+	let Ok(relative_path) = canonical_path.strip_prefix(&canonical_root) else {
+		return Ok(None);
+	};
+	let mut ancestor = canonical_path.parent();
+	while let Some(directory) = ancestor {
+		if directory == canonical_root {
+			break;
+		}
+		let Some(name) = directory.file_name() else {
+			return Ok(None);
+		};
+		if is_ignored_directory(&canonical_root, directory, name) {
+			return Ok(None);
+		}
+		ancestor = directory.parent();
+	}
+	let relative_path = relative_path.to_path_buf();
+	let Some(file_name) = canonical_path.file_name() else {
+		return Ok(None);
+	};
+	Ok(Some(FileEntry {
+		file_name: file_name.to_string_lossy().into_owned(),
+		path: canonical_path,
+		relative_path,
+		size: metadata.len(),
+		modified_at: modified_at(&metadata),
+	}))
+}
+
 fn scan_directory(
 	root: &Path,
 	directory: &Path,
@@ -162,6 +272,11 @@ fn scan_directory(
 			continue;
 		}
 		if file_type.is_dir() {
+			if is_ignored_directory(root, &path, &child.file_name()) {
+				// 仮想環境・依存パッケージ・VCSメタデータは授業資料ではなく、
+				// 数万件規模になることがあるため正本登録と全文索引の対象外にする。
+				continue;
+			}
 			scan_directory(root, &path, entries, warnings, false)?;
 			continue;
 		}
@@ -197,6 +312,79 @@ fn scan_directory(
 	Ok(())
 }
 
+fn is_ignored_directory(root: &Path, path: &Path, name: &std::ffi::OsStr) -> bool {
+	is_ignored_directory_name(name)
+		|| name
+			.to_string_lossy()
+			.to_ascii_lowercase()
+			.starts_with("cmake-build-")
+		|| name
+			.to_string_lossy()
+			.to_ascii_lowercase()
+			.starts_with("_minted-")
+		|| is_python_environment(path)
+		|| is_project_output_directory(root, path, name)
+}
+
+fn is_ignored_directory_name(name: &std::ffi::OsStr) -> bool {
+	let name = name.to_string_lossy();
+	IGNORED_DIRECTORY_NAMES
+		.iter()
+		.any(|ignored| name.eq_ignore_ascii_case(ignored))
+}
+
+fn is_python_environment(path: &Path) -> bool {
+	path.join("pyvenv.cfg").is_file()
+		&& (path.join("Lib").join("site-packages").is_dir()
+			|| path.join("Scripts").join("python.exe").is_file()
+			|| path.join("bin").join("python").is_file())
+		|| path.join("conda-meta").is_dir()
+}
+
+fn is_project_output_directory(root: &Path, path: &Path, name: &std::ffi::OsStr) -> bool {
+	let name = name.to_string_lossy().to_ascii_lowercase();
+	let Some(parent) = path.parent() else {
+		return false;
+	};
+	let has_marker = |markers: &[&str]| markers.iter().any(|marker| parent.join(marker).is_file());
+	match name.as_str() {
+		"target" => has_marker(&["Cargo.toml", "pom.xml"]),
+		"build" => has_marker(&["build.gradle", "build.gradle.kts", "CMakeLists.txt"]),
+		"bin" | "obj" => contains_project_file(parent, root, &["csproj", "fsproj", "vbproj"]),
+		"vendor" => has_marker(&["go.mod", "Gemfile", "composer.json"]),
+		".build" => has_marker(&["Package.swift"]),
+		"pods" => has_marker(&["Podfile"]),
+		_ => false,
+	}
+}
+
+fn contains_project_file(directory: &Path, root: &Path, extensions: &[&str]) -> bool {
+	let mut current = Some(directory);
+	while let Some(path) = current {
+		if fs::read_dir(path).is_ok_and(|children| {
+			children.filter_map(Result::ok).any(|child| {
+				let child_path = child.path();
+				child.file_type().is_ok_and(|file_type| file_type.is_file())
+					&& child_path
+						.extension()
+						.and_then(|extension| extension.to_str())
+						.is_some_and(|extension| {
+							extensions
+								.iter()
+								.any(|expected| extension.eq_ignore_ascii_case(expected))
+						})
+			})
+		}) {
+			return true;
+		}
+		if path == root {
+			break;
+		}
+		current = path.parent();
+	}
+	false
+}
+
 fn path_io(path: &Path, source: std::io::Error) -> EngineError {
 	EngineError::PathIo {
 		path: path.display().to_string(),
@@ -216,7 +404,7 @@ fn scan_warning(root: &Path, path: &Path, source: &std::io::Error) -> ScanWarnin
 	}
 }
 
-fn relative_warning_path(root: &Path, path: &Path) -> PathBuf {
+pub(crate) fn relative_warning_path(root: &Path, path: &Path) -> PathBuf {
 	path.strip_prefix(root)
 		.ok()
 		.filter(|relative_path| !relative_path.as_os_str().is_empty())
@@ -227,10 +415,10 @@ fn relative_warning_path(root: &Path, path: &Path) -> PathBuf {
 fn modified_at(metadata: &fs::Metadata) -> Option<i64> {
 	let modified = metadata.modified().ok()?;
 	match modified.duration_since(UNIX_EPOCH) {
-		Ok(duration) => i64::try_from(duration.as_secs()).ok(),
-		Err(error) => i64::try_from(error.duration().as_secs())
+		Ok(duration) => i64::try_from(duration.as_nanos()).ok(),
+		Err(error) => i64::try_from(error.duration().as_nanos())
 			.ok()
-			.and_then(|seconds| seconds.checked_neg()),
+			.and_then(|nanoseconds| nanoseconds.checked_neg()),
 	}
 }
 
@@ -241,7 +429,7 @@ mod tests {
 	use std::path::PathBuf;
 	use std::time::{SystemTime, UNIX_EPOCH};
 
-	use super::{scan_directory, DefaultScanEngine, ScanEngine};
+	use super::{scan_directory, scan_registered_file, DefaultScanEngine, ScanEngine};
 
 	struct TestDirectory {
 		path: PathBuf,
@@ -310,6 +498,129 @@ mod tests {
 
 		assert_eq!(snapshot.entries.len(), 1);
 		assert_eq!(snapshot.entries[0].file_name, "公開済み資料.pdf");
+	}
+
+	#[test]
+	fn ignores_dependency_and_tool_directories_at_any_depth() {
+		let directory = TestDirectory::new("ignored-directories");
+		for relative_path in [
+			"データサイエンス基礎/.venv/Lib/site-packages/pandas/__init__.py",
+			"アプリ演習/node_modules/package/index.js",
+			"情報処理/第1回/__pycache__/answer.pyc",
+			"離散数学/.git/objects/00/hash",
+			"英語IIB/VENV/Lib/site.py",
+		] {
+			directory.create_file(relative_path, b"generated");
+		}
+		directory.create_file("データベース/第4回/正規化.pdf", b"material");
+
+		let snapshot = DefaultScanEngine.scan(&directory.path).expect("走査できる");
+
+		assert_eq!(snapshot.entries.len(), 1);
+		assert_eq!(snapshot.entries[0].file_name, "正規化.pdf");
+		assert!(snapshot.warnings.is_empty());
+	}
+
+	#[test]
+	fn detects_a_python_environment_by_structure_even_with_a_custom_name() {
+		let directory = TestDirectory::new("python-environment-signature");
+		directory.create_file("情報処理/実験環境/pyvenv.cfg", b"home = python");
+		directory.create_file(
+			"情報処理/実験環境/Lib/site-packages/numpy/__init__.py",
+			b"dependency",
+		);
+		directory.create_file("情報処理/第1回/answer.py", b"print('answer')");
+
+		let snapshot = DefaultScanEngine.scan(&directory.path).expect("走査できる");
+
+		assert_eq!(snapshot.entries.len(), 1);
+		assert_eq!(snapshot.entries[0].file_name, "answer.py");
+	}
+
+	#[test]
+	fn excludes_project_outputs_only_when_their_project_marker_exists() {
+		let directory = TestDirectory::new("project-output-signature");
+		directory.create_file("アプリ演習/Cargo.toml", b"[package]");
+		directory.create_file("アプリ演習/target/debug/app.exe", b"binary");
+		directory.create_file("コンパイラ演習/target/配布資料.pdf", b"material");
+
+		let snapshot = DefaultScanEngine.scan(&directory.path).expect("走査できる");
+
+		assert_eq!(snapshot.entries.len(), 2);
+		assert!(snapshot
+			.entries
+			.iter()
+			.any(|entry| entry.file_name == "Cargo.toml"));
+		assert!(snapshot
+			.entries
+			.iter()
+			.any(|entry| entry.file_name == "配布資料.pdf"));
+	}
+
+	#[test]
+	fn project_marker_directories_do_not_exclude_course_materials() {
+		let directory = TestDirectory::new("project-marker-directory");
+		fs::create_dir_all(directory.path.join("アプリ演習/Cargo.toml"))
+			.expect("マーカーと同名のフォルダを作成できる");
+		directory.create_file("アプリ演習/target/配布資料.pdf", b"material");
+		fs::create_dir_all(directory.path.join("情報処理/example.csproj"))
+			.expect("プロジェクトファイルと同名のフォルダを作成できる");
+		directory.create_file("情報処理/bin/課題データ.bin", b"material");
+
+		let snapshot = DefaultScanEngine.scan(&directory.path).expect("走査できる");
+
+		assert_eq!(snapshot.entries.len(), 2);
+		assert!(snapshot
+			.entries
+			.iter()
+			.any(|entry| entry.file_name == "配布資料.pdf"));
+		assert!(snapshot
+			.entries
+			.iter()
+			.any(|entry| entry.file_name == "課題データ.bin"));
+	}
+
+	#[test]
+	fn registered_files_cannot_bypass_built_in_directory_exclusions() {
+		let directory = TestDirectory::new("registered-file-exclusion");
+		directory.create_file("アプリ演習/.venv/Lib/site-packages/sample.py", b"generated");
+		directory.create_file("アプリ演習/第1回/answer.py", b"material");
+
+		let ignored = scan_registered_file(
+			&directory.path,
+			&directory
+				.path
+				.join("アプリ演習/.venv/Lib/site-packages/sample.py"),
+		)
+		.expect("既登録ファイルを確認できる");
+		let material = scan_registered_file(
+			&directory.path,
+			&directory.path.join("アプリ演習/第1回/answer.py"),
+		)
+		.expect("既登録ファイルを確認できる");
+
+		assert!(ignored.is_none());
+		assert_eq!(
+			material.expect("通常資料は対象になる").file_name,
+			"answer.py"
+		);
+	}
+
+	#[test]
+	fn keeps_source_data_and_binary_files_outside_ignored_directories() {
+		let directory = TestDirectory::new("all-material-types");
+		for relative_path in [
+			"アプリ演習/main.py",
+			"アプリ演習/settings.json",
+			"アプリ演習/notebook.ipynb",
+			"アプリ演習/program.exe",
+		] {
+			directory.create_file(relative_path, b"material");
+		}
+
+		let snapshot = DefaultScanEngine.scan(&directory.path).expect("走査できる");
+
+		assert_eq!(snapshot.entries.len(), 4);
 	}
 
 	#[test]
