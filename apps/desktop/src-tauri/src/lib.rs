@@ -7,14 +7,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use engine_core::index::{resolve_index_path, DefaultIndexEngine, IndexEngine};
 use engine_core::library::{
-	LibraryMaintenance, LibraryMaintenanceSummary, LibraryMaintenanceWarning,
+	LibraryMaintenance, LibraryMaintenanceProgress, LibraryMaintenanceSummary,
+	LibraryMaintenanceWarning,
 };
 use engine_core::scan::{DefaultScanEngine, ScanEngine};
 use engine_core::types::FileEntry;
 use engine_core::{resolve_db_path, Database, ExtensionRecoveryStatus, ExtensionSetupStatus};
 use native_host_installation::NativeHostInstallationStatus;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogButtons, MessageDialogKind};
 
 struct AppState {
@@ -22,6 +23,8 @@ struct AppState {
 	index_engine: Mutex<IndexRuntimeState>,
 	native_host_installation: Mutex<NativeHostInstallationStatus>,
 }
+
+const LIBRARY_MAINTENANCE_PROGRESS_EVENT: &str = "library-maintenance-progress";
 
 struct DatabaseRuntimeState {
 	database: Option<Database>,
@@ -102,9 +105,12 @@ struct PatternCandidate {
 	description: String,
 	folders: Vec<String>,
 	course_segment_index: Option<usize>,
-	match_score: u8,
+	file_name_template: Option<String>,
+	match_score: Option<u8>,
+	evaluated_count: usize,
 	reason: String,
 	recommended: bool,
+	requires_confirmation: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -220,20 +226,37 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 	let folders = representative_folders(&snapshot.entries);
 
 	if guesses.is_empty() {
+		if !snapshot.entries.is_empty() {
+			return Ok(vec![PatternCandidate {
+				id: "manual-unclassified".to_string(),
+				name: "推定できません".to_string(),
+				description:
+					"年度・学期・科目の役割を一意に判定できないため、科目を自動登録しません。"
+						.to_string(),
+				folders: representative_folders(&snapshot.entries),
+				course_segment_index: None,
+				file_name_template: None,
+				match_score: None,
+				evaluated_count: 0,
+				reason:
+					"内容を確認してこの候補を選ぶと、既存資料は未分類のまま安全に登録されます。"
+						.to_string(),
+				recommended: false,
+				requires_confirmation: true,
+			}]);
+		}
 		return Ok(vec![PatternCandidate {
 			id: "new-folder".to_string(),
 			name: "新しい保存先".to_string(),
 			description: "既存の並びに依存せず、選択した初期ルールで整理を始めます。".to_string(),
 			folders,
 			course_segment_index: None,
-			match_score: if snapshot.entries.is_empty() { 100 } else { 0 },
-			reason: if snapshot.entries.is_empty() {
-				"既存ファイルがないため、新しい保存先として使用できます。".to_string()
-			} else {
-				"十分に繰り返されるフォルダー構成が見つからなかったため、初期ルールを使用します。"
-					.to_string()
-			},
+			file_name_template: None,
+			match_score: Some(100),
+			evaluated_count: 0,
+			reason: "既存ファイルがないため、新しい保存先として使用できます。".to_string(),
 			recommended: true,
+			requires_confirmation: false,
 		}]);
 	}
 
@@ -242,22 +265,39 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 		.enumerate()
 		.map(|(index, guess)| {
 			let template = guess.directory_template;
-			let course_segment_index = template
-				.split(['/', '\\'])
-				.position(|segment| segment.contains("{course}"));
+			let file_name_template = guess.file_name_template;
+			let file_name_description = file_name_template
+				.as_deref()
+				.map(display_file_name_pattern)
+				.unwrap_or("ファイル名規則なし");
+			let mut name = display_pattern_name(&template);
+			if file_name_template.is_some() {
+				name.push_str(" + ");
+				name.push_str(file_name_description);
+			}
 			PatternCandidate {
 				id: format!("estimated-{}", index + 1),
-				name: display_pattern_name(&template),
-				description: format!("既存ファイルから推定した構成: {template}"),
-				folders: folders.clone(),
-				course_segment_index,
-				match_score: (guess.confidence.clamp(0.0, 1.0) * 100.0).round() as u8,
+				name,
+				description: format!(
+					"既存ファイルから推定した構成です。ファイル名: {file_name_description}"
+				),
+				folders: guess
+					.representative_paths
+					.into_iter()
+					.map(|path| path.to_string_lossy().replace('\\', "/"))
+					.collect(),
+				course_segment_index: Some(guess.course_segment_index),
+				file_name_template,
+				match_score: Some((guess.confidence.clamp(0.0, 1.0) * 100.0).round() as u8),
+				evaluated_count: guess.evaluated_count,
 				reason: format!(
-					"既存ファイル{}件がこの構成に一致しました。読み取り警告は{}件です。",
+					"評価可能な{}件中{}件が一致しました。読み取り警告は{}件です。",
+					guess.evaluated_count,
 					guess.matched_count,
 					snapshot.warnings.len()
 				),
 				recommended: index == 0,
+				requires_confirmation: false,
 			}
 		})
 		.collect())
@@ -273,7 +313,15 @@ async fn save_initial_setup(
 ) -> Result<InitialSetupResponse, String> {
 	run_blocking_command(move || {
 		let state = app.state::<AppState>();
-		save_initial_setup_blocking(path, pattern, rule, course_overrides, state.inner())
+		let mut progress = |event| emit_library_maintenance_progress(&app, event);
+		save_initial_setup_blocking(
+			path,
+			pattern,
+			rule,
+			course_overrides,
+			state.inner(),
+			&mut progress,
+		)
 	})
 	.await
 }
@@ -284,6 +332,7 @@ fn save_initial_setup_blocking(
 	rule: RuleSelection,
 	course_overrides: Vec<CourseOverrideSelection>,
 	state: &AppState,
+	progress: &mut dyn FnMut(LibraryMaintenanceProgress),
 ) -> Result<InitialSetupResponse, String> {
 	if course_overrides.len() > 32
 		|| course_overrides
@@ -325,7 +374,12 @@ fn save_initial_setup_blocking(
 	let mut maintenance = match state.index_engine.lock() {
 		Ok(mut index_state) => {
 			let maintenance_result = match index_state.ready_mut() {
-				Ok(index_engine) => LibraryMaintenance::reconcile(database, index_engine, false),
+				Ok(index_engine) => LibraryMaintenance::reconcile_with_progress(
+					database,
+					index_engine,
+					false,
+					progress,
+				),
 				Err(error) => Err(engine_core::EngineError::Index { message: error }),
 			};
 			match maintenance_result {
@@ -582,7 +636,8 @@ async fn rebuild_library(
 ) -> Result<LibraryMaintenanceSummary, String> {
 	run_blocking_command(move || {
 		let state = app.state::<AppState>();
-		rebuild_library_blocking(rebuild_index, state.inner())
+		let mut progress = |event| emit_library_maintenance_progress(&app, event);
+		rebuild_library_blocking(rebuild_index, state.inner(), &mut progress)
 	})
 	.await
 }
@@ -590,6 +645,7 @@ async fn rebuild_library(
 fn rebuild_library_blocking(
 	rebuild_index: bool,
 	state: &AppState,
+	progress: &mut dyn FnMut(LibraryMaintenanceProgress),
 ) -> Result<LibraryMaintenanceSummary, String> {
 	let mut database_state = state.database.lock().map_err(|_| {
 		eprintln!("ライブラリ再構築時にSQLiteの状態ロックが破損しています");
@@ -623,7 +679,7 @@ fn rebuild_library_blocking(
 	index_state.needs_rebuild = true;
 	let result = {
 		let index_engine = index_state.ready_mut()?;
-		LibraryMaintenance::reconcile(database, index_engine, rebuild_index)
+		LibraryMaintenance::reconcile_with_progress(database, index_engine, rebuild_index, progress)
 	};
 	match result {
 		Ok(summary) => {
@@ -637,6 +693,12 @@ fn rebuild_library_blocking(
 					.to_string(),
 			)
 		}
+	}
+}
+
+fn emit_library_maintenance_progress(app: &AppHandle, progress: LibraryMaintenanceProgress) {
+	if let Err(error) = app.emit(LIBRARY_MAINTENANCE_PROGRESS_EVENT, progress) {
+		eprintln!("ライブラリ整合処理の進捗を画面へ通知できませんでした: {error}");
 	}
 }
 
@@ -1420,6 +1482,13 @@ fn display_pattern_name(template: &str) -> String {
 		.join(" / ")
 }
 
+fn display_file_name_pattern(template: &str) -> &'static str {
+	match template {
+		"{section}_{filename}" => "回次付きファイル名",
+		_ => "固有のファイル名規則",
+	}
+}
+
 fn native_host_registration_status() -> NativeHostInstallationStatus {
 	match native_host_installation::register_from_current_executable() {
 		Ok(()) => NativeHostInstallationStatus::ready(),
@@ -1578,7 +1647,7 @@ mod tests {
 		create_fresh_database_from_unavailable, database_needs_index_rebuild, display_pattern_name,
 		index_storage_metadata_exists, quarantine_database_files,
 		recover_unavailable_database_from_backup, repair_index_storage, run_blocking_command,
-		DatabaseRuntimeState, IndexRuntimeState,
+		scan_existing_structure_blocking, DatabaseRuntimeState, IndexRuntimeState,
 	};
 
 	fn test_directory(name: &str) -> PathBuf {
@@ -1598,6 +1667,53 @@ mod tests {
 			display_pattern_name("{term}/{course}/第{section}回"),
 			"学期 / 科目 / 回次"
 		);
+	}
+
+	#[test]
+	fn scan_candidates_keep_deep_roles_file_rules_and_candidate_examples() {
+		let directory = test_directory("deep-pattern");
+		let first = directory.join("2026年度/1年前期/画像処理/第3回/資料.txt");
+		let second = directory.join("2026年度/1年前期/画像処理/第4回/演習.txt");
+		std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+		std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+		std::fs::write(&first, "image").unwrap();
+		std::fs::write(&second, "filter").unwrap();
+
+		let candidates =
+			scan_existing_structure_blocking(directory.to_string_lossy().into_owned()).unwrap();
+
+		assert_eq!(candidates.len(), 1);
+		assert_eq!(candidates[0].course_segment_index, Some(2));
+		assert_eq!(candidates[0].match_score, Some(100));
+		assert_eq!(candidates[0].evaluated_count, 2);
+		assert_eq!(candidates[0].file_name_template, None);
+		assert!(candidates[0]
+			.folders
+			.iter()
+			.all(|folder| folder.contains("画像処理")));
+		assert!(!candidates[0].requires_confirmation);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn ambiguous_scan_returns_an_unselected_confirmation_candidate_without_zero_percent() {
+		let directory = test_directory("ambiguous-pattern");
+		for relative in ["資料/共有/A.txt", "配布物/共通/B.txt"] {
+			let path = directory.join(relative);
+			std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+			std::fs::write(path, "sample").unwrap();
+		}
+
+		let candidates =
+			scan_existing_structure_blocking(directory.to_string_lossy().into_owned()).unwrap();
+
+		assert_eq!(candidates.len(), 1);
+		assert_eq!(candidates[0].id, "manual-unclassified");
+		assert_eq!(candidates[0].match_score, None);
+		assert_eq!(candidates[0].course_segment_index, None);
+		assert!(!candidates[0].recommended);
+		assert!(candidates[0].requires_confirmation);
+		std::fs::remove_dir_all(directory).unwrap();
 	}
 
 	#[test]

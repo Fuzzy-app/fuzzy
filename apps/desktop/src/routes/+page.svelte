@@ -1,11 +1,17 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 	import {
 		RULE_PRESETS,
 		createRulePreviewValues,
 		previewRulePattern,
 	} from "@fuzzy/shared";
+	import type {
+		ExtensionRecoveryStatus,
+		LibraryMaintenanceProgress,
+	} from "@fuzzy/shared";
 	import { getExtensionRecoveryStatusClient } from "$lib/setup/extension-recovery";
+	import { isTauriRuntime } from "$lib/setup/extension-install";
 	import {
 		getSetupStatusClient,
 		pickBaseFolderClient,
@@ -16,7 +22,6 @@
 	import ExtensionInstallStep from "$lib/setup/ExtensionInstallStep.svelte";
 	import ExtensionRecoveryPanel from "$lib/setup/ExtensionRecoveryPanel.svelte";
 	import StartupRecoveryPanel from "$lib/setup/StartupRecoveryPanel.svelte";
-	import type { ExtensionRecoveryStatus } from "@fuzzy/shared";
 	import type {
 		InitialRuleOption,
 		SetupDraft,
@@ -68,6 +73,7 @@
 	let isPickingFolder = false;
 	let isScanning = false;
 	let isSaving = false;
+	let maintenanceProgress: LibraryMaintenanceProgress | null = null;
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
 	let extensionRecoveryStatus: ExtensionRecoveryStatus | null = null;
@@ -215,9 +221,7 @@
 		try {
 			const candidates = await scanExistingStructureClient(path);
 			const selectedCandidate =
-				candidates.find((candidate) => candidate.recommended) ??
-				candidates[0] ??
-				null;
+				candidates.find((candidate) => candidate.recommended) ?? null;
 
 			draft = {
 				...draft,
@@ -270,10 +274,20 @@
 		}
 
 		isSaving = true;
+		maintenanceProgress = null;
 		errorMessage = null;
 		successMessage = null;
+		let unlistenProgress: UnlistenFn | null = null;
 
 		try {
+			if (isTauriRuntime()) {
+				unlistenProgress = await listen<LibraryMaintenanceProgress>(
+					"library-maintenance-progress",
+					({ payload }) => {
+						maintenanceProgress = payload;
+					},
+				);
+			}
 			const saved = await saveInitialSetupClient({
 				path: draft.baseFolderPath,
 				pattern: selectedCandidate,
@@ -290,8 +304,36 @@
 		} catch {
 			errorMessage = "初期セットアップの保存に失敗しました。";
 		} finally {
+			unlistenProgress?.();
 			isSaving = false;
 		}
+	}
+
+	function maintenancePhaseLabel(
+		progress: LibraryMaintenanceProgress | null,
+	): string {
+		if (progress?.phase === "completed") {
+			return progress.state === "failed"
+				? "既存資料を確認できませんでした"
+				: "既存資料の確認が完了しました";
+		}
+		return "既存資料を確認しています";
+	}
+
+	function maintenanceProgressPercent(
+		progress: LibraryMaintenanceProgress | null,
+	): number | null {
+		if (
+			!progress ||
+			progress.totalCount === null ||
+			progress.totalCount === 0
+		) {
+			return null;
+		}
+		return Math.min(
+			100,
+			Math.round((progress.completedCount / progress.totalCount) * 100),
+		);
 	}
 
 	$: selectedCandidate =
@@ -528,6 +570,9 @@
 												{#if candidate.recommended}
 													<span class="badge">おすすめ</span>
 												{/if}
+												{#if candidate.requiresConfirmation}
+													<span class="badge warning">要確認</span>
+												{/if}
 											</div>
 											<p>{candidate.description}</p>
 											<p class="reason">{candidate.reason}</p>
@@ -535,8 +580,16 @@
 
 										<div class="pattern-side">
 											<div class="score-box">
-												<span>一致度</span>
-												<strong>{candidate.matchScore}%</strong>
+												<span
+													>{candidate.matchScore === null
+														? "判定"
+														: "一致度"}</span
+												>
+												<strong
+													>{candidate.matchScore === null
+														? "要確認"
+														: `${candidate.matchScore}%`}</strong
+												>
 											</div>
 											<div
 												class="example-box"
@@ -641,7 +694,12 @@
 									<strong>候補順位:</strong>
 									{selectedCandidateRank} / {draft.candidates.length}
 								</p>
-								<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
+								<p>
+									<strong>一致度:</strong>
+									{selectedCandidate.matchScore === null
+										? "要確認"
+										: `${selectedCandidate.matchScore}%`}
+								</p>
 							{/if}
 							<p>
 								<strong>初期ルール:</strong>
@@ -657,6 +715,47 @@
 							</p>
 						</div>
 					</section>
+
+					{#if isSaving}
+						<section class="maintenance-progress-card" aria-live="polite">
+							<div class="maintenance-progress-heading">
+								<div>
+									<p class="section-label">初期設定を保存中</p>
+									<strong>{maintenancePhaseLabel(maintenanceProgress)}</strong>
+								</div>
+								{#if maintenanceProgress?.totalCount !== null && maintenanceProgress}
+									<span>
+										{maintenanceProgress.completedCount.toLocaleString()} /
+										{maintenanceProgress.totalCount.toLocaleString()} 件
+									</span>
+								{:else}
+									<span>確認中</span>
+								{/if}
+							</div>
+							<div
+								class:indeterminate={maintenanceProgressPercent(
+									maintenanceProgress,
+								) === null}
+								class="maintenance-progress-track"
+								role="progressbar"
+								aria-label="既存資料の取り込み進捗"
+								aria-valuemin="0"
+								aria-valuemax="100"
+								aria-valuenow={maintenanceProgressPercent(
+									maintenanceProgress,
+								) ?? undefined}
+							>
+								<span
+									style:width={`${
+										maintenanceProgressPercent(maintenanceProgress) ?? 30
+									}%`}
+								></span>
+							</div>
+							<p>
+								資料ファイルは移動・削除しません。この画面を開いたままお待ちください。
+							</p>
+						</section>
+					{/if}
 
 					<div class="action-row">
 						{#if setupStatus.done}
@@ -804,6 +903,66 @@
 	.selection-summary,
 	.action-row {
 		display: flex;
+	}
+
+	.maintenance-progress-card {
+		margin-top: 18px;
+		padding: 16px;
+		border: 1px solid rgba(109, 92, 246, 0.26);
+		border-radius: 10px;
+		background: rgba(247, 245, 255, 0.92);
+	}
+
+	.maintenance-progress-heading {
+		display: flex;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: 16px;
+	}
+
+	.maintenance-progress-heading strong {
+		display: block;
+		margin-top: 4px;
+		color: #3f376e;
+	}
+
+	.maintenance-progress-heading > span,
+	.maintenance-progress-card > p {
+		color: #737995;
+		font-size: 0.74rem;
+	}
+
+	.maintenance-progress-card > p {
+		margin: 10px 0 0;
+	}
+
+	.maintenance-progress-track {
+		height: 8px;
+		margin-top: 12px;
+		overflow: hidden;
+		border-radius: 999px;
+		background: rgba(109, 92, 246, 0.14);
+	}
+
+	.maintenance-progress-track span {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: linear-gradient(90deg, #7968fa, #9d8bff);
+		transition: width 180ms ease;
+	}
+
+	.maintenance-progress-track.indeterminate span {
+		animation: maintenance-progress 1.2s ease-in-out infinite alternate;
+	}
+
+	@keyframes maintenance-progress {
+		from {
+			transform: translateX(-100%);
+		}
+		to {
+			transform: translateX(333%);
+		}
 	}
 
 	.brand {

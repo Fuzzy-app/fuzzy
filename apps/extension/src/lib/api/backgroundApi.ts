@@ -22,6 +22,7 @@ import type {
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
 	RebuildLibraryRequest,
+	ReconcileCourseFilesRequest,
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
@@ -52,6 +53,7 @@ const BACKGROUND_API_METHODS = [
 	"getLatestSyncEvent",
 	"getAssignmentChanges",
 	"rebuildLibrary",
+	"reconcileCourseFiles",
 ] as const;
 
 export type BackgroundApiMethod = (typeof BACKGROUND_API_METHODS)[number];
@@ -167,7 +169,27 @@ function isRequestForMethod(method: BackgroundApiMethod, request: unknown): bool
 				Object.keys(request).every((key) => key === "rebuildIndex") &&
 				(request.rebuildIndex === undefined || typeof request.rebuildIndex === "boolean")
 			);
+		case "reconcileCourseFiles":
+			return isReconcileCourseFilesRequest(request);
 	}
+}
+
+function isReconcileCourseFilesRequest(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		Object.keys(value).every((key) => key === "course") &&
+		isRecord(value.course) &&
+		typeof value.course.moodleCourseId === "string" &&
+		/^[A-Za-z0-9._:-]{1,128}$/.test(value.course.moodleCourseId) &&
+		typeof value.course.name === "string" &&
+		value.course.name.trim().length > 0 &&
+		value.course.name.length <= 1_000 &&
+		(value.course.academicYear === null ||
+			(Number.isSafeInteger(value.course.academicYear) &&
+				Number(value.course.academicYear) >= 1900 &&
+				Number(value.course.academicYear) <= 9999)) &&
+		isNullableString(value.course.term)
+	);
 }
 
 function isMoodleCourseContext(value: unknown): boolean {
@@ -341,6 +363,10 @@ export class BackgroundApiClient implements BackgroundApi {
 
 	rebuildLibrary(request: RebuildLibraryRequest): Promise<LibraryMaintenanceSummary> {
 		return this.#call("rebuildLibrary", request);
+	}
+
+	reconcileCourseFiles(request: ReconcileCourseFilesRequest): Promise<LibraryMaintenanceSummary> {
+		return this.#call("reconcileCourseFiles", request);
 	}
 
 	async #call<T>(method: BackgroundApiMethod, request: unknown): Promise<T> {

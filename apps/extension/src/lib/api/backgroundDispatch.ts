@@ -7,6 +7,7 @@ import type {
 	FuzzyApiClient,
 	NotificationRuleInput,
 	RebuildLibraryRequest,
+	ReconcileCourseFilesRequest,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
 	UpdateCourseFolderNameRequest,
@@ -79,5 +80,7 @@ export async function callBackgroundApi(
 			);
 		case "rebuildLibrary":
 			return client.rebuildLibrary(message.request as RebuildLibraryRequest);
+		case "reconcileCourseFiles":
+			return client.reconcileCourseFiles(message.request as ReconcileCourseFilesRequest);
 	}
 }

@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-25
+最終更新: 2026-07-28
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。wire型の正本は用途に応じて`crates/engine-core`または`apps/native-host/src/api_types.rs`のRust DTOとし、`ts-rs`で`packages/shared/src/generated/`へTS型を自動生成する（生成物は手編集しない）。`packages/shared/src/types.ts`は生成型の再exportを基本とし、未移行の暫定TS型だけを直接定義する。絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -21,13 +21,18 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 // レスポンス（失敗）
 { "id": "uuid", "ok": false, "error": { "code": "NOT_FOUND", "message": "..." } }
+
+// 900KiBを超えるレスポンスの分割フレーム
+{ "id": "uuid", "ok": true, "chunk": { "index": 0, "total": 2, "encoding": "base64", "data": "..." } }
 ```
 
 `id`は1〜128文字のASCII英数字・ピリオド・アンダースコア・コロン・ハイフン、`command`は1〜64文字のASCII英数字とする。envelopeおよび各payloadの未知フィールドは拒否する。不正な`id`はレスポンスへ反射せず、`id: null`の`INVALID_REQUEST`を返す。
 
+ホスト→拡張機能のレスポンスJSONが900KiBを超える場合、native-hostは元のレスポンスenvelope全体のUTF-8 JSONを512KiBずつBase64化し、同じ`id`を持つ`chunk`フレームとして順番に送る。`index`は0始まり、`total`は2〜128、再構築後の上限は64MiBとする。クライアントは全チャンクを検証してから元envelopeを1回だけ処理し、欠落・重複・不正Base64・異なる`total`・上限超過を`INVALID_RESPONSE`として扱う。64MiBを超える結果は、小さな`RESULT_TOO_LARGE`エラーへ置き換える。
+
 ### 1.2 コマンド一覧
 
-現在のNative Messaging契約バージョンは`3`とする。Moodle課題同期を安定ID付きのコース完全スナップショットへ変更し、`ping`で契約バージョンを照合するため、契約バージョン`2`以前の拡張機能またはnative-hostは互換として扱わない。
+現在のNative Messaging契約バージョンは`5`とする。検索結果へ索引作成時の総ページ数を追加し、`ping`で契約バージョンを照合するため、契約バージョン`4`以前の拡張機能またはnative-hostは互換として扱わない。
 
 | command                    | 用途                      | payload → data（概要）                                  |
 |----------------------------|-------------------------|-----------------------------------------------------|
@@ -41,7 +46,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `appendCheckSimilarFileChunk` | 類似照合用資料のBase64チャンク追加 | `{ transferId, chunkIndex, dataBase64 }` → `{ ok: true }` |
 | `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
 | `checkSimilarFiles`        | 転送済み内容による保存前の類似ファイル検知 | `{ transferId, fileMeta }` → `SimilarFileMatch[]` |
-| `search`                   | 全文検索（該当箇所ジャンプ用のページ情報含む） | `{ query }` → `SearchResult[]`                      |
+| `search`                   | 全文検索（該当ページと総ページ数を含む） | `{ query }` → `SearchResult[]`                      |
 | `getDashboard`             | コース別ダッシュボード集計           | `{}` → `DashboardSummary`                           |
 | `getDeadlines`             | 締切一覧取得（フィルタ可）           | `{ filter? }` → `Assignment[]`                      |
 | `syncMoodleAssignments`    | Moodleコースの課題完全スナップショット同期 | `{ trigger, course, assignments }` → `DataSyncEvent` |
@@ -59,8 +64,9 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `exportData`               | バックアップ用エクスポート           | `{ filePath }` → `{ filePath }`                     |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 | `rebuildLibrary`           | 保存ルートの再走査・SQLite注釈と全文索引の整合 | `{ rebuildIndex? }` → `LibraryMaintenanceSummary`   |
+| `reconcileCourseFiles`     | 表示中Moodleコースに限定したファイル差分走査 | `{ course: SyncMoodleCourseRequest }` → `LibraryMaintenanceSummary` |
 
-`ping.protocolVersion`は現在値`3`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
+`ping.protocolVersion`は現在値`5`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
 
 `search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルだけを返す。
 
@@ -81,13 +87,16 @@ interface LibraryMaintenanceSummary {
 	registeredFileCount: number;
 	updatedFileCount: number;
 	indexedFileCount: number;
+	reusedFingerprintCount: number;
 	missingFileCount: number;
 	skippedFileCount: number;
 	warnings: LibraryMaintenanceWarning[];
 }
 ```
 
-`rebuildIndex`の省略時は`false`とし、新規・本文変更・索引メタデータ欠落の資料だけを索引へ反映する。`true`では既存の全文索引と索引メタデータを空にしてから、走査時点で実在する対応資料を再構築する。いずれもSQLiteに設定済みの保存ルートを走査し、新規資料の登録、既存資料の注釈更新、ルール適合状況と重複候補の再計算を行うが、利用者のファイルを移動・削除しない。`warnings.path`は保存ルートからの相対パスだけとし、絶対パスを返さない。native-hostへ接続できない場合はモックで成功を偽装せず`NO_NATIVE_HOST`を返す。
+`rebuildIndex`の省略時は`false`とし、新規・本文変更・索引メタデータ欠落の資料だけを索引へ反映する。`true`では既存の全文索引と索引メタデータを空にしてから、走査時点で実在する対応資料を再構築する。通常再走査では、パス・サイズ・ファイルシステム更新日時が前回観測と一致する資料のBLAKE3／SimHashを再利用し、その件数を`reusedFingerprintCount`で返す。いずれもSQLiteに設定済みの保存ルートを走査し、新規資料の登録、既存資料の注釈更新、ルール適合状況と重複候補の再計算を行うが、利用者のファイルを移動・削除しない。`warnings.path`は保存ルートからの相対パスだけとし、絶対パスを返さない。native-hostへ接続できない場合はモックで成功を偽装せず`NO_NATIVE_HOST`を返す。
+
+`reconcileCourseFiles`は、認証済みの完全な`course/view.php`を表示したときに拡張機能から非同期で呼ぶ。現在の保存ルールとコースフォルダー名から探索起点を決め、新規ファイルの再帰探索、登録済みファイルのサイズ・ナノ秒更新日時の比較、変更時だけの再ハッシュ・再索引、指定コースに属する欠損確認を行う。ルール変更前の場所に残る登録済みファイルも個別に確認し、対象外コースのフォルダーは探索しない。同一コースの同時要求は共有し、成功後5分間の再要求はbackgroundで抑制する。常時監視は行わず、利用者ファイルの移動・削除もしない。
 
 `syncMoodleAssignments`は次の形式を使用する。
 
@@ -277,9 +286,41 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 | `import_backup` | OS選択・確認ダイアログを経てSQLiteバックアップを復元し、索引を再構築 | `()` → `{ cancelled, imported, recoveryCopyPath?, maintenance?, maintenanceError? }` |
 | `create_fresh_database` | 確認後に開けないDBを別名で保全し、新規SQLite正本を作成 | `()` → `{ cancelled, created, recoveryCopyPath?, indexError? }` |
 
+`PatternCandidate`は次の形式を使用する。推定不能時は`matchScore: null`、`courseSegmentIndex: null`、`requiresConfirmation: true`とし、`recommended`にせず利用者の明示選択を待つ。
+
+```ts
+interface PatternCandidate {
+	id: string;
+	name: string;
+	description: string;
+	folders: string[];
+	courseSegmentIndex: number | null;
+	fileNameTemplate: string | null;
+	matchScore: number | null;
+	evaluatedCount: number;
+	reason: string;
+	recommended: boolean;
+	requiresConfirmation: boolean;
+}
+```
+
+`save_initial_setup`と`rebuild_library`の実行中は、`library-maintenance-progress`イベントで次の値を通知する。`completedCount`は同じフェーズ内で減少せず、成功・警告付き成功・失敗のいずれでも最後に`phase: "completed"`の終端イベントを送る。絶対パス、ファイル名、本文は含めない。
+
+```ts
+interface LibraryMaintenanceProgress {
+	phase: "scanning" | "registering" | "indexing" | "finalizing" | "completed";
+	state: "running" | "completed" | "completedWithWarnings" | "failed";
+	completedCount: number;
+	totalCount: number | null;
+	warningCount: number;
+}
+```
+
 `pick_base_folder` 等の実体は `crates/engine-core` の `ScanEngine` を呼び出す（`apps/desktop/src-tauri` と `apps/native-host` の両方が同じ `crates/engine-core` に依存する設計。`docs/仕様書.md` 3.3節）。
 
-`save_initial_setup`は、選択フォルダーの実体確認と正規化、ルールテンプレート検証を行った後、`app_settings.base_folder_path`、推定候補ID、推定パターン内の科目セグメント位置、初期コース別候補、`global_rule`、保存日時を1つのSQLiteトランザクションで保存する。続けて保存ルートを走査し、既存資料をSQLiteへ登録して本文検索索引、ルール適合注釈、重複候補を作成する。既存ファイルの移動・削除は行わず、取り込み件数と警告は`maintenance`で画面へ返す。設定確定後の走査または初期コース別例外の同期だけが失敗した場合、保存済み設定を失敗扱いにせず`maintenance.warnings`へ追加し、利用者が前の画面へ戻って同じ設定を再保存できるようにする。`get_setup_status`は保存日時だけでなく保存ルートとグローバルルールが揃っている場合に限って`done: true`を返し、localStorageやIndexedDBを完了判定に使わない。
+`save_initial_setup`は、選択フォルダーの実体確認と正規化、ルールテンプレート検証を行った後、`app_settings.base_folder_path`、推定候補ID、推定パターン内の科目セグメント位置、初期コース別候補、`global_rule`、保存日時を1つのSQLiteトランザクションで保存する。続けて保存ルートを走査し、既存資料をSQLiteへ登録して本文検索索引、ルール適合注釈、重複候補を作成する。初期走査と再走査では仮想環境、依存パッケージ、VCS、OS・ツールキャッシュ、構造から判定できるビルド生成物を探索しない。除外フォルダー外のソース・データ・設定・バイナリは拡張子だけで除外せず、本文抽出非対応のバイナリはハッシュ登録までとする。既存ファイルの移動・削除は行わず、取り込み件数と警告は`maintenance`で画面へ返す。設定確定後の走査または初期コース別例外の同期だけが失敗した場合、保存済み設定を失敗扱いにせず`maintenance.warnings`へ追加し、利用者が前の画面へ戻って同じ設定を再保存できるようにする。`get_setup_status`は保存日時だけでなく保存ルートとグローバルルールが揃っている場合に限って`done: true`を返し、localStorageやIndexedDBを完了判定に使わない。
+
+`search`の`page`は本文が一致したPDF内の1始まりページ番号、`pageCount`は索引作成時に同じPDFページツリーから取得した総ページ数である。backendは`page >= 1`かつ`page <= pageCount`を満たす値だけを返し、整合しない古い索引値は`page: null`へ落とす。拡張機能は総ページ数がある場合に`page / pageCount`を表示し、内部の抽出方式や索引フェーズ名は利用者へ表示しない。
 
 `rebuild_library`は利用者が復旧画面のボタンを押した場合だけ実行し、Native Messagingの`rebuildLibrary`と同じ`LibraryMaintenanceSummary`を返す。保存ルート上で見つからないSQLite行は`files.missing_at`を付けて履歴として保持し、通常のダッシュボード、ルール違反、重複候補、全文検索から除外する。再び同じパスに現れた場合は欠損状態を解除して再索引する。`missingFileCount`は今回の走査後も見つからない登録済み資料の件数であり、利用者の資料ファイルを移動・削除しない。全文索引を明示的に作り直す復旧操作では`rebuildIndex: true`を渡す。走査中はブラウザ側の保存処理と競合しないよう、画面で資料保存の完了とブラウザ終了を案内する。
 

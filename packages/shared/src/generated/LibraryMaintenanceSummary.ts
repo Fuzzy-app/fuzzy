@@ -9,6 +9,7 @@ export type LibraryMaintenanceSummary = {
   registeredFileCount: number;
   updatedFileCount: number;
   indexedFileCount: number;
+  reusedFingerprintCount: number;
   missingFileCount: number;
   skippedFileCount: number;
   warnings: Array<LibraryMaintenanceWarning>;

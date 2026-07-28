@@ -42,9 +42,12 @@ const previewCandidates: PatternCandidate[] = [
 		description: "年度単位でまとめつつ、各科目の中に課題フォルダを配置する構成です。",
 		folders: ["2026", ...createPreviewCourseFolders("2026")],
 		courseSegmentIndex: 1,
+		fileNameTemplate: null,
 		matchScore: 92,
+		evaluatedCount: 12,
 		reason: "年度フォルダと科目名フォルダの並びが最も多く見つかりました。",
 		recommended: true,
+		requiresConfirmation: false,
 	},
 	{
 		id: "course-assignment",
@@ -52,9 +55,12 @@ const previewCandidates: PatternCandidate[] = [
 		description: "シンプルに科目ごとで分け、その下に課題を入れる構成です。",
 		folders: createPreviewCourseFolders(),
 		courseSegmentIndex: 0,
+		fileNameTemplate: null,
 		matchScore: 76,
+		evaluatedCount: 12,
 		reason: "年度がないフォルダも一部含まれていたため候補として残しています。",
 		recommended: false,
+		requiresConfirmation: false,
 	},
 	{
 		id: "download-flat",
@@ -62,9 +68,12 @@ const previewCandidates: PatternCandidate[] = [
 		description: "ダウンロード先を固定し、課題名だけで管理する構成です。",
 		folders: previewCourses.map(({ name, assignment }) => `${name}_${assignment}`),
 		courseSegmentIndex: null,
+		fileNameTemplate: null,
 		matchScore: 41,
+		evaluatedCount: 12,
 		reason: "課題名のみのフォルダが少数存在しました。",
 		recommended: false,
+		requiresConfirmation: false,
 	},
 ];
 
@@ -90,6 +99,7 @@ export const previewSetupAdapter: SetupRuntime = {
 						registeredFileCount: 0,
 						updatedFileCount: 0,
 						indexedFileCount: 0,
+						reusedFingerprintCount: 0,
 						missingFileCount: 0,
 						skippedFileCount: 0,
 						warnings: [],
@@ -131,12 +141,20 @@ export function parsePatternCandidates(value: unknown): PatternCandidate[] | nul
 					Number.isInteger(candidate.courseSegmentIndex) &&
 					candidate.courseSegmentIndex >= 0)
 			) ||
-			typeof candidate.matchScore !== "number" ||
-			!Number.isInteger(candidate.matchScore) ||
-			candidate.matchScore < 0 ||
-			candidate.matchScore > 100 ||
+			!(candidate.fileNameTemplate === null || typeof candidate.fileNameTemplate === "string") ||
+			!(
+				candidate.matchScore === null ||
+				(typeof candidate.matchScore === "number" &&
+					Number.isInteger(candidate.matchScore) &&
+					candidate.matchScore >= 0 &&
+					candidate.matchScore <= 100)
+			) ||
+			typeof candidate.evaluatedCount !== "number" ||
+			!Number.isInteger(candidate.evaluatedCount) ||
+			candidate.evaluatedCount < 0 ||
 			typeof candidate.reason !== "string" ||
-			typeof candidate.recommended !== "boolean"
+			typeof candidate.recommended !== "boolean" ||
+			typeof candidate.requiresConfirmation !== "boolean"
 		) {
 			return null;
 		}
@@ -146,9 +164,12 @@ export function parsePatternCandidates(value: unknown): PatternCandidate[] | nul
 			description: candidate.description,
 			folders: candidate.folders,
 			courseSegmentIndex: candidate.courseSegmentIndex,
+			fileNameTemplate: candidate.fileNameTemplate,
 			matchScore: candidate.matchScore,
+			evaluatedCount: candidate.evaluatedCount,
 			reason: candidate.reason,
 			recommended: candidate.recommended,
+			requiresConfirmation: candidate.requiresConfirmation,
 		});
 	}
 	return candidates;

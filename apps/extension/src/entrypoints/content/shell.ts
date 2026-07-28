@@ -262,7 +262,7 @@ export function mountFuzzyShell(): void {
 			grid.append(rowEl);
 		};
 		addNoteRow("授業", selected.courseName ?? "未設定");
-		addNoteRow("ページ", selected.page === null ? "ページ情報なし" : `${selected.page}ページ`);
+		addNoteRow("ページ", formatSearchPage(selected));
 		addNoteRow("関連度", `${Math.round(selected.score * 100)}%`);
 
 		note.replaceChildren(
@@ -273,7 +273,7 @@ export function mountFuzzyShell(): void {
 				"fuzzy-note-copy",
 				selected.page === null
 					? "該当箇所を見つけました。ページ情報は未登録です。"
-					: `${selected.page}ページ付近に該当箇所があります。`,
+					: `${formatSearchPage(selected)}付近に該当箇所があります。`,
 			),
 			grid,
 		);
@@ -298,13 +298,18 @@ export function mountFuzzyShell(): void {
 		);
 
 		const side = el("div", "fuzzy-result-side");
-		side.append(
-			el("p", "", result.page === null ? "—" : `p.${result.page}`),
-			el("span", "", "詳細を見る"),
-		);
+		side.append(el("p", "", formatSearchPage(result, true)), el("span", "", "詳細を見る"));
 
 		row.append(kind, main, el("p", "fuzzy-result-snippet", result.snippet), side);
 		return row;
+	};
+
+	const formatSearchPage = (result: SearchResult, compact = false): string => {
+		if (result.page === null) return compact ? "—" : "ページ情報なし";
+		if (result.pageCount === null) return compact ? `p.${result.page}` : `${result.page}ページ`;
+		return compact
+			? `p.${result.page} / ${result.pageCount}`
+			: `${result.page} / ${result.pageCount}ページ`;
 	};
 
 	/** 検索結果まわり（件数・一覧・選択パネル）だけを更新する。入力欄には触らない */
