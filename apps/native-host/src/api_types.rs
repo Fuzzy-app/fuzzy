@@ -741,6 +741,7 @@ pub struct SearchResult {
 	pub course_name: Option<String>,
 	pub snippet: String,
 	pub page: Option<u32>,
+	pub page_count: Option<u32>,
 	pub score: f32,
 }
 

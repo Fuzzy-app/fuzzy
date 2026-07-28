@@ -19,6 +19,7 @@ use crate::{Database, EngineError, EngineResult};
 
 const MAX_WARNINGS: usize = 200;
 const UPSERT_BATCH_SIZE: usize = 256;
+const INDEX_BATCH_SIZE: usize = 64;
 const MAX_HASH_WORKERS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -338,10 +339,19 @@ impl LibraryMaintenance {
 				result: reusable.map(Ok),
 			});
 		}
-		fingerprint_in_parallel(&mut pending_fingerprints);
+		let reused_fingerprint_count = summary.reused_fingerprint_count;
+		fingerprint_in_parallel(&mut pending_fingerprints, &mut |completed| {
+			progress(LibraryMaintenanceProgress {
+				phase: LibraryMaintenancePhase::Registering,
+				state: LibraryMaintenanceProgressState::Running,
+				completed_count: reused_fingerprint_count + completed,
+				total_count: Some(summary.scanned_file_count),
+				warning_count: summary.warnings.len(),
+			});
+		});
 
 		let mut pending_registrations = Vec::with_capacity(pending_fingerprints.len());
-		for (entry_index, pending) in pending_fingerprints.into_iter().enumerate() {
+		for pending in pending_fingerprints {
 			let fingerprint = match pending.result.expect("並列計算後は必ず結果がある")
 			{
 				Ok(fingerprint) => fingerprint,
@@ -357,13 +367,6 @@ impl LibraryMaintenance {
 						relative_display(&pending.entry.relative_path),
 						"ファイルを読み取れなかったため、登録を見送りました。".to_string(),
 					);
-					progress(LibraryMaintenanceProgress {
-						phase: LibraryMaintenancePhase::Registering,
-						state: LibraryMaintenanceProgressState::Running,
-						completed_count: entry_index + 1,
-						total_count: Some(summary.scanned_file_count),
-						warning_count: summary.warnings.len(),
-					});
 					continue;
 				}
 			};
@@ -379,14 +382,14 @@ impl LibraryMaintenance {
 				simhash: fingerprint.simhash,
 			};
 			pending_registrations.push((registration, pending.entry.modified_at));
-			progress(LibraryMaintenanceProgress {
-				phase: LibraryMaintenancePhase::Registering,
-				state: LibraryMaintenanceProgressState::Running,
-				completed_count: entry_index + 1,
-				total_count: Some(summary.scanned_file_count),
-				warning_count: summary.warnings.len(),
-			});
 		}
+		progress(LibraryMaintenanceProgress {
+			phase: LibraryMaintenancePhase::Registering,
+			state: LibraryMaintenanceProgressState::Running,
+			completed_count: summary.scanned_file_count,
+			total_count: Some(summary.scanned_file_count),
+			warning_count: summary.warnings.len(),
+		});
 
 		for batch in pending_registrations.chunks(UPSERT_BATCH_SIZE) {
 			match database.upsert_scanned_files_observed(batch) {
@@ -479,30 +482,40 @@ impl LibraryMaintenance {
 			database.clear_search_index_meta()?;
 		}
 		let index_candidate_count = index_candidates.len();
-		for (index, (file_id, path, relative_path)) in index_candidates.into_iter().enumerate() {
-			match index_engine.index_file(database, file_id, &path) {
-				Ok(()) => summary.indexed_file_count += 1,
-				Err(error) => {
-					eprintln!(
-						"走査ファイルを全文索引へ追加できませんでした（{}）: {error}",
-						path.display()
-					);
-					summary.skipped_file_count += 1;
-					push_warning(
-						&mut summary.warnings,
-						&mut omitted_warnings,
-						relative_display(&relative_path),
-						"本文を索引化できませんでした。再スキャンで再試行できます。".to_string(),
-					);
+		let mut completed_index_count = 0usize;
+		for batch in index_candidates.chunks(INDEX_BATCH_SIZE) {
+			let files = batch
+				.iter()
+				.map(|(file_id, path, _)| (*file_id, path.clone()))
+				.collect::<Vec<_>>();
+			let results = index_engine.index_files(database, &files);
+			for ((_, path, relative_path), result) in batch.iter().zip(results) {
+				match result {
+					Ok(()) => summary.indexed_file_count += 1,
+					Err(error) => {
+						eprintln!(
+							"走査ファイルを全文索引へ追加できませんでした（{}）: {error}",
+							path.display()
+						);
+						summary.skipped_file_count += 1;
+						push_warning(
+							&mut summary.warnings,
+							&mut omitted_warnings,
+							relative_display(relative_path),
+							"本文を索引化できませんでした。再スキャンで再試行できます。"
+								.to_string(),
+						);
+					}
 				}
+				completed_index_count += 1;
+				progress(LibraryMaintenanceProgress {
+					phase: LibraryMaintenancePhase::Indexing,
+					state: LibraryMaintenanceProgressState::Running,
+					completed_count: completed_index_count,
+					total_count: Some(index_candidate_count),
+					warning_count: summary.warnings.len(),
+				});
 			}
-			progress(LibraryMaintenanceProgress {
-				phase: LibraryMaintenancePhase::Indexing,
-				state: LibraryMaintenanceProgressState::Running,
-				completed_count: index + 1,
-				total_count: Some(index_candidate_count),
-				warning_count: summary.warnings.len(),
-			});
 		}
 
 		progress(LibraryMaintenanceProgress {
@@ -590,7 +603,7 @@ struct PendingFingerprint {
 	result: Option<EngineResult<FileFingerprint>>,
 }
 
-fn fingerprint_in_parallel(pending: &mut [PendingFingerprint]) {
+fn fingerprint_in_parallel(pending: &mut [PendingFingerprint], progress: &mut dyn FnMut(usize)) {
 	let hash_count = pending.iter().filter(|item| item.result.is_none()).count();
 	if hash_count == 0 {
 		return;
@@ -602,15 +615,24 @@ fn fingerprint_in_parallel(pending: &mut [PendingFingerprint]) {
 		.min(hash_count);
 	let chunk_size = pending.len().div_ceil(worker_count);
 	std::thread::scope(|scope| {
+		let mut handles = Vec::new();
 		for chunk in pending.chunks_mut(chunk_size) {
-			scope.spawn(move || {
+			handles.push(scope.spawn(move || {
 				let detector = DefaultDuplicateDetector::default();
+				let mut completed = 0usize;
 				for item in chunk {
 					if item.result.is_none() {
 						item.result = Some(detector.fingerprint(&item.entry.path));
+						completed += 1;
 					}
 				}
-			});
+				completed
+			}));
+		}
+		let mut completed = 0usize;
+		for handle in handles {
+			completed += handle.join().expect("フィンガープリント計算スレッド");
+			progress(completed);
 		}
 	});
 }
@@ -639,8 +661,6 @@ fn collect_upsert_result(
 			registration.saved_path.clone(),
 			relative_path,
 		));
-	} else if !is_indexable_document(&registration.saved_path) {
-		summary.skipped_file_count += 1;
 	}
 }
 
@@ -949,6 +969,28 @@ mod tests {
 			Some("application/zip")
 		);
 		assert_eq!(document_mime_type(Path::new("第4回_添付.bin")), None);
+	}
+
+	#[test]
+	fn registers_a_binary_by_hash_without_counting_it_as_skipped() {
+		let directory = TestDirectory::new();
+		directory.write("アプリ演習/配布プログラム.exe", "binary");
+		let mut database = configured_database(&directory);
+		let mut index = ControlledIndexEngine::default();
+
+		let summary = LibraryMaintenance::reconcile(&mut database, &mut index, false).unwrap();
+
+		assert_eq!(summary.scanned_file_count, 1);
+		assert_eq!(summary.registered_file_count, 1);
+		assert_eq!(summary.indexed_file_count, 0);
+		assert_eq!(summary.skipped_file_count, 0);
+		assert!(summary.warnings.is_empty());
+		assert!(index.indexed_file_ids.is_empty());
+		let hash: String = database
+			.conn()
+			.query_row("SELECT hash_blake3 FROM files", [], |row| row.get(0))
+			.unwrap();
+		assert!(!hash.is_empty());
 	}
 
 	#[derive(Default)]

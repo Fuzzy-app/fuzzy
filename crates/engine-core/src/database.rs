@@ -342,7 +342,8 @@ impl Database {
 	) -> EngineResult<Option<SearchDocumentMetadata>> {
 		self.conn
 			.query_row(
-				"SELECT files.id, files.original_name, courses.name
+				"SELECT files.id, files.original_name, courses.name,
+				        search_index_meta.page_count
 				 FROM files
 				 INNER JOIN search_index_meta ON search_index_meta.file_id = files.id
 				 LEFT JOIN courses ON courses.id = files.course_id
@@ -354,6 +355,7 @@ impl Database {
 						file_id: row.get(0)?,
 						file_name: row.get(1)?,
 						course_name: row.get(2)?,
+						page_count: row.get(3)?,
 					})
 				},
 			)

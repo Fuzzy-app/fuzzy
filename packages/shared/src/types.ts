@@ -273,4 +273,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 4 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 5 as const;

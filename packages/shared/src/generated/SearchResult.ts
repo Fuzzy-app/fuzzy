@@ -9,5 +9,6 @@ export type SearchResult = {
   courseName: string | null;
   snippet: string;
   page: number | null;
+  pageCount: number | null;
   score: number;
 };

@@ -348,6 +348,8 @@ pub struct SearchDocumentMetadata {
 	pub file_name: String,
 	/// コース未紐付けの場合は`None`。
 	pub course_name: Option<String>,
+	/// PDF等の総ページ数。本文索引と同時に検証できない形式では`None`。
+	pub page_count: Option<u32>,
 }
 
 /// 重複・類似ファイルの検出結果1件。

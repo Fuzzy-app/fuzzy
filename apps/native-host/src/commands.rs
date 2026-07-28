@@ -228,7 +228,13 @@ fn search(database: &Database, index_engine: &dyn IndexEngine, request: Request)
 						file_name: metadata.file_name,
 						course_name: metadata.course_name,
 						snippet: hit.snippet,
-						page: hit.page,
+						page: hit.page.filter(|page| {
+							*page >= 1
+								&& metadata
+									.page_count
+									.is_none_or(|page_count| *page <= page_count)
+						}),
+						page_count: metadata.page_count,
 						score: hit.score,
 					})),
 					Ok(None) => None,
@@ -1702,6 +1708,48 @@ mod tests {
 		assert!(searched.ok, "{:?}", searched.error);
 		assert_eq!(searched.data.unwrap().as_array().unwrap().len(), 1);
 
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn search_rejects_a_stale_pdf_page_outside_the_current_page_count() {
+		let root = unique_temp_dir();
+		std::fs::create_dir_all(&root).unwrap();
+		let path = root.join("第4回_正規化.pdf");
+		std::fs::write(&path, b"%PDF-test").unwrap();
+		let database = Database::open_in_memory().unwrap();
+		let file_id = database
+			.register_saved_file(&SavedFileRegistration {
+				course_id: None,
+				section_no: Some(4),
+				moodle_file_id: Some("pdf-41".to_string()),
+				original_name: "第4回_正規化.pdf".to_string(),
+				saved_path: path,
+				size_bytes: 9,
+				mime_type: Some("application/pdf".to_string()),
+				hash_blake3: "b3:pdf-41".to_string(),
+				simhash: 41,
+			})
+			.unwrap();
+		database.mark_search_indexed(file_id, Some(12)).unwrap();
+		let mut index = TestIndexEngine::default();
+		index.search_hits.push(SearchHit {
+			file_id,
+			snippet: "正規化".to_string(),
+			page: Some(153),
+			score: 1.0,
+		});
+
+		let response = search(
+			&database,
+			&index,
+			request("search", serde_json::json!({ "query": "正規化" })),
+		);
+
+		assert!(response.ok, "{:?}", response.error);
+		let result = &response.data.unwrap()[0];
+		assert_eq!(result["page"], serde_json::Value::Null);
+		assert_eq!(result["pageCount"], 12);
 		std::fs::remove_dir_all(root).unwrap();
 	}
 
