@@ -18,6 +18,12 @@ import type {
 } from "@fuzzy/shared";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
 import { readDashboardCacheFromBackground } from "../../lib/cache/dashboardCacheMessaging";
+import {
+	type DeadlineScreenNavigationMessage,
+	PENDING_SYNC_SCREEN_NAVIGATION_KEY,
+	isDeadlineScreenNavigation,
+	syncEventChangeCursor,
+} from "../../lib/notifications/syncNotificationNavigation";
 import { createRuleManagementStore } from "../../lib/rules/state";
 import {
 	DEADLINE_REVIEW_HELP_TEXT,
@@ -150,6 +156,7 @@ export function mountFuzzyShell(): void {
 	let dashboardError: string | null = null;
 	let latestSyncEvent: DataSyncEvent | null = null;
 	let assignmentChanges: AssignmentChange[] = [];
+	let assignmentChangeCursor: number | undefined;
 	let loadingSyncSummary = false;
 	let syncSummaryLoaded = false;
 	let syncSummaryError: string | null = null;
@@ -536,7 +543,7 @@ export function mountFuzzyShell(): void {
 			const api = await apiPromise;
 			const syncEvent = await api.getLatestSyncEvent();
 			latestSyncEvent = syncEvent;
-			assignmentChanges = syncEvent ? await api.getAssignmentChanges() : [];
+			assignmentChanges = syncEvent ? await api.getAssignmentChanges(assignmentChangeCursor) : [];
 			syncSummaryLoaded = true;
 			syncSummaryError = null;
 			setTopModeFromApi(api);
@@ -725,8 +732,10 @@ export function mountFuzzyShell(): void {
 		panel.append(summary, counts);
 
 		const changeList = el("div", "fuzzy-change-list");
+		const changeListLabel =
+			assignmentChangeCursor === undefined ? "変更内容" : "通知時点以降の変更内容";
 		changeList.append(
-			el("p", "fuzzy-change-list-label", `変更内容（${assignmentChanges.length}件）`),
+			el("p", "fuzzy-change-list-label", `${changeListLabel}（${assignmentChanges.length}件）`),
 		);
 		if (assignmentChanges.length === 0) {
 			changeList.append(el("p", "fuzzy-toolbar-copy", "表示する変更点はありません。"));
@@ -1096,20 +1105,33 @@ export function mountFuzzyShell(): void {
 		else openShell();
 	});
 
-	browser.runtime.onMessage.addListener((message: unknown) => {
-		if (
-			typeof message !== "object" ||
-			message === null ||
-			(message as { type?: unknown }).type !== "fuzzy:open-screen" ||
-			(message as { screen?: unknown }).screen !== "deadlines"
-		) {
-			return false;
-		}
+	const applyDeadlineNavigation = (message: DeadlineScreenNavigationMessage) => {
+		assignmentChangeCursor = syncEventChangeCursor(message.syncEventId);
+		syncSummaryLoaded = false;
+		syncSummaryError = null;
 		activeScreen = "deadlines";
 		if (!isOpen) openShell();
 		else renderScreen();
+	};
+
+	browser.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+		if (!isDeadlineScreenNavigation(message)) return false;
+		applyDeadlineNavigation(message);
+		sendResponse({ handled: true });
 		return false;
 	});
+
+	void browser.storage.local
+		.get(PENDING_SYNC_SCREEN_NAVIGATION_KEY)
+		.then(async (stored) => {
+			const pending = stored[PENDING_SYNC_SCREEN_NAVIGATION_KEY];
+			if (!isDeadlineScreenNavigation(pending)) return;
+			applyDeadlineNavigation(pending);
+			await browser.storage.local.remove(PENDING_SYNC_SCREEN_NAVIGATION_KEY);
+		})
+		.catch((error) => {
+			console.warn("[fuzzy] 通知からの画面遷移を復元できませんでした", error);
+		});
 
 	ensureDrawerEntry();
 	new MutationObserver(() => ensureDrawerEntry()).observe(document.body, {

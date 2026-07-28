@@ -28,6 +28,11 @@ import {
 } from "../lib/cache/dashboardCacheMessaging";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
+	createSyncNotificationId,
+	navigateFromSyncNotification,
+	parseSyncNotificationId,
+} from "../lib/notifications/syncNotificationNavigation";
+import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
 } from "../lib/rules/backgroundApi";
@@ -40,7 +45,6 @@ import { buildSyncResultNotificationMessage, shouldNotifySyncResult } from "../l
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
-const SYNC_NOTIFICATION_ID_PREFIX = "fuzzy-sync-";
 const SYNC_CHECK_INTERVAL_MINUTES = 1;
 let syncNotificationQueue: Promise<void> = Promise.resolve();
 const courseFileReconcileCoordinator = createCourseFileReconcileCoordinator();
@@ -86,7 +90,8 @@ async function deliverSyncEventNotification(
 	if (mode === "mock") return;
 	const total = syncChangeTotal(event);
 	if (shouldNotifySyncResult(total)) {
-		await browser.notifications.create(`${SYNC_NOTIFICATION_ID_PREFIX}${mode}-${event.id}`, {
+		if (mode !== "native") return;
+		await browser.notifications.create(createSyncNotificationId(mode, event.id), {
 			type: "basic",
 			iconUrl: browser.runtime.getURL("/icon/128.png"),
 			title: "Fuzzy: 課題・締切に変更があります",
@@ -101,17 +106,6 @@ async function deliverSyncEventNotification(
 		typeof stored[storageKey] === "number" ? (stored[storageKey] as number) : 0;
 	await browser.storage.local.set({
 		[storageKey]: Math.max(previousEventId, event.id),
-	});
-}
-
-async function openDeadlineChangesFromNotification(): Promise<void> {
-	const tabs = await browser.tabs.query({ url: "https://*.wakayama-u.ac.jp/*" });
-	const target = tabs.find((tab) => tab.active) ?? tabs[0];
-	if (target?.id === undefined) return;
-	await browser.tabs.update(target.id, { active: true });
-	await browser.tabs.sendMessage(target.id, {
-		type: "fuzzy:open-screen",
-		screen: "deadlines",
 	});
 }
 
@@ -199,8 +193,8 @@ export default defineBackground(() => {
 		}
 	});
 	browser.notifications.onClicked.addListener((notificationId) => {
-		if (!notificationId.startsWith(SYNC_NOTIFICATION_ID_PREFIX)) return;
-		void openDeadlineChangesFromNotification().catch((error) => {
+		if (!parseSyncNotificationId(notificationId)) return;
+		void navigateFromSyncNotification(browser, notificationId).catch((error) => {
 			console.warn("[fuzzy] 通知から課題・締切画面を開けませんでした", error);
 		});
 	});
