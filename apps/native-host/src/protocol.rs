@@ -6,12 +6,20 @@
 
 use std::io::{Read, Write};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// ブラウザ→ホスト方向のメッセージ長上限（Chromeの仕様上64MB）。
 /// 異常な長さを受け取った際に巨大アロケーションで落ちないための防御。
 const MAX_INCOMING_LEN: u32 = 64 * 1024 * 1024;
+/// Chromeのホスト→拡張機能上限（1MiB）に余裕を持たせた1フレーム上限。
+const MAX_OUTGOING_FRAME_LEN: usize = 900 * 1024;
+/// base64化後もフレーム上限内に収まる生JSONチャンク長。
+const OUTGOING_CHUNK_LEN: usize = 512 * 1024;
+/// ブラウザ側で再構築するレスポンス全体の防御上限。
+const MAX_OUTGOING_RESPONSE_LEN: usize = 64 * 1024 * 1024;
 const MAX_REQUEST_ID_LEN: usize = 128;
 const MAX_COMMAND_LEN: usize = 64;
 
@@ -68,6 +76,18 @@ pub struct Response {
 	pub data: Option<Value>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub error: Option<ErrorBody>,
+	/// 大きなレスポンスを複数のNative Messagingフレームへ分割した転送情報。
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub chunk: Option<Box<ResponseChunk>>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseChunk {
+	pub index: usize,
+	pub total: usize,
+	pub encoding: &'static str,
+	pub data: String,
 }
 
 /// エラー本体（コードは docs/api/contract.md 3章の暫定一覧に従う）。
@@ -85,6 +105,7 @@ impl Response {
 			ok: true,
 			data: Some(data),
 			error: None,
+			chunk: None,
 		}
 	}
 
@@ -98,6 +119,7 @@ impl Response {
 				code: code.to_string(),
 				message: message.into(),
 			}),
+			chunk: None,
 		}
 	}
 }
@@ -126,15 +148,60 @@ pub fn read_message(input: &mut impl Read) -> std::io::Result<Option<Vec<u8>>> {
 	Ok(Some(body))
 }
 
-/// レスポンスを「4byte LE長＋JSON本文」で出力ストリームに書き込み、flushする。
+/// レスポンスを「4byte LE長＋JSON本文」で出力する。
+///
+/// ホスト→ブラウザの1MiB上限へ達する場合は、元envelopeのUTF-8 JSONをbase64チャンクへ
+/// 分割する。各チャンクも同じリクエストIDを持ち、クライアント側で元envelopeへ戻す。
 pub fn write_message(output: &mut impl Write, response: &Response) -> std::io::Result<()> {
-	let body = serde_json::to_vec(response)
+	let mut body = serde_json::to_vec(response)
 		.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+	if body.len() > MAX_OUTGOING_RESPONSE_LEN {
+		body = serde_json::to_vec(&Response::err(
+			response.id.clone(),
+			"RESULT_TOO_LARGE",
+			"結果が大きすぎます。条件を絞って再試行してください。",
+		))
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+	}
+	if body.len() <= MAX_OUTGOING_FRAME_LEN {
+		write_frame(output, &body)?;
+		output.flush()?;
+		return Ok(());
+	}
+
+	let total = body.len().div_ceil(OUTGOING_CHUNK_LEN);
+	for (index, bytes) in body.chunks(OUTGOING_CHUNK_LEN).enumerate() {
+		let chunk = Response {
+			id: response.id.clone(),
+			ok: true,
+			data: None,
+			error: None,
+			chunk: Some(Box::new(ResponseChunk {
+				index,
+				total,
+				encoding: "base64",
+				data: BASE64_STANDARD.encode(bytes),
+			})),
+		};
+		let chunk_body = serde_json::to_vec(&chunk)
+			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+		if chunk_body.len() > MAX_OUTGOING_FRAME_LEN {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				"分割レスポンスがNative Messagingの送信上限を超えました",
+			));
+		}
+		write_frame(output, &chunk_body)?;
+	}
+	output.flush()
+}
+
+fn write_frame(output: &mut impl Write, body: &[u8]) -> std::io::Result<()> {
 	let len = u32::try_from(body.len())
 		.map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "本文が4GBを超過"))?;
 	output.write_all(&len.to_le_bytes())?;
-	output.write_all(&body)?;
-	output.flush()
+	output.write_all(body)?;
+	Ok(())
 }
 
 #[cfg(test)]
@@ -249,6 +316,37 @@ mod tests {
 			value,
 			json!({"id": "a", "ok": true, "data": {"version": "0.1.0"}})
 		);
+	}
+
+	#[test]
+	fn large_responses_are_split_below_the_browser_frame_limit_and_roundtrip() {
+		let response = Response::ok(
+			"large".to_string(),
+			json!({"items": ["あ".repeat(MAX_OUTGOING_FRAME_LEN)]}),
+		);
+		let expected = serde_json::to_vec(&response).unwrap();
+		let mut out = Vec::new();
+		write_message(&mut out, &response).unwrap();
+
+		let mut cursor = std::io::Cursor::new(out);
+		let mut rebuilt = Vec::new();
+		let mut expected_index = 0;
+		while let Some(body) = read_message(&mut cursor).unwrap() {
+			assert!(body.len() <= MAX_OUTGOING_FRAME_LEN);
+			let chunk_response: Value = serde_json::from_slice(&body).unwrap();
+			let chunk = &chunk_response["chunk"];
+			assert_eq!(chunk["index"], expected_index);
+			assert_eq!(chunk["encoding"], "base64");
+			rebuilt.extend(
+				BASE64_STANDARD
+					.decode(chunk["data"].as_str().unwrap())
+					.unwrap(),
+			);
+			expected_index += 1;
+			assert!(expected_index <= chunk["total"].as_u64().unwrap() as usize);
+		}
+		assert!(expected_index > 1);
+		assert_eq!(rebuilt, expected);
 	}
 
 	/// 失敗レスポンスは `data` を含まず `error` を含むこと。

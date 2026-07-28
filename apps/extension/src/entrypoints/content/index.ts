@@ -4,7 +4,10 @@
 // DOM操作は issue48 のダッシュボード注入と同様に、このディレクトリ内で完結させる。
 import "@fuzzy/shared/theme.css";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
-import { buildMoodleAssignmentSyncPayload } from "../../lib/moodle/assignmentSync";
+import {
+	buildCourseFileReconcilePayload,
+	buildMoodleAssignmentSyncPayload,
+} from "../../lib/moodle/assignmentSync";
 import { classifyMoodlePage, resolveMoodleUiMode } from "../../lib/moodle/pageClassification";
 import {
 	MOODLE_PAGE_SNAPSHOT_MESSAGE,
@@ -49,7 +52,7 @@ function initializeMoodleContent(): void {
 			reportLoginAutomationError,
 		);
 		registerSnapshotMessageListener();
-		void syncCurrentCourseAssignments();
+		void syncCurrentCourseData();
 		mountFuzzyShell();
 		void mountSavePanel();
 		return;
@@ -104,16 +107,28 @@ async function reportExtensionRuntimeFromMoodle(): Promise<void> {
 	}
 }
 
-async function syncCurrentCourseAssignments(): Promise<void> {
-	try {
-		const snapshot = collectMoodlePageSnapshot(document);
-		const request = buildMoodleAssignmentSyncPayload(snapshot, location.href, document);
-		if (!request) return;
-		await new BackgroundApiClient().syncMoodleAssignments(request);
-	} catch (error) {
-		// 同期だけを停止し、検索・キャッシュ表示・資料保存など独立した機能は起動する。
-		console.warn("[fuzzy] Moodle課題の同期に失敗しました", error);
+async function syncCurrentCourseData(): Promise<void> {
+	const snapshot = collectMoodlePageSnapshot(document);
+	const assignmentRequest = buildMoodleAssignmentSyncPayload(snapshot, location.href, document);
+	const fileRequest = buildCourseFileReconcilePayload(snapshot, location.href, document);
+	const client = new BackgroundApiClient();
+	const operations: Promise<unknown>[] = [];
+	if (assignmentRequest) {
+		operations.push(
+			client.syncMoodleAssignments(assignmentRequest).catch((error) => {
+				console.warn("[fuzzy] Moodle課題の同期に失敗しました", error);
+			}),
+		);
 	}
+	if (fileRequest) {
+		operations.push(
+			client.reconcileCourseFiles(fileRequest).catch((error) => {
+				console.warn("[fuzzy] コース資料の差分更新に失敗しました", error);
+			}),
+		);
+	}
+	// 同期失敗は検索・キャッシュ表示・資料保存など独立した機能へ波及させない。
+	await Promise.all(operations);
 }
 
 function createLoginAutomationOptions() {

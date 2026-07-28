@@ -199,7 +199,7 @@ pub struct FileEntry {
 	pub file_name: String,
 	/// バイト単位のサイズ。
 	pub size: u64,
-	/// 最終更新日時（UNIXエポック秒）。
+	/// 最終更新日時（UNIXエポックからのナノ秒）。取得不能時は`None`。
 	pub modified_at: Option<i64>,
 }
 
@@ -230,10 +230,16 @@ pub struct SavePatternGuess {
 	pub directory_template: String,
 	/// 比較評価用に推定したファイル名テンプレート。命名規則を検出しない場合は`None`。
 	pub file_name_template: Option<String>,
+	/// 走査起点から見た科目セグメント位置。
+	pub course_segment_index: usize,
 	/// 確からしさ（0.0〜1.0）。確からしさ順の提示に使う。
 	pub confidence: f64,
 	/// このパターンに合致した既存ファイル数。
 	pub matched_count: usize,
+	/// この候補を評価できたファイル数。`confidence`の分母を説明するために使う。
+	pub evaluated_count: usize,
+	/// この候補を実際に支持した相対フォルダーパスの代表例。
+	pub representative_paths: Vec<PathBuf>,
 }
 
 /// グローバル／コース別の保存ルール一式。

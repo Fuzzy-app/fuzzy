@@ -21,9 +21,14 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 // レスポンス（失敗）
 { "id": "uuid", "ok": false, "error": { "code": "NOT_FOUND", "message": "..." } }
+
+// 900KiBを超えるレスポンスの分割フレーム
+{ "id": "uuid", "ok": true, "chunk": { "index": 0, "total": 2, "encoding": "base64", "data": "..." } }
 ```
 
 `id`は1〜128文字のASCII英数字・ピリオド・アンダースコア・コロン・ハイフン、`command`は1〜64文字のASCII英数字とする。envelopeおよび各payloadの未知フィールドは拒否する。不正な`id`はレスポンスへ反射せず、`id: null`の`INVALID_REQUEST`を返す。
+
+ホスト→拡張機能のレスポンスJSONが900KiBを超える場合、native-hostは元のレスポンスenvelope全体のUTF-8 JSONを512KiBずつBase64化し、同じ`id`を持つ`chunk`フレームとして順番に送る。`index`は0始まり、`total`は2〜128、再構築後の上限は64MiBとする。クライアントは全チャンクを検証してから元envelopeを1回だけ処理し、欠落・重複・不正Base64・異なる`total`・上限超過を`INVALID_RESPONSE`として扱う。64MiBを超える結果は、小さな`RESULT_TOO_LARGE`エラーへ置き換える。
 
 ### 1.2 コマンド一覧
 
@@ -59,8 +64,9 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `exportData`               | バックアップ用エクスポート           | `{ filePath }` → `{ filePath }`                     |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 | `rebuildLibrary`           | 保存ルートの再走査・SQLite注釈と全文索引の整合 | `{ rebuildIndex? }` → `LibraryMaintenanceSummary`   |
+| `reconcileCourseFiles`     | 表示中Moodleコースに限定したファイル差分走査 | `{ course: SyncMoodleCourseRequest }` → `LibraryMaintenanceSummary` |
 
-`ping.protocolVersion`は現在値`3`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
+`ping.protocolVersion`は現在値`4`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
 
 `search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルだけを返す。
 
@@ -81,13 +87,16 @@ interface LibraryMaintenanceSummary {
 	registeredFileCount: number;
 	updatedFileCount: number;
 	indexedFileCount: number;
+	reusedFingerprintCount: number;
 	missingFileCount: number;
 	skippedFileCount: number;
 	warnings: LibraryMaintenanceWarning[];
 }
 ```
 
-`rebuildIndex`の省略時は`false`とし、新規・本文変更・索引メタデータ欠落の資料だけを索引へ反映する。`true`では既存の全文索引と索引メタデータを空にしてから、走査時点で実在する対応資料を再構築する。いずれもSQLiteに設定済みの保存ルートを走査し、新規資料の登録、既存資料の注釈更新、ルール適合状況と重複候補の再計算を行うが、利用者のファイルを移動・削除しない。`warnings.path`は保存ルートからの相対パスだけとし、絶対パスを返さない。native-hostへ接続できない場合はモックで成功を偽装せず`NO_NATIVE_HOST`を返す。
+`rebuildIndex`の省略時は`false`とし、新規・本文変更・索引メタデータ欠落の資料だけを索引へ反映する。`true`では既存の全文索引と索引メタデータを空にしてから、走査時点で実在する対応資料を再構築する。通常再走査では、パス・サイズ・ファイルシステム更新日時が前回観測と一致する資料のBLAKE3／SimHashを再利用し、その件数を`reusedFingerprintCount`で返す。いずれもSQLiteに設定済みの保存ルートを走査し、新規資料の登録、既存資料の注釈更新、ルール適合状況と重複候補の再計算を行うが、利用者のファイルを移動・削除しない。`warnings.path`は保存ルートからの相対パスだけとし、絶対パスを返さない。native-hostへ接続できない場合はモックで成功を偽装せず`NO_NATIVE_HOST`を返す。
+
+`reconcileCourseFiles`は、認証済みの完全な`course/view.php`を表示したときに拡張機能から非同期で呼ぶ。現在の保存ルールとコースフォルダー名から探索起点を決め、新規ファイルの再帰探索、登録済みファイルのサイズ・ナノ秒更新日時の比較、変更時だけの再ハッシュ・再索引、指定コースに属する欠損確認を行う。ルール変更前の場所に残る登録済みファイルも個別に確認し、対象外コースのフォルダーは探索しない。同一コースの同時要求は共有し、成功後5分間の再要求はbackgroundで抑制する。常時監視は行わず、利用者ファイルの移動・削除もしない。
 
 `syncMoodleAssignments`は次の形式を使用する。
 
@@ -276,6 +285,36 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 | `export_backup` | OS保存ダイアログでSQLiteバックアップを書き出す | `()` → `{ cancelled, filePath? }` |
 | `import_backup` | OS選択・確認ダイアログを経てSQLiteバックアップを復元し、索引を再構築 | `()` → `{ cancelled, imported, recoveryCopyPath?, maintenance?, maintenanceError? }` |
 | `create_fresh_database` | 確認後に開けないDBを別名で保全し、新規SQLite正本を作成 | `()` → `{ cancelled, created, recoveryCopyPath?, indexError? }` |
+
+`PatternCandidate`は次の形式を使用する。推定不能時は`matchScore: null`、`courseSegmentIndex: null`、`requiresConfirmation: true`とし、`recommended`にせず利用者の明示選択を待つ。
+
+```ts
+interface PatternCandidate {
+	id: string;
+	name: string;
+	description: string;
+	folders: string[];
+	courseSegmentIndex: number | null;
+	fileNameTemplate: string | null;
+	matchScore: number | null;
+	evaluatedCount: number;
+	reason: string;
+	recommended: boolean;
+	requiresConfirmation: boolean;
+}
+```
+
+`save_initial_setup`と`rebuild_library`の実行中は、`library-maintenance-progress`イベントで次の値を通知する。`completedCount`は同じフェーズ内で減少せず、成功・警告付き成功・失敗のいずれでも最後に`phase: "completed"`の終端イベントを送る。絶対パス、ファイル名、本文は含めない。
+
+```ts
+interface LibraryMaintenanceProgress {
+	phase: "scanning" | "registering" | "indexing" | "finalizing" | "completed";
+	state: "running" | "completed" | "completedWithWarnings" | "failed";
+	completedCount: number;
+	totalCount: number | null;
+	warningCount: number;
+}
+```
 
 `pick_base_folder` 等の実体は `crates/engine-core` の `ScanEngine` を呼び出す（`apps/desktop/src-tauri` と `apps/native-host` の両方が同じ `crates/engine-core` に依存する設計。`docs/仕様書.md` 3.3節）。
 

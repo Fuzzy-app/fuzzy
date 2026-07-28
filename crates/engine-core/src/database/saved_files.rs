@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
 use super::library::{
-	matching_local_course_for_moodle, merge_local_course_into, upsert_file_in_transaction,
-	validate_file_registration, SavedFileUpsertMode,
+	matching_local_course_for_moodle, merge_local_course_into, saved_path_key,
+	upsert_file_in_transaction, validate_file_registration, SavedFileUpsertMode,
 };
 use super::rules::apply_rule_compliance;
 use super::{db_err, Database};
@@ -228,6 +228,8 @@ impl Database {
 
 	/// 実ファイルが作成された後、そのメタデータとフィンガープリントをSQLiteへ登録する。
 	pub fn register_saved_file(&self, file: &SavedFileRegistration) -> EngineResult<i64> {
+		validate_file_registration(file)?;
+		let saved_path = saved_path_key(&file.saved_path);
 		self.conn
 			.execute(
 				"INSERT INTO files (
@@ -239,7 +241,7 @@ impl Database {
 					file.section_no,
 					file.moodle_file_id,
 					file.original_name,
-					file.saved_path.to_string_lossy(),
+					saved_path,
 					file.size_bytes,
 					file.mime_type,
 					file.hash_blake3,
@@ -317,7 +319,7 @@ impl Database {
 				simhash: file.simhash,
 			};
 			validate_file_registration(&validation)?;
-			let path_key = file.saved_path.to_string_lossy().to_lowercase();
+			let path_key = saved_path_key(&file.saved_path).to_lowercase();
 			if !saved_paths.insert(path_key) {
 				return Err(invalid(
 					"files",

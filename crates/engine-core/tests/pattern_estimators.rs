@@ -22,8 +22,11 @@ impl PatternEstimator for ExperimentalEstimator {
 		Ok(vec![SavePatternGuess {
 			directory_template: "{course}".to_string(),
 			file_name_template: Some("custom-{filename}".to_string()),
+			course_segment_index: 0,
 			confidence: 0.75,
 			matched_count: 2,
+			evaluated_count: 2,
+			representative_paths: vec![PathBuf::from("データベース")],
 		}])
 	}
 }
@@ -209,4 +212,82 @@ fn requires_two_supporting_files_when_scanning_three_or_more() {
 		.expect("推定に成功する");
 
 	assert!(guesses.is_empty());
+}
+
+#[test]
+fn classifies_deep_year_term_course_and_section_layouts() {
+	let guesses = FrequencyPatternEstimator
+		.estimate(&[
+			entry("2026年度/1年前期/画像処理/第3回/資料.pdf"),
+			entry("2026年度/1年前期/画像処理/第4回/演習.pdf"),
+		])
+		.expect("深い階層を推定できる");
+
+	assert_eq!(guesses.len(), 1);
+	assert_eq!(
+		guesses[0].directory_template,
+		"{year}年度/{term}/{course}/第{section}回"
+	);
+	assert_eq!(guesses[0].course_segment_index, 2);
+	assert_eq!(guesses[0].matched_count, 2);
+	assert_eq!(guesses[0].evaluated_count, 2);
+	assert_eq!(guesses[0].confidence, 1.0);
+	assert_eq!(
+		guesses[0].representative_paths,
+		vec![
+			PathBuf::from("2026年度/1年前期/画像処理/第3回"),
+			PathBuf::from("2026年度/1年前期/画像処理/第4回"),
+		]
+	);
+}
+
+#[test]
+fn recognizes_quarters_and_grade_terms_without_treating_them_as_courses() {
+	let cases = [
+		("1Q/データベース/正規化.pdf", "{term}/{course}", 1),
+		("第2クォーター/離散数学/課題.pdf", "{term}/{course}", 1),
+		("2年後期/画像処理/資料.pdf", "{term}/{course}", 1),
+	];
+	for (path, expected_template, expected_course_index) in cases {
+		let guesses = FrequencyPatternEstimator
+			.estimate(&[entry(path), entry(path)])
+			.expect("学期区分を推定できる");
+		assert_eq!(guesses[0].directory_template, expected_template);
+		assert_eq!(guesses[0].course_segment_index, expected_course_index);
+	}
+}
+
+#[test]
+fn excludes_unclassified_deep_paths_from_the_confidence_denominator() {
+	let guesses = FrequencyPatternEstimator
+		.estimate(&[
+			entry("2026年度/前期/データベース/正規化.pdf"),
+			entry("2026年度/前期/離散数学/グラフ理論.pdf"),
+			entry("資料/共有/未分類.pdf"),
+		])
+		.expect("評価可能な母集団で推定できる");
+
+	assert_eq!(guesses.len(), 1);
+	assert_eq!(guesses[0].matched_count, 2);
+	assert_eq!(guesses[0].evaluated_count, 2);
+	assert_eq!(guesses[0].confidence, 1.0);
+}
+
+#[test]
+fn keeps_file_name_rules_distinct_for_the_same_directory_layout() {
+	let guesses = FrequencyPatternEstimator
+		.estimate(&[
+			entry("1Q/データベース/第1回_資料.pdf"),
+			entry("1Q/データベース/第2回_演習.pdf"),
+		])
+		.expect("フォルダー規則とファイル名規則を別候補にできる");
+
+	assert_eq!(guesses.len(), 2);
+	assert!(guesses
+		.iter()
+		.any(|guess| guess.file_name_template.is_none()));
+	assert!(guesses
+		.iter()
+		.any(|guess| guess.file_name_template.as_deref() == Some("{section}_{filename}")));
+	assert!(guesses.iter().all(|guess| guess.confidence > 0.0));
 }

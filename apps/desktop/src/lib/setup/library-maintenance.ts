@@ -11,6 +11,7 @@ export type LibraryMaintenanceSummary = {
 	registeredFileCount: number;
 	updatedFileCount: number;
 	indexedFileCount: number;
+	reusedFingerprintCount: number;
 	missingFileCount: number;
 	skippedFileCount: number;
 	warnings: LibraryMaintenanceWarning[];
@@ -73,6 +74,7 @@ export function parseLibraryMaintenanceSummary(value: unknown): LibraryMaintenan
 		!isCount(summary.registeredFileCount) ||
 		!isCount(summary.updatedFileCount) ||
 		!isCount(summary.indexedFileCount) ||
+		!isCount(summary.reusedFingerprintCount) ||
 		!isCount(summary.missingFileCount) ||
 		!isCount(summary.skippedFileCount) ||
 		!Array.isArray(summary.warnings) ||
@@ -99,6 +101,7 @@ export function parseLibraryMaintenanceSummary(value: unknown): LibraryMaintenan
 		registeredFileCount: summary.registeredFileCount,
 		updatedFileCount: summary.updatedFileCount,
 		indexedFileCount: summary.indexedFileCount,
+		reusedFingerprintCount: summary.reusedFingerprintCount,
 		missingFileCount: summary.missingFileCount,
 		skippedFileCount: summary.skippedFileCount,
 		warnings,
@@ -280,6 +283,7 @@ export async function rebuildLibraryClient(
 			registeredFileCount: 0,
 			updatedFileCount: 0,
 			indexedFileCount: 0,
+			reusedFingerprintCount: 0,
 			missingFileCount: 0,
 			skippedFileCount: 0,
 			warnings: [

@@ -17,21 +17,40 @@ pub struct RegisteredLibraryFile {
 impl Database {
 	/// SQLiteに保持している保存済みファイルを、実体確認用に読み込む。
 	pub fn registered_library_files(&self) -> EngineResult<Vec<RegisteredLibraryFile>> {
-		let mut statement = self
-			.conn
-			.prepare("SELECT id, saved_path, missing_at IS NOT NULL FROM files ORDER BY id")
-			.map_err(db_err)?;
-		let files = statement
-			.query_map([], |row| {
-				Ok(RegisteredLibraryFile {
-					file_id: row.get(0)?,
-					saved_path: PathBuf::from(row.get::<_, String>(1)?),
-					is_missing: row.get(2)?,
-				})
+		self.registered_library_files_for_course(None)
+	}
+
+	/// 指定コースに紐づく保存済みファイルだけを実体確認用に読み込む。
+	pub fn registered_library_files_for_course(
+		&self,
+		course_id: Option<i64>,
+	) -> EngineResult<Vec<RegisteredLibraryFile>> {
+		let sql = if course_id.is_some() {
+			"SELECT id, saved_path, missing_at IS NOT NULL
+			 FROM files WHERE course_id = ?1 ORDER BY id"
+		} else {
+			"SELECT id, saved_path, missing_at IS NOT NULL FROM files ORDER BY id"
+		};
+		let mut statement = self.conn.prepare(sql).map_err(db_err)?;
+		let map_row = |row: &rusqlite::Row<'_>| {
+			Ok(RegisteredLibraryFile {
+				file_id: row.get(0)?,
+				saved_path: PathBuf::from(row.get::<_, String>(1)?),
+				is_missing: row.get(2)?,
 			})
-			.map_err(db_err)?
-			.collect::<rusqlite::Result<Vec<_>>>()
-			.map_err(db_err)?;
+		};
+		let files = match course_id {
+			Some(course_id) => statement
+				.query_map([course_id], map_row)
+				.map_err(db_err)?
+				.collect::<rusqlite::Result<Vec<_>>>()
+				.map_err(db_err)?,
+			None => statement
+				.query_map([], map_row)
+				.map_err(db_err)?
+				.collect::<rusqlite::Result<Vec<_>>>()
+				.map_err(db_err)?,
+		};
 		Ok(files)
 	}
 

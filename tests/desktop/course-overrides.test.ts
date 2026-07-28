@@ -18,8 +18,12 @@ const baseCandidate: PatternCandidate = {
 	description: "",
 	folders: [],
 	courseSegmentIndex: 1,
+	fileNameTemplate: null,
 	matchScore: 100,
+	evaluatedCount: 6,
 	reason: "",
+	recommended: true,
+	requiresConfirmation: false,
 };
 
 describe("createCourseOverrides", () => {

@@ -115,6 +115,41 @@ fn scan_root(root: &Path) -> EngineResult<ScanSnapshot> {
 	})
 }
 
+/// 既知の保存済みファイル1件を、保存ルート基準の走査エントリーへ変換する。
+///
+/// コース単位の差分走査で、ルール変更前の場所に残っている登録済みファイルも
+/// 更新確認できるようにする。シンボリックリンクと保存ルート外は対象外にする。
+pub(crate) fn scan_registered_file(root: &Path, path: &Path) -> EngineResult<Option<FileEntry>> {
+	let metadata = match fs::symlink_metadata(path) {
+		Ok(metadata) => metadata,
+		Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(source) => return Err(path_io(path, source)),
+	};
+	if metadata.file_type().is_symlink() || !metadata.is_file() {
+		return Ok(None);
+	}
+	let canonical_root = root
+		.canonicalize()
+		.map_err(|source| path_io(root, source))?;
+	let canonical_path = path
+		.canonicalize()
+		.map_err(|source| path_io(path, source))?;
+	let Ok(relative_path) = canonical_path.strip_prefix(&canonical_root) else {
+		return Ok(None);
+	};
+	let relative_path = relative_path.to_path_buf();
+	let Some(file_name) = canonical_path.file_name() else {
+		return Ok(None);
+	};
+	Ok(Some(FileEntry {
+		file_name: file_name.to_string_lossy().into_owned(),
+		path: canonical_path,
+		relative_path,
+		size: metadata.len(),
+		modified_at: modified_at(&metadata),
+	}))
+}
+
 fn scan_directory(
 	root: &Path,
 	directory: &Path,
@@ -227,10 +262,10 @@ fn relative_warning_path(root: &Path, path: &Path) -> PathBuf {
 fn modified_at(metadata: &fs::Metadata) -> Option<i64> {
 	let modified = metadata.modified().ok()?;
 	match modified.duration_since(UNIX_EPOCH) {
-		Ok(duration) => i64::try_from(duration.as_secs()).ok(),
-		Err(error) => i64::try_from(error.duration().as_secs())
+		Ok(duration) => i64::try_from(duration.as_nanos()).ok(),
+		Err(error) => i64::try_from(error.duration().as_nanos())
 			.ok()
-			.and_then(|seconds| seconds.checked_neg()),
+			.and_then(|nanoseconds| nanoseconds.checked_neg()),
 	}
 }
 

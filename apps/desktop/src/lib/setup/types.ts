@@ -1,15 +1,6 @@
-export type PatternCandidate = {
-	id: string;
-	name: string;
-	description: string;
-	folders: string[];
-	courseSegmentIndex: number | null;
-	matchScore: number;
-	reason: string;
-	recommended?: boolean;
-};
+import type { InitialScanPatternCandidate, RulePreset } from "@fuzzy/shared";
 
-import type { RulePreset } from "@fuzzy/shared";
+export type PatternCandidate = InitialScanPatternCandidate;
 
 export type InitialRuleOption = RulePreset & {
 	preview: string[];

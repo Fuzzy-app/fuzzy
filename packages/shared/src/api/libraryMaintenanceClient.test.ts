@@ -14,6 +14,7 @@ const summary: LibraryMaintenanceSummary = {
 	registeredFileCount: 2,
 	updatedFileCount: 1,
 	indexedFileCount: 5,
+	reusedFingerprintCount: 0,
 	missingFileCount: 0,
 	skippedFileCount: 1,
 	warnings: [{ path: "英語IIB\\資料.pdf", message: "本文を索引化できませんでした。" }],
@@ -57,6 +58,20 @@ describe("ライブラリ保守API", () => {
 			command: "rebuildLibrary",
 			payload: { rebuildIndex: true },
 		});
+		await expect(
+			client.reconcileCourseFiles({
+				course: {
+					moodleCourseId: "412",
+					name: "データベース",
+					academicYear: 2026,
+					term: "前期",
+				},
+			}),
+		).resolves.toEqual(summary);
+		expect(messages[1]).toMatchObject({
+			command: "reconcileCourseFiles",
+			payload: { course: { moodleCourseId: "412", name: "データベース" } },
+		});
 		client.disconnect();
 		expect(disconnected).toBe(true);
 	});
@@ -65,5 +80,15 @@ describe("ライブラリ保守API", () => {
 		await expect(new MockApiClient().rebuildLibrary({})).rejects.toMatchObject({
 			code: "NO_NATIVE_HOST",
 		});
+		await expect(
+			new MockApiClient().reconcileCourseFiles({
+				course: {
+					moodleCourseId: "412",
+					name: "データベース",
+					academicYear: null,
+					term: null,
+				},
+			}),
+		).rejects.toMatchObject({ code: "NO_NATIVE_HOST" });
 	});
 });

@@ -16,6 +16,7 @@ const summary = {
 	registeredFileCount: 2,
 	updatedFileCount: 1,
 	indexedFileCount: 5,
+	reusedFingerprintCount: 0,
 	missingFileCount: 0,
 	skippedFileCount: 1,
 	warnings: [{ path: "英語IIB/資料.pdf", message: "本文を抽出できませんでした。" }],

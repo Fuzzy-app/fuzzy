@@ -215,9 +215,7 @@
 		try {
 			const candidates = await scanExistingStructureClient(path);
 			const selectedCandidate =
-				candidates.find((candidate) => candidate.recommended) ??
-				candidates[0] ??
-				null;
+				candidates.find((candidate) => candidate.recommended) ?? null;
 
 			draft = {
 				...draft,
@@ -528,6 +526,9 @@
 												{#if candidate.recommended}
 													<span class="badge">おすすめ</span>
 												{/if}
+												{#if candidate.requiresConfirmation}
+													<span class="badge warning">要確認</span>
+												{/if}
 											</div>
 											<p>{candidate.description}</p>
 											<p class="reason">{candidate.reason}</p>
@@ -535,8 +536,16 @@
 
 										<div class="pattern-side">
 											<div class="score-box">
-												<span>一致度</span>
-												<strong>{candidate.matchScore}%</strong>
+												<span
+													>{candidate.matchScore === null
+														? "判定"
+														: "一致度"}</span
+												>
+												<strong
+													>{candidate.matchScore === null
+														? "要確認"
+														: `${candidate.matchScore}%`}</strong
+												>
 											</div>
 											<div
 												class="example-box"

@@ -23,11 +23,11 @@ use crate::api_types::{
 	EmptyRequest, ExportDataRequest, ExportDataResult, ExtractZipRequest, ExtractZipResult,
 	GetAssignmentChangesRequest, GetDeadlinesRequest, ImportDataRequest, ImportDataResult,
 	LibraryMaintenanceSummary, NotificationRule, NotificationRuleUpdateResult, OkResult,
-	PingResult, RebuildLibraryRequest, RuleSet, RuleViolationListItem, SaveFilesRequest,
-	SaveFilesResult, SaveSuggestion, SearchRequest, SearchResult, SimilarFileMatch,
-	SuggestSavePathRequest, SyncMoodleAssignmentsRequest, UpdateCourseFolderNameRequest,
-	UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest,
-	UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
+	PingResult, RebuildLibraryRequest, ReconcileCourseFilesRequest, RuleSet, RuleViolationListItem,
+	SaveFilesRequest, SaveFilesResult, SaveSuggestion, SearchRequest, SearchResult,
+	SimilarFileMatch, SuggestSavePathRequest, SyncMoodleAssignmentsRequest,
+	UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest,
+	UpdateGlobalRuleRequest, UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
 };
 use crate::file_transfer::{extract_zip_archive, FileTransferCommitResult, FileTransferManager};
 use crate::protocol::{Request, Response};
@@ -49,6 +49,7 @@ pub fn dispatch_with_services(
 		"exportData" => export_data(database, request),
 		"importData" => import_data(database, index_engine, request),
 		"rebuildLibrary" => rebuild_library(database, index_engine, request),
+		"reconcileCourseFiles" => reconcile_course_files(database, index_engine, request),
 		"saveFiles" => save_files(database, index_engine, file_transfers, request),
 		"extractZip" => extract_zip(database, index_engine, request),
 		_ => dispatch_with_file_transfers(database, file_transfers, request),
@@ -321,6 +322,64 @@ fn rebuild_library(
 		)
 		.map(LibraryMaintenanceSummary::from),
 	)
+}
+
+fn reconcile_course_files(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<ReconcileCourseFilesRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = (|| {
+		if !valid_moodle_identifier(&payload.course.moodle_course_id) {
+			return Err(EngineError::InvalidInput {
+				field: "course.moodleCourseId".to_string(),
+				reason: "1文字以上128文字以下の安定IDを指定してください".to_string(),
+			});
+		}
+		if payload.course.name.trim().is_empty() || payload.course.name.chars().count() > 1_000 {
+			return Err(EngineError::InvalidInput {
+				field: "course.name".to_string(),
+				reason: "1文字以上1000文字以下で指定してください".to_string(),
+			});
+		}
+		let course = database.resolve_course_context(
+			Some(&payload.course.moodle_course_id),
+			Some(&payload.course.name),
+			payload.course.academic_year,
+			payload.course.term.as_deref(),
+		)?;
+		let course_folder = database
+			.load_course_folder_resolutions()?
+			.into_iter()
+			.find(|folder| folder.course_id == course.course_id)
+			.ok_or_else(|| EngineError::NotFound {
+				entity: "コース保存名".to_string(),
+				id: course.course_id.to_string(),
+			})?;
+		let rules = database.load_rule_set()?;
+		let base_folder = database.base_folder_path()?;
+		let context = RuleContext {
+			course_id: Some(course.course_id),
+			course_name: Some(course_folder.folder_name),
+			year: course.academic_year.map(|year| year.to_string()),
+			term: course.term,
+			assignment: None,
+			section: None,
+		};
+		let relative_root = DefaultRuleEngine.suggest_course_root(&context, &rules)?;
+		LibraryMaintenance::reconcile_course(
+			database,
+			index_engine,
+			course.course_id,
+			&base_folder.join(relative_root),
+		)
+		.map(LibraryMaintenanceSummary::from)
+	})();
+	respond(request.id, result)
 }
 
 fn suggest_save_path(database: &mut Database, request: Request) -> Response {
@@ -1333,6 +1392,58 @@ mod tests {
 		);
 		assert!(!invalid.ok);
 		assert_eq!(invalid.error.unwrap().code, "INVALID_REQUEST");
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn reconcile_course_files_scans_only_the_requested_moodle_course() {
+		let root = unique_temp_dir();
+		std::fs::create_dir_all(root.join("データベース")).unwrap();
+		std::fs::create_dir_all(root.join("離散数学")).unwrap();
+		std::fs::write(root.join("データベース").join("A.txt"), "database").unwrap();
+		std::fs::write(root.join("離散数学").join("B.txt"), "discrete").unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let response = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"reconcileCourseFiles",
+				serde_json::json!({
+					"course": {
+						"moodleCourseId": "412",
+						"name": "データベース",
+						"academicYear": 2026,
+						"term": "前期"
+					}
+				}),
+			),
+		);
+
+		assert!(response.ok, "{:?}", response.error);
+		assert_eq!(response.data.unwrap()["scannedFileCount"], 1);
+		assert_eq!(database.dashboard().unwrap().total_files, 1);
+		assert_eq!(index.indexed_paths.len(), 1);
+		assert_eq!(
+			index.indexed_paths[0].canonicalize().unwrap(),
+			root.join("データベース")
+				.join("A.txt")
+				.canonicalize()
+				.unwrap()
+		);
 		std::fs::remove_dir_all(root).unwrap();
 	}
 

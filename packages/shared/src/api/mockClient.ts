@@ -40,6 +40,7 @@ import type {
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
 	RebuildLibraryRequest,
+	ReconcileCourseFilesRequest,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolationListItem,
@@ -399,6 +400,12 @@ export class MockApiClient implements FuzzyApiClient {
 
 	async rebuildLibrary(_request: RebuildLibraryRequest): Promise<LibraryMaintenanceSummary> {
 		throw new ApiError("NO_NATIVE_HOST", "保存先の再スキャンにはnative-hostへの接続が必要です。");
+	}
+
+	async reconcileCourseFiles(
+		_request: ReconcileCourseFilesRequest,
+	): Promise<LibraryMaintenanceSummary> {
+		throw new ApiError("NO_NATIVE_HOST", "コース資料の差分更新にはnative-hostへの接続が必要です。");
 	}
 
 	private async enqueueRuleMutation(mutate: () => void): Promise<RuleUpdateResult> {

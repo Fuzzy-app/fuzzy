@@ -28,6 +28,8 @@ mod saved_files;
 mod setup;
 mod sync;
 
+pub(crate) use library::saved_path_key;
+pub use library::{ReusableScannedFingerprint, ScannedFileObservation, ScannedFileUpsertResult};
 pub use saved_files::{ExtractedFileRegistration, SavedZipSource};
 
 /// DBファイルパスのオーバーライドに使う環境変数。
@@ -504,6 +506,7 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("files", "original_name", true, 0),
 	("files", "saved_path", true, 0),
 	("files", "size_bytes", true, 0),
+	("files", "scan_modified_at_ns", false, 0),
 	("files", "hash_blake3", true, 0),
 	("files", "text_extracted", true, 0),
 	("files", "rule_compliant", true, 0),
@@ -594,6 +597,7 @@ fn validate_schema_shape(conn: &Connection) -> EngineResult<()> {
 	] {
 		require_unique_index(conn, table, columns, partial)?;
 	}
+	require_unique_index_collation(conn, "files", &["saved_path"], &["NOCASE"], false)?;
 	require_unique_index(
 		conn,
 		"assignments",
@@ -760,6 +764,69 @@ fn require_unique_index(
 		message: format!(
 			"SQLiteスキーマの{table}に必須一意制約（{}）がありません",
 			expected_columns.join(", ")
+		),
+	})
+}
+
+fn require_unique_index_collation(
+	conn: &Connection,
+	table: &str,
+	expected_columns: &[&str],
+	expected_collations: &[&str],
+	expected_partial: bool,
+) -> EngineResult<()> {
+	let mut statement = conn
+		.prepare(&format!("PRAGMA index_list('{}')", sql_quote(table)))
+		.map_err(db_err)?;
+	let indexes = statement
+		.query_map([], |row| {
+			Ok((
+				row.get::<_, String>(1)?,
+				row.get::<_, bool>(2)?,
+				row.get::<_, bool>(4)?,
+			))
+		})
+		.map_err(db_err)?
+		.collect::<rusqlite::Result<Vec<_>>>()
+		.map_err(db_err)?;
+	for (name, unique, partial) in indexes {
+		if !unique || partial != expected_partial {
+			continue;
+		}
+		let mut columns_statement = conn
+			.prepare(&format!("PRAGMA index_xinfo('{}')", sql_quote(&name)))
+			.map_err(db_err)?;
+		let entries = columns_statement
+			.query_map([], |row| {
+				Ok((
+					row.get::<_, Option<String>>(2)?,
+					row.get::<_, String>(4)?,
+					row.get::<_, bool>(5)?,
+				))
+			})
+			.map_err(db_err)?
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.map_err(db_err)?
+			.into_iter()
+			.filter(|(_, _, key)| *key)
+			.collect::<Vec<_>>();
+		let columns_match = entries
+			.iter()
+			.filter_map(|(column, _, _)| column.as_deref())
+			.eq(expected_columns.iter().copied());
+		let collations_match = entries
+			.iter()
+			.map(|(_, collation, _)| collation.as_str())
+			.eq(expected_collations.iter().copied());
+		if columns_match && collations_match {
+			return Ok(());
+		}
+	}
+	Err(EngineError::Database {
+		message: format!(
+			"SQLiteスキーマの{table}に照合順序を含む必須一意制約（{} / {}）がありません",
+			expected_columns.join(", "),
+			expected_collations.join(", ")
 		),
 	})
 }
@@ -934,6 +1001,7 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"original_name",
 			"saved_path",
 			"size_bytes",
+			"scan_modified_at_ns",
 			"mime_type",
 			"hash_blake3",
 			"simhash",
@@ -1091,6 +1159,41 @@ mod tests {
 			.query_row("PRAGMA foreign_keys", [], |row| row.get(0))
 			.unwrap();
 		assert_eq!(enabled, 1);
+	}
+
+	#[test]
+	fn saved_paths_are_case_insensitively_unique_and_use_the_unique_index() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO files (
+					original_name, saved_path, size_bytes, hash_blake3
+				 ) VALUES ('A.txt', 'C:\\Fuzzy\\Course\\A.txt', 1, 'b3:first')",
+				[],
+			)
+			.unwrap();
+		assert!(database
+			.conn()
+			.execute(
+				"INSERT INTO files (
+					original_name, saved_path, size_bytes, hash_blake3
+				 ) VALUES ('a.txt', 'c:\\fuzzy\\course\\a.TXT', 1, 'b3:second')",
+				[],
+			)
+			.is_err());
+
+		let plan: String = database
+			.conn()
+			.query_row(
+				"EXPLAIN QUERY PLAN
+				 SELECT id FROM files
+				 WHERE saved_path = 'c:\\fuzzy\\course\\a.txt' COLLATE NOCASE",
+				[],
+				|row| row.get(3),
+			)
+			.unwrap();
+		assert!(plan.contains("sqlite_autoindex_files"), "{plan}");
 	}
 
 	#[cfg(windows)]
@@ -1278,7 +1381,7 @@ mod tests {
 				"course_id        INTEGER,",
 			),
 			SCHEMA_SQL.replace(
-				"saved_path       TEXT NOT NULL UNIQUE,",
+				"saved_path       TEXT NOT NULL COLLATE NOCASE UNIQUE,",
 				"saved_path       TEXT NOT NULL,",
 			),
 			SCHEMA_SQL.replace(
