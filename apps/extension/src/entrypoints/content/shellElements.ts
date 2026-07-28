@@ -1,6 +1,7 @@
 import { FUZZY_SCREENS, type FuzzyScreenId } from "../../lib/ui/screenCopy";
 
-const BRAND_ICON_PATH = "/icon/128.png";
+/** Moodle上の画面表示には拡大縮小しても鮮明な公式SVGを使う。 */
+export const BRAND_ICON_PATH = "/icon/fuzzy.svg";
 
 /** 外部由来の文字列をHTMLとして解釈せず、textContentだけでDOMへ追加する。 */
 export function shellElement<K extends keyof HTMLElementTagNameMap>(

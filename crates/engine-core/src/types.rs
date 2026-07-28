@@ -5,6 +5,7 @@
 //! `packages/shared/src/generated/` へのTS型自動生成に切り替える予定。
 
 use std::path::PathBuf;
+use url::Url;
 
 /// Moodle文脈をSQLiteのコースへ解決した結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,8 @@ pub struct AssignmentRecord {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
+	pub submission_availability: String,
+	pub moodle_url: Option<String>,
 }
 
 /// One assignment received from the Moodle acquisition pipeline.
@@ -82,6 +85,42 @@ pub struct MoodleAssignmentSyncInput {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
+	pub submission_availability: String,
+	pub moodle_url: Option<String>,
+}
+
+pub fn is_supported_moodle_assignment_url(value: &str) -> bool {
+	if value.len() > 2_048 {
+		return false;
+	}
+	let Ok(url) = Url::parse(value) else {
+		return false;
+	};
+	let Some(host) = url.host_str() else {
+		return false;
+	};
+	let moodle_suffix = host
+		.strip_prefix("moodle")
+		.and_then(|value| value.strip_suffix(".wakayama-u.ac.jp"));
+	let supported_host = moodle_suffix.is_some_and(|year| {
+		year.is_empty() || year.chars().all(|character| character.is_ascii_digit())
+	});
+	let assignment_id = url
+		.query_pairs()
+		.find_map(|(key, value)| (key == "id").then_some(value));
+	url.scheme() == "https"
+		&& supported_host
+		&& matches!(url.path(), "/mod/assign/view.php" | "/mod/quiz/view.php")
+		&& url.username().is_empty()
+		&& url.password().is_none()
+		&& url.fragment().is_none()
+		&& assignment_id.is_some_and(|value| {
+			!value.is_empty()
+				&& value.len() <= 128
+				&& value.chars().all(|character| {
+					character.is_ascii_alphanumeric() || "._:-".contains(character)
+				})
+		})
 }
 
 /// Aggregate result of one assignment synchronization.

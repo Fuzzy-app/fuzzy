@@ -18,6 +18,8 @@ const assignment: Assignment = {
 	dueAtStatus: "normal",
 	submissionMode: "moodle_auto",
 	submitted: false,
+	submissionAvailability: "unknown",
+	moodleUrl: null,
 };
 const rules: NotificationRule[] = [
 	{ id: 1, offsetMinutes: 1440, label: "1日前", enabled: true },

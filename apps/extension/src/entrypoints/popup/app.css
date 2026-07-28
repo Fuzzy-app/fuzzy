@@ -17,8 +17,7 @@ body {
 	min-width: 360px;
 	min-height: 300px;
 	font-family: var(--fuzzy-font-family);
-	background: linear-gradient(135deg, rgba(255, 224, 123, 0.24), transparent 45%),
-		var(--fuzzy-color-warm-background);
+	background: var(--fuzzy-brand-atmosphere), var(--fuzzy-color-warm-background);
 }
 
 #app {
@@ -29,9 +28,22 @@ body {
 	padding: 24px 22px;
 }
 
+.fuzzy-popup-brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.fuzzy-popup-brand-icon {
+	width: 32px;
+	height: 32px;
+	border-radius: 9px;
+}
+
 .fuzzy-popup-kicker {
-	margin: 0 0 10px;
-	color: #4b4b4b;
+	margin: 0;
+	color: var(--fuzzy-color-text-secondary);
 	font-size: 0.82rem;
 	font-weight: 800;
 	letter-spacing: 0.06em;
@@ -72,7 +84,7 @@ body {
 	display: grid;
 	gap: 5px;
 	padding: 10px;
-	border: 1px solid #1c1c1c;
+	border: 1px solid var(--fuzzy-color-border);
 	background: var(--fuzzy-color-surface);
 }
 
@@ -89,7 +101,7 @@ body {
 .fuzzy-popup-guide {
 	margin-top: 16px;
 	padding-top: 14px;
-	border-top: 2px solid #1c1c1c;
+	border-top: 2px solid var(--fuzzy-color-border);
 }
 
 .fuzzy-popup-courses h2,
@@ -103,7 +115,7 @@ body {
 	justify-content: space-between;
 	gap: 12px;
 	padding: 9px 0;
-	border-top: 1px solid #d8d2c4;
+	border-top: 1px solid var(--fuzzy-color-border-soft);
 	font-size: 0.82rem;
 }
 
@@ -127,7 +139,7 @@ body {
 	gap: 12px;
 	align-items: start;
 	padding: 12px 14px;
-	border: 1px solid #1c1c1c;
+	border: 1px solid var(--fuzzy-color-border);
 	background: var(--fuzzy-color-surface);
 	font-size: 0.93rem;
 	font-weight: 700;

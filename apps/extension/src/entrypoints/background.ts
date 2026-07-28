@@ -28,6 +28,11 @@ import {
 } from "../lib/cache/dashboardCacheMessaging";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
+	createSyncNotificationId,
+	navigateFromSyncNotification,
+	parseSyncNotificationId,
+} from "../lib/notifications/syncNotificationNavigation";
+import {
 	isRuleManagementRequestMessage,
 	respondToRuleManagementRequest,
 } from "../lib/rules/backgroundApi";
@@ -36,7 +41,7 @@ import {
 	reportCurrentExtensionRuntime,
 } from "../lib/runtime/extensionRuntime";
 import { MOODLE_NATIVE_SESSION_PORT } from "../lib/runtime/moodleNativeSession";
-import { buildSyncResultNotificationMessage } from "../lib/ui/screenCopy";
+import { buildSyncResultNotificationMessage, shouldNotifySyncResult } from "../lib/ui/screenCopy";
 
 const SYNC_CHECK_ALARM = "fuzzy-check-latest-sync-event";
 const SYNC_NOTIFICATION_KEY_PREFIX = "fuzzy-last-notified-sync-event";
@@ -81,16 +86,20 @@ async function deliverSyncEventNotification(
 	mode: FuzzyApiClient["mode"],
 	event: DataSyncEvent,
 ): Promise<void> {
-	// 呼び出し元のsyncMoodleAssignmentsが成功したeventは初回baselineと区別し、
-	// 必ずその場で通知する。同じIDはChrome側で同じ通知を置き換える。
+	// 変更がある同期だけを通知する。同じIDはChrome側で同じ通知を置き換える。
 	if (mode === "mock") return;
 	const total = syncChangeTotal(event);
-	await browser.notifications.create(`fuzzy-sync-${mode}-${event.id}`, {
-		type: "basic",
-		iconUrl: browser.runtime.getURL("/icon/128.png"),
-		title: "Fuzzy: Moodleデータを取得しました",
-		message: buildSyncResultNotificationMessage(total),
-	});
+	if (shouldNotifySyncResult(total)) {
+		if (mode !== "native") return;
+		await browser.notifications.create(createSyncNotificationId(mode, event.id), {
+			type: "basic",
+			iconUrl: browser.runtime.getURL("/icon/128.png"),
+			title: "Fuzzy: 課題・締切に変更があります",
+			message: buildSyncResultNotificationMessage(total),
+		});
+	}
+
+	// 変更0件でも確認済みIDは進める。進めないと同じ同期を毎分確認し続けてしまう。
 	const storageKey = `${SYNC_NOTIFICATION_KEY_PREFIX}:${mode}`;
 	const stored = await browser.storage.local.get(storageKey);
 	const previousEventId =
@@ -182,6 +191,12 @@ export default defineBackground(() => {
 		if (alarm.name === deadlineNotificationMonitor.alarmName) {
 			void deadlineNotificationMonitor.check();
 		}
+	});
+	browser.notifications.onClicked.addListener((notificationId) => {
+		if (!parseSyncNotificationId(notificationId)) return;
+		void navigateFromSyncNotification(browser, notificationId).catch((error) => {
+			console.warn("[fuzzy] 通知から課題・締切画面を開けませんでした", error);
+		});
 	});
 	startNotificationMonitoring();
 

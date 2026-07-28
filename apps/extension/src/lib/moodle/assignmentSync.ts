@@ -1,4 +1,5 @@
 import type { ReconcileCourseFilesRequest, SyncMoodleAssignmentsRequest } from "@fuzzy/shared";
+import { isSupportedMoodleAssignmentUrl } from "../../../moodleSite";
 import { type MoodlePageSnapshot, hasCompleteAssignmentHintExtraction } from "./pageSnapshot";
 
 /**
@@ -45,6 +46,11 @@ export function buildMoodleAssignmentSyncPayload(
 			dueAtStatus: parsedDue.dueAtStatus,
 			submissionMode: "moodle_auto",
 			submitted: hint.submitted,
+			submissionAvailability: hint.submissionAvailability,
+			moodleUrl:
+				hint.moodleUrl === null || isSupportedMoodleAssignmentUrl(hint.moodleUrl)
+					? hint.moodleUrl
+					: null,
 		});
 	}
 

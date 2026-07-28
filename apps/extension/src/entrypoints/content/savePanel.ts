@@ -332,7 +332,7 @@ export async function mountSavePanel(): Promise<void> {
 		panel.classList.toggle("is-collapsed", !isPanelOpen);
 		// 開閉ハンドルは開いている間だけ表示（閉じている間は「Fuzzy」タブで再オープン）。
 		collapseHandle.style.display = isPanelOpen ? "grid" : "none";
-		panel.innerHTML = "";
+		panel.replaceChildren();
 
 		if (!isPanelOpen) {
 			panel.append(renderOpenTab());
@@ -372,26 +372,37 @@ export async function mountSavePanel(): Promise<void> {
 	function renderHeader() {
 		const header = document.createElement("div");
 		header.className = "fuzzy-panel-header";
-		const modePill =
-			api.mode === "mock"
-				? '<span class="fuzzy-pill fuzzy-pill-mock">サンプル</span>'
-				: '<span class="fuzzy-pill">ブラウザ拡張</span>';
-		header.innerHTML = `
-			<div>
-				<p><span class="fuzzy-logo">F</span><strong>Fuzzy</strong>${modePill}</p>
-				<small>ダウンロードを検出・コース「${escapeHtml(snapshot.courseName ?? "未取得")}」</small>
-			</div>
-			<div class="fuzzy-panel-tools">
-				<button type="button" data-action="refresh" aria-label="Fuzzyの資料一覧を更新">↻</button>
-				<button type="button" data-action="collapse" aria-label="Fuzzyの一括保存パネルを閉じる">×</button>
-			</div>
-		`;
-		header
-			.querySelector<HTMLButtonElement>("[data-action='refresh']")
-			?.addEventListener("click", () => void reloadSnapshotAndSuggestions());
-		header
-			.querySelector<HTMLButtonElement>("[data-action='collapse']")
-			?.addEventListener("click", () => setPanelOpen(false));
+		const copy = document.createElement("div");
+		const brand = document.createElement("p");
+		const icon = document.createElement("img");
+		icon.className = "fuzzy-logo";
+		icon.src = browser.runtime.getURL("/icon/fuzzy.svg");
+		icon.alt = "";
+		icon.setAttribute("aria-hidden", "true");
+		const name = document.createElement("strong");
+		name.textContent = "Fuzzy";
+		const modePill = document.createElement("span");
+		modePill.className = api.mode === "mock" ? "fuzzy-pill fuzzy-pill-mock" : "fuzzy-pill";
+		modePill.textContent = api.mode === "mock" ? "サンプル" : "ブラウザ拡張";
+		brand.append(icon, name, modePill);
+		const context = document.createElement("small");
+		context.textContent = `ダウンロードを検出・コース「${snapshot.courseName ?? "未取得"}」`;
+		copy.append(brand, context);
+
+		const tools = document.createElement("div");
+		tools.className = "fuzzy-panel-tools";
+		const refresh = document.createElement("button");
+		refresh.type = "button";
+		refresh.textContent = "↻";
+		refresh.setAttribute("aria-label", "Fuzzyの資料一覧を更新");
+		refresh.addEventListener("click", () => void reloadSnapshotAndSuggestions());
+		const collapse = document.createElement("button");
+		collapse.type = "button";
+		collapse.textContent = "×";
+		collapse.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
+		collapse.addEventListener("click", () => setPanelOpen(false));
+		tools.append(refresh, collapse);
+		header.append(copy, tools);
 		return header;
 	}
 

@@ -527,6 +527,8 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("assignments", "due_at_status", true, 0),
 	("assignments", "submission_mode", true, 0),
 	("assignments", "submitted", true, 0),
+	("assignments", "submission_availability", true, 0),
+	("assignments", "moodle_url", false, 0),
 	("assignments", "removed_at", false, 0),
 	("assignments", "created_at", true, 0),
 	("assignments", "updated_at", true, 0),
@@ -855,13 +857,17 @@ fn validate_check_constraints(conn: &Connection) -> EngineResult<()> {
 			"check(submission_modein('moodle_auto','manual','notify_only','unknown'))",
 		),
 		(
+			"assignments",
+			"check(submission_availabilityin('available','unavailable','unknown'))",
+		),
+		(
 			"notification_rules",
 			"check(offset_minutesbetween0and525600)",
 		),
 		("courses", "check(academic_yearbetween1900and9999)"),
 		(
 			"assignment_changes",
-			"check(fieldin('due_at','title','submission_mode','due_at_status','submitted','removed_at'))",
+			"check(fieldin('due_at','title','submission_mode','due_at_status','submitted','submission_availability','moodle_url','removed_at'))",
 		),
 	];
 
@@ -1028,6 +1034,8 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"due_at_status",
 			"submission_mode",
 			"submitted",
+			"submission_availability",
+			"moodle_url",
 			"related_file_id",
 			"removed_at",
 			"created_at",

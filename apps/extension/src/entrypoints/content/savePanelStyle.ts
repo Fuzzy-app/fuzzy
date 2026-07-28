@@ -74,7 +74,7 @@ export const SAVE_PANEL_STYLE = `
 			justify-content: space-between;
 			border-top: 0;
 			background: var(--fuzzy-color-surface);
-			box-shadow: 0 2px 8px rgb(22 34 51 / 6%);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-panel-tools {
@@ -112,15 +112,11 @@ export const SAVE_PANEL_STYLE = `
 		}
 
 		.fuzzy-logo {
-			display: inline-grid;
-			place-items: center;
+			display: block;
 			width: 22px;
 			height: 22px;
 			border-radius: 6px;
-			background: var(--fuzzy-color-primary);
-			color: var(--fuzzy-color-surface);
-			font-size: 13px;
-			font-weight: 900;
+			object-fit: cover;
 		}
 
 		.fuzzy-pill {
@@ -156,7 +152,7 @@ export const SAVE_PANEL_STYLE = `
 			font-weight: 900;
 			line-height: 1;
 			cursor: pointer;
-			box-shadow: -8px 0 20px rgb(22 34 51 / 22%);
+			box-shadow: var(--fuzzy-shadow-floating);
 			appearance: none;
 		}
 
@@ -176,7 +172,7 @@ export const SAVE_PANEL_STYLE = `
 			min-width: 36px;
 			min-height: 84px;
 			border-radius: 8px 0 0 8px !important;
-			box-shadow: 0 12px 32px rgb(22 34 51 / 22%);
+			box-shadow: var(--fuzzy-shadow-floating);
 			letter-spacing: 0;
 			font-size: 13px !important;
 		}
@@ -498,7 +494,7 @@ export const SAVE_PANEL_STYLE = `
 			display: grid;
 			gap: 7px;
 			background: var(--fuzzy-color-surface);
-			box-shadow: 0 -8px 22px rgb(22 34 51 / 8%);
+			box-shadow: var(--fuzzy-shadow-card);
 		}
 
 		.fuzzy-actions p {
@@ -532,7 +528,7 @@ export const SAVE_PANEL_STYLE = `
 			padding: 7px 10px !important;
 			color: var(--fuzzy-color-primary-strong) !important;
 			font-size: 12px;
-			box-shadow: 0 2px 6px rgb(99 91 255 / 14%);
+			box-shadow: 0 2px 6px var(--fuzzy-color-primary-overlay);
 		}
 
 		.fuzzy-toggle-all-button:hover {

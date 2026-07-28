@@ -26,7 +26,14 @@ export interface MoodleAssignmentHint {
 	sourceText: string;
 	source: "page_text" | "dashboard_widget";
 	submitted: boolean;
+	submissionAvailability: "available" | "unavailable" | "unknown";
+	moodleUrl: string | null;
 }
+
+const SUBMISSION_UNAVAILABLE_PATTERN =
+	/(?:提出(?:を受け付けていません|できません|期間は終了)|受付(?:終了|停止)|期限切れ|利用できません|closed|no longer available|not available)/i;
+const SUBMISSION_AVAILABLE_PATTERN =
+	/(?:提出(?:を追加|物をアップロード|する)|小テストを受験|回答を開始|add submission|upload submission|attempt quiz now|start attempt)/i;
 
 export interface MoodlePageSnapshot {
 	moodleCourseId: string | null;
@@ -277,9 +284,19 @@ export function extractAssignmentHints(
 			sourceText: line,
 			source,
 			submitted: false,
+			submissionAvailability: "unknown",
+			moodleUrl: null,
 		})),
 		(hint) => `${hint.source}:${hint.sourceText}`,
 	);
+}
+
+export function detectSubmissionAvailability(
+	sourceText: string,
+): MoodleAssignmentHint["submissionAvailability"] {
+	if (SUBMISSION_UNAVAILABLE_PATTERN.test(sourceText)) return "unavailable";
+	if (SUBMISSION_AVAILABLE_PATTERN.test(sourceText)) return "available";
+	return "unknown";
 }
 
 /**
@@ -319,6 +336,8 @@ export function extractStructuredAssignmentHints(
 				sourceText,
 				source: isDashboardAssignment(link) ? "dashboard_widget" : "page_text",
 				submitted: /(?:提出済み|提出しました|submitted|graded)/i.test(sourceText),
+				submissionAvailability: detectSubmissionAvailability(sourceText),
+				moodleUrl: url,
 			},
 		];
 	});

@@ -8,6 +8,9 @@
 		"build": "vite build",
 		"preview": "vite preview --host 127.0.0.1"
 	},
+	"dependencies": {
+		"@fuzzy/shared": "workspace:*"
+	},
 	"devDependencies": {
 		"vite": "^6.0.3"
 	}

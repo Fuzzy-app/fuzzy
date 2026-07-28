@@ -1904,7 +1904,9 @@ mod tests {
 						"source": "moodle_dashboard",
 						"dueAtStatus": "normal",
 						"submissionMode": "moodle_auto",
-						"submitted": false
+						"submitted": false,
+						"submissionAvailability": "available",
+						"moodleUrl": "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701"
 					}]
 				}),
 			),
