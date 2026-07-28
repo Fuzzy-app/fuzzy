@@ -116,6 +116,55 @@ describe("NativeApiClientの接続ライフサイクル", () => {
 		expect(await client.getDashboard()).toEqual(dashboard);
 	});
 
+	test("分割応答の途中で通常応答へ切り替わった場合は拒否する", async () => {
+		const listeners = new Set<(message: unknown) => void>();
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					return {
+						onMessage: {
+							addListener(listener: (message: unknown) => void) {
+								listeners.add(listener);
+							},
+						},
+						onDisconnect: { addListener() {} },
+						postMessage(message: { id: string }) {
+							queueMicrotask(() => {
+								for (const listener of listeners) {
+									listener({
+										id: message.id,
+										ok: true,
+										chunk: {
+											index: 0,
+											total: 2,
+											encoding: "base64",
+											data: base64(new TextEncoder().encode('{"id":')),
+										},
+									});
+									listener({
+										id: message.id,
+										ok: true,
+										data: {
+											courses: [],
+											totalFiles: 0,
+											totalViolations: 0,
+											upcomingDeadlineCount: 0,
+										},
+									});
+								}
+							});
+						},
+						disconnect() {},
+					};
+				},
+			},
+		};
+
+		await expect(new NativeApiClient().getDashboard()).rejects.toMatchObject({
+			code: "INVALID_RESPONSE",
+		});
+	});
+
 	test("pingは現在の通信仕様バージョンと一致するhostだけを受理する", async () => {
 		let protocolVersion = 2;
 		const createPort = () => {
@@ -235,6 +284,62 @@ describe("NativeApiClientの接続ライフサイクル", () => {
 
 		expect(summary.indexedFileCount).toBe(1);
 		expect(disconnectCount).toBe(1);
+	});
+
+	test("長時間処理でも分割応答の途中で通常応答へ切り替わった場合は拒否する", async () => {
+		const listeners = new Set<(message: unknown) => void>();
+		(globalThis as { chrome?: unknown }).chrome = {
+			runtime: {
+				connectNative() {
+					return {
+						onMessage: {
+							addListener(listener: (message: unknown) => void) {
+								listeners.add(listener);
+							},
+							removeListener(listener: (message: unknown) => void) {
+								listeners.delete(listener);
+							},
+						},
+						onDisconnect: { addListener() {} },
+						postMessage(message: { id: string }) {
+							queueMicrotask(() => {
+								for (const listener of [...listeners]) {
+									listener({
+										id: message.id,
+										ok: true,
+										chunk: {
+											index: 0,
+											total: 2,
+											encoding: "base64",
+											data: base64(new TextEncoder().encode('{"id":')),
+										},
+									});
+									listener({
+										id: message.id,
+										ok: true,
+										data: {
+											scannedFileCount: 0,
+											registeredFileCount: 0,
+											updatedFileCount: 0,
+											indexedFileCount: 0,
+											reusedFingerprintCount: 0,
+											missingFileCount: 0,
+											skippedFileCount: 0,
+											warnings: [],
+										},
+									});
+								}
+							});
+						},
+						disconnect() {},
+					};
+				},
+			},
+		};
+
+		await expect(
+			new NativeApiClient().rebuildLibrary({ rebuildIndex: true }),
+		).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
 	});
 
 	test("ZIP展開は通常要求と分離した長時間timeoutで完了を待つ", async () => {

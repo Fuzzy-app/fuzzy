@@ -12,7 +12,7 @@ use crate::duplicate::{DefaultDuplicateDetector, DuplicateDetector, DEFAULT_SIMI
 use crate::index::IndexEngine;
 use crate::pattern::{normalize_term_component, parse_academic_year_component};
 use crate::rule::DefaultRuleEngine;
-use crate::scan::{scan_registered_file, DefaultScanEngine, ScanEngine};
+use crate::scan::{relative_warning_path, scan_registered_file, DefaultScanEngine, ScanEngine};
 use crate::section::{parse_section_file_prefix, parse_section_name};
 use crate::types::{FileEntry, FileFingerprint, SavedFileRegistration, ScanSnapshot, ScanWarning};
 use crate::{Database, EngineError, EngineResult};
@@ -219,10 +219,16 @@ impl LibraryMaintenance {
 						snapshot.entries.push(entry);
 					}
 					Ok(None) => {}
-					Err(error) => snapshot.warnings.push(ScanWarning {
-						path: registered.saved_path,
-						message: format!("登録済み資料の更新情報を読み取れませんでした: {error}"),
-					}),
+					Err(error) => {
+						eprintln!(
+							"登録済み資料の更新情報を読み取れませんでした（{}）: {error}",
+							registered.saved_path.display()
+						);
+						snapshot.warnings.push(ScanWarning {
+							path: relative_warning_path(&canonical_root, &registered.saved_path),
+							message: "登録済み資料の更新情報を読み取れませんでした。".to_string(),
+						});
+					}
 				}
 			}
 			snapshot
@@ -688,12 +694,16 @@ fn reconcile_missing_files(
 					.to_string(),
 			),
 			Err(error) => {
+				eprintln!(
+					"登録済み資料の実体を確認できませんでした（{}）: {error}",
+					registered.saved_path.display()
+				);
 				summary.skipped_file_count += 1;
 				push_warning(
 					&mut summary.warnings,
 					omitted_warnings,
 					relative_display(relative_path),
-					format!("登録済み資料の実体を確認できませんでした: {error}"),
+					"登録済み資料の実体を確認できませんでした。".to_string(),
 				);
 				continue;
 			}
@@ -706,12 +716,16 @@ fn reconcile_missing_files(
 			match database.update_library_file_presence(registered.file_id, false) {
 				Ok(changed) => changed,
 				Err(error) => {
+					eprintln!(
+						"欠損状態をSQLiteへ保存できませんでした（{}）: {error}",
+						registered.saved_path.display()
+					);
 					summary.skipped_file_count += 1;
 					push_warning(
 						&mut summary.warnings,
 						omitted_warnings,
 						relative_display(relative_path),
-						format!("欠損状態をSQLiteへ保存できませんでした: {error}"),
+						"欠損状態をSQLiteへ保存できませんでした。".to_string(),
 					);
 					continue;
 				}
@@ -728,12 +742,17 @@ fn reconcile_missing_files(
 		);
 		if !rebuild_index {
 			if let Err(error) = index_engine.remove_file(database, registered.file_id) {
+				eprintln!(
+					"欠損資料を検索索引から除外できませんでした（{}）: {error}",
+					registered.saved_path.display()
+				);
 				summary.skipped_file_count += 1;
 				push_warning(
 					&mut summary.warnings,
 					omitted_warnings,
 					relative_display(relative_path),
-					format!("欠損資料を検索索引から除外できませんでした: {error}"),
+					"欠損資料を検索索引から除外できませんでした。再スキャンで再試行できます。"
+						.to_string(),
 				);
 			}
 		}
@@ -953,6 +972,20 @@ mod tests {
 			)
 			.unwrap();
 		database
+	}
+
+	#[test]
+	fn warning_paths_never_expose_the_library_root() {
+		let root = PathBuf::from(r"C:\Users\student\Fuzzy");
+
+		assert_eq!(
+			relative_warning_path(&root, &root.join("データベース/第4回/正規化.pdf")),
+			PathBuf::from("データベース/第4回/正規化.pdf")
+		);
+		assert_eq!(
+			relative_warning_path(&root, &PathBuf::from(r"D:\outside\secret.pdf")),
+			PathBuf::from(".")
+		);
 	}
 
 	#[test]

@@ -201,6 +201,11 @@ export class NativeApiClient implements FuzzyApiClient {
 				pending.reject(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
 				return;
 			}
+		} else if (pending.chunkState) {
+			clearTimeout(pending.timeout);
+			this.#pending.delete(messageId);
+			pending.reject(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
+			return;
 		}
 		if (!isEnvelope(resolvedMessage)) return;
 		clearTimeout(pending.timeout);
@@ -284,6 +289,9 @@ export class NativeApiClient implements FuzzyApiClient {
 								rejectPending(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
 								return;
 							}
+						} else if (chunkState) {
+							rejectPending(new ApiError("INVALID_RESPONSE", "native-hostの分割応答が不正です"));
+							return;
 						}
 						if (!isEnvelope(resolvedMessage)) return;
 						clearTimeout(timeout);

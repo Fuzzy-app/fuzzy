@@ -179,7 +179,8 @@ fn scan_root(root: &Path) -> EngineResult<ScanSnapshot> {
 /// 既知の保存済みファイル1件を、保存ルート基準の走査エントリーへ変換する。
 ///
 /// コース単位の差分走査で、ルール変更前の場所に残っている登録済みファイルも
-/// 更新確認できるようにする。シンボリックリンクと保存ルート外は対象外にする。
+/// 更新確認できるようにする。シンボリックリンク・保存ルート外・組み込み除外対象は
+/// 対象外にする。
 pub(crate) fn scan_registered_file(root: &Path, path: &Path) -> EngineResult<Option<FileEntry>> {
 	let metadata = match fs::symlink_metadata(path) {
 		Ok(metadata) => metadata,
@@ -198,6 +199,19 @@ pub(crate) fn scan_registered_file(root: &Path, path: &Path) -> EngineResult<Opt
 	let Ok(relative_path) = canonical_path.strip_prefix(&canonical_root) else {
 		return Ok(None);
 	};
+	let mut ancestor = canonical_path.parent();
+	while let Some(directory) = ancestor {
+		if directory == canonical_root {
+			break;
+		}
+		let Some(name) = directory.file_name() else {
+			return Ok(None);
+		};
+		if is_ignored_directory(&canonical_root, directory, name) {
+			return Ok(None);
+		}
+		ancestor = directory.parent();
+	}
 	let relative_path = relative_path.to_path_buf();
 	let Some(file_name) = canonical_path.file_name() else {
 		return Ok(None);
@@ -332,7 +346,7 @@ fn is_project_output_directory(root: &Path, path: &Path, name: &std::ffi::OsStr)
 	let Some(parent) = path.parent() else {
 		return false;
 	};
-	let has_marker = |markers: &[&str]| markers.iter().any(|marker| parent.join(marker).exists());
+	let has_marker = |markers: &[&str]| markers.iter().any(|marker| parent.join(marker).is_file());
 	match name.as_str() {
 		"target" => has_marker(&["Cargo.toml", "pom.xml"]),
 		"build" => has_marker(&["build.gradle", "build.gradle.kts", "CMakeLists.txt"]),
@@ -349,15 +363,16 @@ fn contains_project_file(directory: &Path, root: &Path, extensions: &[&str]) -> 
 	while let Some(path) = current {
 		if fs::read_dir(path).is_ok_and(|children| {
 			children.filter_map(Result::ok).any(|child| {
-				child
-					.path()
-					.extension()
-					.and_then(|extension| extension.to_str())
-					.is_some_and(|extension| {
-						extensions
-							.iter()
-							.any(|expected| extension.eq_ignore_ascii_case(expected))
-					})
+				let child_path = child.path();
+				child.file_type().is_ok_and(|file_type| file_type.is_file())
+					&& child_path
+						.extension()
+						.and_then(|extension| extension.to_str())
+						.is_some_and(|extension| {
+							extensions
+								.iter()
+								.any(|expected| extension.eq_ignore_ascii_case(expected))
+						})
 			})
 		}) {
 			return true;
@@ -389,7 +404,7 @@ fn scan_warning(root: &Path, path: &Path, source: &std::io::Error) -> ScanWarnin
 	}
 }
 
-fn relative_warning_path(root: &Path, path: &Path) -> PathBuf {
+pub(crate) fn relative_warning_path(root: &Path, path: &Path) -> PathBuf {
 	path.strip_prefix(root)
 		.ok()
 		.filter(|relative_path| !relative_path.as_os_str().is_empty())
@@ -414,7 +429,7 @@ mod tests {
 	use std::path::PathBuf;
 	use std::time::{SystemTime, UNIX_EPOCH};
 
-	use super::{scan_directory, DefaultScanEngine, ScanEngine};
+	use super::{scan_directory, scan_registered_file, DefaultScanEngine, ScanEngine};
 
 	struct TestDirectory {
 		path: PathBuf,
@@ -540,6 +555,55 @@ mod tests {
 			.entries
 			.iter()
 			.any(|entry| entry.file_name == "配布資料.pdf"));
+	}
+
+	#[test]
+	fn project_marker_directories_do_not_exclude_course_materials() {
+		let directory = TestDirectory::new("project-marker-directory");
+		fs::create_dir_all(directory.path.join("アプリ演習/Cargo.toml"))
+			.expect("マーカーと同名のフォルダを作成できる");
+		directory.create_file("アプリ演習/target/配布資料.pdf", b"material");
+		fs::create_dir_all(directory.path.join("情報処理/example.csproj"))
+			.expect("プロジェクトファイルと同名のフォルダを作成できる");
+		directory.create_file("情報処理/bin/課題データ.bin", b"material");
+
+		let snapshot = DefaultScanEngine.scan(&directory.path).expect("走査できる");
+
+		assert_eq!(snapshot.entries.len(), 2);
+		assert!(snapshot
+			.entries
+			.iter()
+			.any(|entry| entry.file_name == "配布資料.pdf"));
+		assert!(snapshot
+			.entries
+			.iter()
+			.any(|entry| entry.file_name == "課題データ.bin"));
+	}
+
+	#[test]
+	fn registered_files_cannot_bypass_built_in_directory_exclusions() {
+		let directory = TestDirectory::new("registered-file-exclusion");
+		directory.create_file("アプリ演習/.venv/Lib/site-packages/sample.py", b"generated");
+		directory.create_file("アプリ演習/第1回/answer.py", b"material");
+
+		let ignored = scan_registered_file(
+			&directory.path,
+			&directory
+				.path
+				.join("アプリ演習/.venv/Lib/site-packages/sample.py"),
+		)
+		.expect("既登録ファイルを確認できる");
+		let material = scan_registered_file(
+			&directory.path,
+			&directory.path.join("アプリ演習/第1回/answer.py"),
+		)
+		.expect("既登録ファイルを確認できる");
+
+		assert!(ignored.is_none());
+		assert_eq!(
+			material.expect("通常資料は対象になる").file_name,
+			"answer.py"
+		);
 	}
 
 	#[test]

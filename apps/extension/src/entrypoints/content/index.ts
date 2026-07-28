@@ -108,9 +108,16 @@ async function reportExtensionRuntimeFromMoodle(): Promise<void> {
 }
 
 async function syncCurrentCourseData(): Promise<void> {
-	const snapshot = collectMoodlePageSnapshot(document);
-	const assignmentRequest = buildMoodleAssignmentSyncPayload(snapshot, location.href, document);
-	const fileRequest = buildCourseFileReconcilePayload(snapshot, location.href, document);
+	let assignmentRequest: ReturnType<typeof buildMoodleAssignmentSyncPayload>;
+	let fileRequest: ReturnType<typeof buildCourseFileReconcilePayload>;
+	try {
+		const snapshot = collectMoodlePageSnapshot(document);
+		assignmentRequest = buildMoodleAssignmentSyncPayload(snapshot, location.href, document);
+		fileRequest = buildCourseFileReconcilePayload(snapshot, location.href, document);
+	} catch (error) {
+		console.warn("[fuzzy] Moodleコース情報を読み取れませんでした", error);
+		return;
+	}
 	const client = new BackgroundApiClient();
 	const operations: Promise<unknown>[] = [];
 	if (assignmentRequest) {

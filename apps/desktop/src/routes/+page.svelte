@@ -694,7 +694,12 @@
 									<strong>候補順位:</strong>
 									{selectedCandidateRank} / {draft.candidates.length}
 								</p>
-								<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
+								<p>
+									<strong>一致度:</strong>
+									{selectedCandidate.matchScore === null
+										? "要確認"
+										: `${selectedCandidate.matchScore}%`}
+								</p>
 							{/if}
 							<p>
 								<strong>初期ルール:</strong>
