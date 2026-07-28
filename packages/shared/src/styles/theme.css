@@ -1,46 +1,77 @@
 :root {
-	/* Fuzzy公式アイコンの青・ミントを基準にした共通semantic token。 */
-	--fuzzy-color-primary: #0878c9;
-	--fuzzy-color-primary-strong: #075985;
-	--fuzzy-color-primary-soft: #e8f5ff;
-	--fuzzy-color-primary-overlay: rgba(8, 120, 201, 0.12);
+	/*
+	 * Fuzzy UI token
+	 * 多色の曖昧な粒子が1つの形へ整う公式アイコンを起点にする。
+	 * ブランド色は雰囲気・導線に、semantic色は状態の意味にだけ使用する。
+	 */
+	--fuzzy-brand-violet: #6c3cff;
+	--fuzzy-brand-violet-strong: #4b2dcc;
+	--fuzzy-brand-violet-soft: #eee9ff;
+	--fuzzy-brand-blue: #238ee8;
+	--fuzzy-brand-mint: #25d3a6;
+	--fuzzy-brand-orange: #ff8a22;
+	--fuzzy-brand-gradient: linear-gradient(
+		135deg,
+		var(--fuzzy-brand-violet) 0%,
+		var(--fuzzy-brand-blue) 42%,
+		var(--fuzzy-brand-mint) 72%,
+		var(--fuzzy-brand-orange) 100%
+	);
+	--fuzzy-brand-atmosphere: radial-gradient(
+			circle at 12% 4%,
+			rgb(108 60 255 / 18%),
+			transparent 28%
+		), radial-gradient(circle at 88% 12%, rgb(35 142 232 / 14%), transparent 24%),
+		radial-gradient(circle at 72% 88%, rgb(37 211 166 / 12%), transparent 30%);
+
+	--fuzzy-color-primary: var(--fuzzy-brand-violet);
+	--fuzzy-color-primary-strong: var(--fuzzy-brand-violet-strong);
+	--fuzzy-color-primary-soft: var(--fuzzy-brand-violet-soft);
+	--fuzzy-color-primary-overlay: rgb(108 60 255 / 12%);
+	--fuzzy-color-primary-overlay-strong: rgb(108 60 255 / 22%);
 	--fuzzy-color-surface: #ffffff;
-	--fuzzy-color-surface-muted: #edf5f7;
-	--fuzzy-color-page: #f6fafb;
-	--fuzzy-color-background: #f1f7f8;
-	--fuzzy-color-warm-background: #fffdf6;
-	--fuzzy-color-text: #163247;
-	--fuzzy-color-text-strong: #151515;
-	--fuzzy-color-text-secondary: #39576a;
-	--fuzzy-color-text-muted: #526b7a;
-	--fuzzy-color-text-subtle: #617886;
-	--fuzzy-color-border: #d9e7eb;
-	--fuzzy-color-border-soft: #e8f0f2;
-	--fuzzy-color-accent: #17a985;
+	--fuzzy-color-surface-glass: rgb(255 255 255 / 92%);
+	--fuzzy-color-surface-glass-strong: rgb(255 255 255 / 96%);
+	--fuzzy-color-surface-muted: #f0f1f8;
+	--fuzzy-color-page: #f8f8fc;
+	--fuzzy-color-background: #f3f3f9;
+	--fuzzy-color-warm-background: #fffaf4;
+	--fuzzy-color-text: #31324a;
+	--fuzzy-color-text-strong: #1d1e31;
+	--fuzzy-color-text-secondary: #555873;
+	--fuzzy-color-text-muted: #747891;
+	--fuzzy-color-text-subtle: #8b8fa6;
+	--fuzzy-color-text-inverse: #ffffff;
+	--fuzzy-color-border: #d9dcec;
+	--fuzzy-color-border-soft: #e8eaf3;
+	--fuzzy-color-border-overlay: rgb(130 140 190 / 16%);
+	--fuzzy-color-accent: var(--fuzzy-brand-mint);
 	--fuzzy-color-success: #16835f;
 	--fuzzy-color-success-strong: #0b6849;
 	--fuzzy-color-success-soft: #e1f7ef;
 	--fuzzy-color-info: #075985;
-	--fuzzy-color-info-soft: #e8f5ff;
+	--fuzzy-color-info-soft: #eaf5ff;
 	--fuzzy-color-warning: #8a4b08;
 	--fuzzy-color-warning-soft: #fff3df;
 	--fuzzy-color-danger: #b43d24;
 	--fuzzy-color-danger-soft: #fff0ec;
-	--fuzzy-color-disabled: #9aabb4;
-	--fuzzy-color-sidebar: #102b3d;
-	--fuzzy-color-sidebar-active: #13547a;
-	--fuzzy-color-sidebar-text: #d5e5eb;
-	--fuzzy-color-sidebar-icon: #86aebf;
+	--fuzzy-color-disabled: #9a9db1;
+	--fuzzy-color-sidebar: #211b43;
+	--fuzzy-color-sidebar-active: rgb(108 60 255 / 34%);
+	--fuzzy-color-sidebar-text: #e7e3ff;
+	--fuzzy-color-sidebar-icon: #a99cf4;
 	--fuzzy-color-warning-border: #dd8a1f;
 	--fuzzy-color-file-pdf: #dc2626;
 	--fuzzy-color-file-document: #3b82f6;
 	--fuzzy-color-file-spreadsheet: #16a34a;
 	--fuzzy-color-file-image: #9333ea;
 	--fuzzy-color-file-archive: #64748b;
-	--fuzzy-shadow-card: 0 10px 28px rgba(16, 58, 78, 0.09);
-	--fuzzy-shadow-floating: 0 18px 48px rgba(16, 58, 78, 0.18);
-	--fuzzy-focus-ring: #0878c9;
-	--fuzzy-focus-ring-inverse: #7dd8f3;
+
+	--fuzzy-shadow-card: 0 10px 28px rgb(65 48 126 / 9%);
+	--fuzzy-shadow-floating: 0 18px 48px rgb(65 48 126 / 18%);
+	--fuzzy-shadow-dialog: 0 28px 52px rgb(65 48 126 / 16%);
+	--fuzzy-focus-ring: var(--fuzzy-brand-violet);
+	--fuzzy-focus-ring-inverse: #b8afff;
 	--fuzzy-font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, sans-serif;
 	--fuzzy-font-size-caption: 0.82rem;
 	--fuzzy-font-size-small: 0.9rem;

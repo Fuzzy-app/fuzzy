@@ -26,6 +26,7 @@ packages/
 docs/
 ├── 仕様書.md          機能要件・アーキテクチャ・データ設計
 ├── 開発判断.md        Issue優先度・継続時の合意事項
+├── UIデザインシステム.md 共通theme token・配色意図・画面状態の実装規約
 ├── セットアップ.md     開発環境構築手順（Bun / Rust / Tauri 前提パッケージ）
 ├── データベース設計.md  SQLiteスキーマ
 └── api/contract.md   Native Messaging / Tauriコマンド契約
@@ -76,6 +77,7 @@ docs/
 - 改行コードは **LF**（`.gitattributes` で正規化。Windows 混在でも安全）
 - コミット前に `bun run build` を実行して整形・型エラーを解消する
 - 生成物 `packages/shared/src/generated/` は **手で編集しない**（ts-rs が Rust から生成）
+- UI変更では [`docs/UIデザインシステム.md`](docs/UIデザインシステム.md) と共通theme tokenを使用し、アプリ固有コードへ色リテラルを追加しない
 
 ## 担当（機能＝担当）
 
