@@ -8,7 +8,9 @@
 		"dueAt": "2026-07-04T23:59:00",
 		"dueAtStatus": "normal",
 		"submissionMode": "moodle_auto",
-		"submitted": false
+		"submitted": false,
+		"submissionAvailability": "available",
+		"moodleUrl": "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701"
 	},
 	{
 		"id": 2,
@@ -19,7 +21,9 @@
 		"dueAt": "2026-07-03T17:00:00",
 		"dueAtStatus": "normal",
 		"submissionMode": "manual",
-		"submitted": false
+		"submitted": false,
+		"submissionAvailability": "unknown",
+		"moodleUrl": null
 	},
 	{
 		"id": 3,
@@ -30,7 +34,9 @@
 		"dueAt": "2026-07-02T12:00:00",
 		"dueAtStatus": "normal",
 		"submissionMode": "moodle_auto",
-		"submitted": true
+		"submitted": true,
+		"submissionAvailability": "unavailable",
+		"moodleUrl": "https://moodle2026.wakayama-u.ac.jp/mod/quiz/view.php?id=703"
 	},
 	{
 		"id": 4,
@@ -41,7 +47,9 @@
 		"dueAt": "2026-06-29T23:59:00",
 		"dueAtStatus": "normal",
 		"submissionMode": "notify_only",
-		"submitted": false
+		"submitted": false,
+		"submissionAvailability": "unknown",
+		"moodleUrl": null
 	},
 	{
 		"id": 5,
@@ -52,7 +60,9 @@
 		"dueAt": "2027-05-10T23:59:00",
 		"dueAtStatus": "needs_review",
 		"submissionMode": "moodle_auto",
-		"submitted": false
+		"submitted": false,
+		"submissionAvailability": "available",
+		"moodleUrl": "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=705"
 	},
 	{
 		"id": 6,
@@ -63,6 +73,8 @@
 		"dueAt": "2026-06-20T23:59:00",
 		"dueAtStatus": "normal",
 		"submissionMode": "notify_only",
-		"submitted": false
+		"submitted": false,
+		"submissionAvailability": "unknown",
+		"moodleUrl": null
 	}
 ]

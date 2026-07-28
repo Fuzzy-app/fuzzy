@@ -16,6 +16,8 @@ const assignment: Assignment = {
 	dueAtStatus: "normal",
 	submissionMode: "moodle_auto",
 	submitted: false,
+	submissionAvailability: "unknown",
+	moodleUrl: null,
 };
 
 describe("締切ICS", () => {

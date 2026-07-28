@@ -46,6 +46,7 @@ describe("課題同期の変更件数と削除表示", () => {
 			submissionMode: "moodle_auto",
 			submitted: false,
 			submissionAvailability: "available",
+			moodleUrl: "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701",
 		};
 
 		expect(submissionAvailabilityLabel(assignment)).toBe("提出可能");
@@ -61,5 +62,18 @@ describe("課題同期の変更件数と削除表示", () => {
 				submitted: true,
 			}),
 		).toBeNull();
+	});
+
+	test("提出可否とMoodle URLの変更値を安全な文言で表示する", () => {
+		expect(assignmentChangeFieldLabel("submissionAvailability")).toBe("提出可否");
+		expect(assignmentChangeValueLabel("submissionAvailability", "available")).toBe("提出可能");
+		expect(assignmentChangeValueLabel("submissionAvailability", "unavailable")).toBe("提出不可");
+		expect(assignmentChangeFieldLabel("moodleUrl")).toBe("Moodle課題URL");
+		expect(
+			assignmentChangeValueLabel(
+				"moodleUrl",
+				"https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701",
+			),
+		).toBe("設定あり");
 	});
 });

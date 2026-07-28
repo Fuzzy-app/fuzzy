@@ -5,7 +5,10 @@ import {
 	buildMoodleAssignmentSyncPayload,
 	parseMoodleDueAt,
 } from "../../apps/extension/src/lib/moodle/assignmentSync";
-import { collectMoodlePageSnapshot } from "../../apps/extension/src/lib/moodle/pageSnapshot";
+import {
+	collectMoodlePageSnapshot,
+	detectSubmissionAvailability,
+} from "../../apps/extension/src/lib/moodle/pageSnapshot";
 
 describe("Moodle課題の実データ同期", () => {
 	test("完全コースページからコース限定差分走査要求を作る", () => {
@@ -90,6 +93,8 @@ describe("Moodle課題の実データ同期", () => {
 				dueAtStatus: "normal",
 				submissionMode: "moodle_auto",
 				submitted: true,
+				submissionAvailability: "unknown",
+				moodleUrl: "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701",
 			},
 			{
 				moodleAssignmentId: "quiz:702",
@@ -99,6 +104,8 @@ describe("Moodle課題の実データ同期", () => {
 				dueAtStatus: "needs_review",
 				submissionMode: "moodle_auto",
 				submitted: false,
+				submissionAvailability: "unknown",
+				moodleUrl: null,
 			},
 		]);
 	});
@@ -260,5 +267,11 @@ describe("Moodle課題の実データ同期", () => {
 			dueAt: null,
 			dueAtStatus: "needs_review",
 		});
+	});
+
+	test("提出可否はMoodleの明示文言だけから判定する", () => {
+		expect(detectSubmissionAvailability("提出物をアップロードする")).toBe("available");
+		expect(detectSubmissionAvailability("この課題は提出を受け付けていません")).toBe("unavailable");
+		expect(detectSubmissionAvailability("提出期限: 2026年7月30日")).toBe("unknown");
 	});
 });

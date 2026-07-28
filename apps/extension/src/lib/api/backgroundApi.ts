@@ -34,6 +34,7 @@ import type {
 } from "@fuzzy/shared";
 import { ApiError } from "@fuzzy/shared";
 import { FILE_TRANSFER_LIMITS } from "@fuzzy/shared";
+import { isSupportedMoodleAssignmentUrl } from "../../../moodleSite";
 
 export const FUZZY_API_MESSAGE_TYPE = "fuzzy:apiRequest";
 
@@ -256,7 +257,11 @@ function isSyncMoodleAssignmentsRequest(value: unknown): boolean {
 			!["moodle_auto", "manual", "notify_only", "unknown"].includes(
 				String(assignment.submissionMode),
 			) ||
-			typeof assignment.submitted !== "boolean"
+			typeof assignment.submitted !== "boolean" ||
+			!["available", "unavailable", "unknown"].includes(
+				String(assignment.submissionAvailability),
+			) ||
+			(assignment.moodleUrl !== null && !isSupportedMoodleAssignmentUrl(assignment.moodleUrl))
 		) {
 			return false;
 		}

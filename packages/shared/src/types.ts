@@ -179,10 +179,9 @@ export interface Assignment {
 	dueAtStatus: DueAtStatus;
 	submissionMode: SubmissionMode;
 	submitted: boolean;
-	/** #116の詳細取得結果。未取得の旧レスポンスでは省略される。 */
-	submissionAvailability?: "available" | "unavailable" | "unknown";
+	submissionAvailability: "available" | "unavailable" | "unknown";
 	/** 利用者が明示操作で開くMoodle課題詳細URL。 */
-	moodleUrl?: string | null;
+	moodleUrl: string | null;
 }
 
 export interface CourseDashboardEntry {
@@ -263,6 +262,8 @@ export type AssignmentChangeField =
 	| "submissionMode"
 	| "dueAtStatus"
 	| "submitted"
+	| "submissionAvailability"
+	| "moodleUrl"
 	| "removedAt";
 
 /** 同期のたびに検出された課題1件・1フィールド分の変更点。変更点表示に使う */
@@ -277,4 +278,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 5 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 6 as const;
