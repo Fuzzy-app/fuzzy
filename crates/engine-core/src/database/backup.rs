@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, DatabaseName, OpenFlags};
 
 use super::{
-	db_err, schema_version, validate_foreign_key_integrity, validate_schema_generation, Database,
+	db_err, schema_version, validate_foreign_key_integrity, validate_schema_generation,
+	validate_schema_generation_v1, Database,
 };
 use crate::{EngineError, EngineResult};
 
@@ -121,7 +122,11 @@ fn validate_import_source(path: &Path) -> EngineResult<()> {
 		});
 	}
 	let version = schema_version(&conn).map_err(invalid_backup)?;
-	validate_schema_generation(&conn, version).map_err(invalid_backup)?;
+	if version == 1 {
+		validate_schema_generation_v1(&conn).map_err(invalid_backup)?;
+	} else {
+		validate_schema_generation(&conn, version).map_err(invalid_backup)?;
+	}
 	validate_foreign_key_integrity(&conn).map_err(invalid_backup)?;
 	Ok(())
 }

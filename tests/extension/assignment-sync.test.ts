@@ -54,6 +54,8 @@ describe("Moodle課題の実データ同期", () => {
 				dueAtStatus: "normal",
 				submissionMode: "moodle_auto",
 				submitted: true,
+				detailUrl: "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701",
+				submissionAvailability: "unknown",
 			},
 			{
 				moodleAssignmentId: "quiz:702",
@@ -63,6 +65,8 @@ describe("Moodle課題の実データ同期", () => {
 				dueAtStatus: "needs_review",
 				submissionMode: "moodle_auto",
 				submitted: false,
+				detailUrl: null,
+				submissionAvailability: "unknown",
 			},
 		]);
 	});

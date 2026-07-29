@@ -1,4 +1,5 @@
 import type { MoodleFileMeta } from "@fuzzy/shared";
+import { contentDispositionFileName } from "./contentDisposition";
 
 export const SUPPORTED_FILE_EXTENSIONS = [
 	"pdf",
@@ -136,23 +137,8 @@ export function fileExtensionFromContentDisposition(value: string | null): strin
 	return fileExtensionFromName(fileNameFromContentDisposition(value) ?? "");
 }
 
-/** Content-Dispositionのfilename*を優先し、安全な表示用ファイル名だけを返す。 */
 export function fileNameFromContentDisposition(value: string | null): string | null {
-	if (!value) return null;
-	const encodedFileName = value.match(/filename\*\s*=\s*(?:([^']*)'[^']*')?([^;]+)/i);
-	const regularFileName = value.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i);
-	const rawFileName = encodedFileName?.[2] ?? regularFileName?.[1] ?? regularFileName?.[2] ?? "";
-	const decoded = safeDecodeURIComponent(rawFileName.trim().replace(/^['"]|['"]$/g, ""));
-	const fileName = decoded.replaceAll("\\", "/").split("/").pop()?.trim() ?? "";
-	if (
-		!fileName ||
-		fileName === "." ||
-		fileName === ".." ||
-		[...fileName].some((character) => character.charCodeAt(0) < 32)
-	) {
-		return null;
-	}
-	return fileName.slice(0, 255);
+	return contentDispositionFileName(value);
 }
 
 export function fileType(file: MoodleFileMeta): string {

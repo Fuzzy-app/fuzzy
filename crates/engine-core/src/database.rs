@@ -32,7 +32,8 @@ pub use saved_files::{ExtractedFileRegistration, SavedZipSource};
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+const LEGACY_SCHEMA_VERSION: i64 = 1;
 
 /// SQLite接続。接続時にFK有効化と初版スキーマの適用・検証を保証する。
 pub struct Database {
@@ -75,7 +76,10 @@ impl Database {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		} else {
 			let version = schema_version(&conn)?;
-			validate_schema_generation(&conn, version)?;
+			if version == LEGACY_SCHEMA_VERSION {
+				migrate_v1_to_v2(&mut conn)?;
+			}
+			validate_schema_generation(&conn, schema_version(&conn)?)?;
 			validate_foreign_key_integrity(&conn)?;
 		}
 
@@ -373,6 +377,45 @@ impl Database {
 	}
 }
 
+fn migrate_v1_to_v2(conn: &mut Connection) -> EngineResult<()> {
+	validate_schema_generation_v1(conn)?;
+	let transaction = conn.transaction().map_err(db_err)?;
+	transaction
+		.execute_batch(
+			"ALTER TABLE assignments ADD COLUMN detail_url TEXT;
+			 ALTER TABLE assignments ADD COLUMN submission_availability TEXT NOT NULL
+				DEFAULT 'unknown'
+				CHECK (submission_availability IN ('available', 'unavailable', 'unknown'));
+
+			 DROP INDEX idx_assignment_changes_sync;
+			 DROP INDEX idx_assignment_changes_assignment;
+			 ALTER TABLE assignment_changes RENAME TO assignment_changes_v1;
+			 CREATE TABLE assignment_changes (
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				sync_event_id INTEGER NOT NULL REFERENCES sync_events(id) ON DELETE CASCADE,
+				assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+				field         TEXT NOT NULL CHECK (field IN (
+					'due_at', 'title', 'submission_mode', 'due_at_status', 'submitted',
+					'detail_url', 'submission_availability', 'removed_at'
+				)),
+				old_value     TEXT,
+				new_value     TEXT,
+				detected_at   TEXT NOT NULL DEFAULT (datetime('now'))
+			 );
+			 INSERT INTO assignment_changes (
+				id, sync_event_id, assignment_id, field, old_value, new_value, detected_at
+			 )
+			 SELECT id, sync_event_id, assignment_id, field, old_value, new_value, detected_at
+			 FROM assignment_changes_v1;
+			 DROP TABLE assignment_changes_v1;
+			 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
+			 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
+			 PRAGMA user_version = 2;",
+		)
+		.map_err(db_err)?;
+	transaction.commit().map_err(db_err)
+}
+
 fn observation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtensionRuntimeObservation> {
 	Ok(ExtensionRuntimeObservation {
 		installation_id: row.get(0)?,
@@ -471,6 +514,102 @@ pub(super) fn validate_schema_generation(conn: &Connection, version: i64) -> Eng
 	Ok(())
 }
 
+pub(super) fn validate_schema_generation_v1(conn: &Connection) -> EngineResult<()> {
+	if schema_version(conn)? != LEGACY_SCHEMA_VERSION {
+		return Err(EngineError::Database {
+			message: "移行元のSQLiteスキーマ世代がv1ではありません".to_string(),
+		});
+	}
+	for (table, columns) in REQUIRED_TABLE_COLUMNS {
+		for column in *columns {
+			if table == &"assignments"
+				&& matches!(*column, "detail_url" | "submission_availability")
+			{
+				continue;
+			}
+			require_table_columns(conn, table, &[*column])?;
+		}
+	}
+	reject_unexpected_schema_objects(conn)?;
+	for &(table, column, expected_not_null, expected_pk) in REQUIRED_COLUMN_SHAPES {
+		if table == "assignments" && matches!(column, "detail_url" | "submission_availability") {
+			continue;
+		}
+		validate_column_shape(conn, table, column, expected_not_null, expected_pk)?;
+	}
+	validate_foreign_key_declarations(conn)?;
+	for (table, columns, partial) in [
+		("courses", &["moodle_course_id"][..], false),
+		("course_rule_overrides", &["course_id"][..], false),
+		("files", &["saved_path"][..], false),
+		("notification_rules", &["offset_minutes"][..], false),
+	] {
+		require_unique_index(conn, table, columns, partial)?;
+	}
+	require_unique_index(
+		conn,
+		"assignments",
+		&["course_id", "moodle_assignment_id"],
+		true,
+	)?;
+	for index in ["idx_assignments_active", "idx_files_missing"] {
+		if !index_exists(conn, index)? {
+			return Err(EngineError::Database {
+				message: format!("SQLite v1スキーマに必須索引「{index}」がありません"),
+			});
+		}
+	}
+	let changes_sql: String = conn
+		.query_row(
+			"SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'assignment_changes'",
+			[],
+			|row| row.get(0),
+		)
+		.map_err(db_err)?;
+	let normalized = changes_sql
+		.chars()
+		.filter(|character| !character.is_whitespace())
+		.flat_map(char::to_lowercase)
+		.collect::<String>();
+	if !normalized.contains(
+		"check(fieldin('due_at','title','submission_mode','due_at_status','submitted','removed_at'))",
+	) {
+		return Err(EngineError::Database {
+			message: "SQLite v1のassignment_changes.field制約が一致しません".to_string(),
+		});
+	}
+	validate_check_constraint_requirements(
+		conn,
+		&[
+			(
+				"extension_runtime_observations",
+				"check(protocol_version>0)",
+			),
+			("global_rule", "check(id=1)"),
+			("duplicate_groups", "check(methodin('exact','similar'))"),
+			("duplicate_members", "check(similaritybetween0.0and1.0)"),
+			(
+				"assignments",
+				"check(sourcein('moodle_dashboard','moodle_text','file_content'))",
+			),
+			(
+				"assignments",
+				"check(due_at_statusin('normal','needs_review'))",
+			),
+			(
+				"assignments",
+				"check(submission_modein('moodle_auto','manual','notify_only','unknown'))",
+			),
+			(
+				"notification_rules",
+				"check(offset_minutesbetween0and525600)",
+			),
+			("courses", "check(academic_yearbetween1900and9999)"),
+		],
+	)?;
+	validate_foreign_key_integrity(conn)
+}
+
 const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("app_settings", "key", false, 1),
 	("app_settings", "value", true, 0),
@@ -522,6 +661,8 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("assignments", "due_at_status", true, 0),
 	("assignments", "submission_mode", true, 0),
 	("assignments", "submitted", true, 0),
+	("assignments", "detail_url", false, 0),
+	("assignments", "submission_availability", true, 0),
 	("assignments", "removed_at", false, 0),
 	("assignments", "created_at", true, 0),
 	("assignments", "updated_at", true, 0),
@@ -786,17 +927,27 @@ fn validate_check_constraints(conn: &Connection) -> EngineResult<()> {
 			"check(submission_modein('moodle_auto','manual','notify_only','unknown'))",
 		),
 		(
+			"assignments",
+			"check(submission_availabilityin('available','unavailable','unknown'))",
+		),
+		(
 			"notification_rules",
 			"check(offset_minutesbetween0and525600)",
 		),
 		("courses", "check(academic_yearbetween1900and9999)"),
 		(
 			"assignment_changes",
-			"check(fieldin('due_at','title','submission_mode','due_at_status','submitted','removed_at'))",
+			"check(fieldin('due_at','title','submission_mode','due_at_status','submitted','detail_url','submission_availability','removed_at'))",
 		),
 	];
+	validate_check_constraint_requirements(conn, &requirements)
+}
 
-	for (table, required) in requirements {
+fn validate_check_constraint_requirements(
+	conn: &Connection,
+	requirements: &[(&str, &str)],
+) -> EngineResult<()> {
+	for &(table, required) in requirements {
 		let sql: String = conn
 			.query_row(
 				"SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?1",
@@ -958,6 +1109,8 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"due_at_status",
 			"submission_mode",
 			"submitted",
+			"detail_url",
+			"submission_availability",
 			"related_file_id",
 			"removed_at",
 			"created_at",
@@ -1298,15 +1451,54 @@ mod tests {
 	}
 
 	#[test]
-	fn pre_release_schema_generation_is_rejected() {
+	fn future_schema_generation_is_rejected() {
 		let mut conn = Connection::open_in_memory().unwrap();
 		apply_schema(&mut conn, SCHEMA_SQL).unwrap();
-		conn.execute_batch("PRAGMA user_version = 2;").unwrap();
+		conn.execute_batch("PRAGMA user_version = 3;").unwrap();
 
 		assert!(matches!(
 			Database::from_connection(conn, None),
 			Err(EngineError::Database { .. })
 		));
+	}
+
+	#[test]
+	fn v1_assignments_migrate_to_unknown_submission_availability() {
+		let legacy_schema = SCHEMA_SQL
+			.replace(
+				"\tdetail_url       TEXT,\n\tsubmission_availability TEXT NOT NULL DEFAULT 'unknown' CHECK (submission_availability IN ('available', 'unavailable', 'unknown')),\n",
+				"",
+			)
+			.replace(
+				", 'detail_url', 'submission_availability'",
+				"",
+			)
+			.replace("PRAGMA user_version = 2;", "PRAGMA user_version = 1;");
+		assert_ne!(legacy_schema, SCHEMA_SQL);
+		let mut conn = Connection::open_in_memory().unwrap();
+		apply_schema(&mut conn, &legacy_schema).unwrap();
+		conn.execute_batch(
+			"INSERT INTO courses (id, moodle_course_id, name)
+			 VALUES (1, 'course-1', 'データベース');
+			 INSERT INTO assignments (
+				id, course_id, title, source, due_at_status, submission_mode, submitted
+			 ) VALUES (
+				1, 1, '正規化レポート', 'moodle_text', 'normal', 'moodle_auto', 0
+			 );",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn, None).unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), SCHEMA_VERSION);
+		let migrated: (Option<String>, String) = database
+			.conn()
+			.query_row(
+				"SELECT detail_url, submission_availability FROM assignments WHERE id = 1",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(migrated, (None, "unknown".to_string()));
 	}
 
 	#[test]

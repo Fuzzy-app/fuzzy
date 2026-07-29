@@ -234,13 +234,36 @@ function isSyncMoodleAssignmentsRequest(value: unknown): boolean {
 			!["moodle_auto", "manual", "notify_only", "unknown"].includes(
 				String(assignment.submissionMode),
 			) ||
-			typeof assignment.submitted !== "boolean"
+			typeof assignment.submitted !== "boolean" ||
+			!["available", "unavailable", "unknown"].includes(
+				String(assignment.submissionAvailability),
+			) ||
+			!isMoodleAssignmentDetailUrlOrNull(assignment.detailUrl) ||
+			(assignment.submissionAvailability !== "unknown" && assignment.detailUrl === null)
 		) {
 			return false;
 		}
 		ids.add(assignment.moodleAssignmentId);
 		return true;
 	});
+}
+
+function isMoodleAssignmentDetailUrlOrNull(value: unknown): boolean {
+	if (value === null) return true;
+	if (typeof value !== "string" || value.length > 2_048) return false;
+	try {
+		const url = new URL(value);
+		return (
+			url.protocol === "https:" &&
+			/^moodle\d*\.wakayama-u\.ac\.jp$/i.test(url.hostname) &&
+			/^\/mod\/assign\/view\.php$/i.test(url.pathname) &&
+			/^\d+$/.test(url.searchParams.get("id") ?? "") &&
+			Array.from(url.searchParams.keys()).every((key) => key === "id") &&
+			url.hash === ""
+		);
+	} catch {
+		return false;
+	}
 }
 
 function isExplicitOffsetIsoOrNull(value: unknown): boolean {

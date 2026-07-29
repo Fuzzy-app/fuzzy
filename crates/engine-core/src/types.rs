@@ -57,6 +57,8 @@ pub struct AssignmentRecord {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
+	pub detail_url: Option<String>,
+	pub submission_availability: String,
 }
 
 /// One assignment received from the Moodle acquisition pipeline.
@@ -70,6 +72,8 @@ pub struct AssignmentSyncInput {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
+	pub detail_url: Option<String>,
+	pub submission_availability: String,
 }
 
 /// Moodleの安定した課題識別子を使う、コース単位同期の入力。
@@ -82,6 +86,8 @@ pub struct MoodleAssignmentSyncInput {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
+	pub detail_url: Option<String>,
+	pub submission_availability: String,
 }
 
 /// Aggregate result of one assignment synchronization.

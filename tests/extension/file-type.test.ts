@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	fileExtensionFromContentDisposition,
 	fileExtensionFromName,
+	fileNameFromContentDisposition,
 	fileType,
 	normalizeFileTypeHint,
 } from "../../apps/extension/src/lib/moodle/fileType";
@@ -31,6 +32,37 @@ describe("Moodle資料のファイル種別判定", () => {
 			fileExtensionFromContentDisposition("attachment; filename*=UTF-8''lecture%20notes.pptx"),
 		).toBe("pptx");
 		expect(fileExtensionFromContentDisposition('attachment; filename="unknown.bin"')).toBeNull();
+	});
+
+	test("日本語DOCX名をUTF-8・Shift_JIS・旧式ヘッダーから復元する", () => {
+		const rawUtf8AsLatin1 = Array.from(new TextEncoder().encode("講義資料.docx"), (byte) =>
+			String.fromCharCode(byte),
+		).join("");
+		for (const [header, expected] of [
+			["attachment; filename*=UTF-8''%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99.docx", "講義資料.docx"],
+			["attachment; filename*=Shift_JIS''%8E%91%97%BF.docx", "資料.docx"],
+			[
+				'attachment; filename="=?UTF-8?Q?=E8=AC=9B=E7=BE=A9=E8=B3=87=E6=96=99.docx?="',
+				"講義資料.docx",
+			],
+			['attachment; filename="=?UTF-8?B?6Kyb576p6LOH5paZLmRvY3g=?="', "講義資料.docx"],
+			[`attachment; filename="${rawUtf8AsLatin1}"`, "講義資料.docx"],
+		] as const) {
+			expect(fileNameFromContentDisposition(header)).toBe(expected);
+		}
+	});
+
+	test("復元不能な拡張形式は通常名へ戻し、長いDOCX名でも拡張子を保持する", () => {
+		expect(
+			fileNameFromContentDisposition(
+				"attachment; filename*=unknown-charset''%8E%91%97%BF.docx; filename=\"資料.docx\"",
+			),
+		).toBe("資料.docx");
+		const longName = fileNameFromContentDisposition(
+			`attachment; filename="${"講".repeat(300)}.docx"`,
+		);
+		expect(longName?.length).toBeLessThanOrEqual(255);
+		expect(longName?.endsWith(".docx")).toBe(true);
 	});
 
 	test("URLがresource/view.phpでもMIMEヒントを優先する", () => {

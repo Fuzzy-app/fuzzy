@@ -47,6 +47,7 @@ import {
 	isUpcoming,
 	parseDueAt,
 	sourceLabel,
+	submissionAvailabilityLabel,
 	submissionLabel,
 	syncChangeTotal,
 	syncTriggerLabel,
@@ -573,6 +574,17 @@ export function mountFuzzyShell(): void {
 
 		const badges = el("div", "fuzzy-deadline-badges");
 		badges.append(el("span", "fuzzy-badge", submissionLabel(assignment)));
+		badges.append(
+			el(
+				"span",
+				assignment.submissionAvailability === "available"
+					? "fuzzy-badge is-open"
+					: assignment.submissionAvailability === "unavailable"
+						? "fuzzy-badge is-overdue"
+						: "fuzzy-badge is-review",
+				submissionAvailabilityLabel(assignment.submissionAvailability),
+			),
+		);
 		if (isNeedsReview(assignment)) {
 			badges.append(el("span", "fuzzy-badge is-review", "締切日を確認"));
 		}
@@ -593,6 +605,13 @@ export function mountFuzzyShell(): void {
 			el("p", "fuzzy-deadline-value", formatDate(assignment.dueAt)),
 		);
 		body.append(dueWrap, el("p", "fuzzy-deadline-source", sourceLabel(assignment)));
+		if (assignment.detailUrl) {
+			const detailLink = el("a", "fuzzy-deadline-detail-link", "Moodleで課題を開く");
+			detailLink.setAttribute("href", assignment.detailUrl);
+			detailLink.setAttribute("target", "_blank");
+			detailLink.setAttribute("rel", "noopener noreferrer");
+			body.append(detailLink);
+		}
 
 		const checkLabel = el("label", "fuzzy-checkline");
 		const checkbox = el("input") as HTMLInputElement;
@@ -2103,6 +2122,15 @@ function ensureStyle(): void {
 			color: #626a89;
 			font-size: 0.82rem;
 			line-height: 1.7;
+		}
+
+		.fuzzy-deadline-detail-link {
+			width: fit-content;
+			color: var(--fuzzy-color-primary-strong);
+			font-size: 0.82rem;
+			font-weight: 800;
+			text-decoration: underline;
+			text-underline-offset: 3px;
 		}
 
 		.fuzzy-checkline {

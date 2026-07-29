@@ -1745,7 +1745,9 @@ mod tests {
 						"source": "moodle_dashboard",
 						"dueAtStatus": "normal",
 						"submissionMode": "moodle_auto",
-						"submitted": false
+						"submitted": false,
+						"detailUrl": "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=412101",
+						"submissionAvailability": "available"
 					}]
 				}),
 			),
@@ -1795,6 +1797,8 @@ mod tests {
 			due_at_status: "normal".to_string(),
 			submission_mode: "moodle_auto".to_string(),
 			submitted: false,
+			detail_url: None,
+			submission_availability: "unknown".to_string(),
 		};
 		database
 			.sync_assignments("auto", std::slice::from_ref(&assignment))

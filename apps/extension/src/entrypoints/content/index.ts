@@ -4,6 +4,10 @@
 // DOM操作は issue48 のダッシュボード注入と同様に、このディレクトリ内で完結させる。
 import "@fuzzy/shared/theme.css";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
+import {
+	type AssignmentDetailProgress,
+	collectAssignmentSubmissionAvailability,
+} from "../../lib/moodle/assignmentDetail";
 import { buildMoodleAssignmentSyncPayload } from "../../lib/moodle/assignmentSync";
 import { classifyMoodlePage, resolveMoodleUiMode } from "../../lib/moodle/pageClassification";
 import {
@@ -17,6 +21,12 @@ import {
 	maintainMoodleNativeSession,
 } from "../../lib/runtime/moodleNativeSession";
 import { handleMoodleLoginPage, setupMoodleLogoutTracking } from "./loginAutomation";
+import {
+	showAssignmentDetailProgress,
+	showAssignmentSyncComplete,
+	showAssignmentSyncFailure,
+	showAssignmentSyncSaving,
+} from "./moodleAssignmentSyncStatus";
 import { mountSavePanel } from "./savePanel";
 import { mountFuzzyShell } from "./shell";
 
@@ -105,14 +115,38 @@ async function reportExtensionRuntimeFromMoodle(): Promise<void> {
 }
 
 async function syncCurrentCourseAssignments(): Promise<void> {
+	let progress: AssignmentDetailProgress = {
+		completed: 0,
+		total: 0,
+		unknown: 0,
+		skipped: 0,
+	};
 	try {
 		const snapshot = collectMoodlePageSnapshot(document);
-		const request = buildMoodleAssignmentSyncPayload(snapshot, location.href, document);
+		if (!buildMoodleAssignmentSyncPayload(snapshot, location.href, document)) return;
+		const assignmentHints = await collectAssignmentSubmissionAvailability(
+			snapshot.assignmentHints,
+			{
+				baseUrl: location.href,
+				onProgress: (value) => {
+					progress = value;
+					showAssignmentDetailProgress(value);
+				},
+			},
+		);
+		const request = buildMoodleAssignmentSyncPayload(
+			{ ...snapshot, assignmentHints },
+			location.href,
+			document,
+		);
 		if (!request) return;
+		showAssignmentSyncSaving();
 		await new BackgroundApiClient().syncMoodleAssignments(request);
+		showAssignmentSyncComplete(progress);
 	} catch (error) {
 		// 同期だけを停止し、検索・キャッシュ表示・資料保存など独立した機能は起動する。
 		console.warn("[fuzzy] Moodle課題の同期に失敗しました", error);
+		showAssignmentSyncFailure();
 	}
 }
 

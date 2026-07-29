@@ -1,6 +1,7 @@
 // Rust DTOが存在するAPI型はts-rs生成物を使用する。
 // packages/shared/src/generated/ は `bun run generate:types` で再生成し、手編集しない。
 import type { CourseFolderNameResolution } from "./generated/CourseFolderNameResolution";
+import type { SubmissionAvailability } from "./generated/SubmissionAvailability";
 
 export type { CourseFolderNameResolution } from "./generated/CourseFolderNameResolution";
 export type { CourseFolderNameWarning } from "./generated/CourseFolderNameWarning";
@@ -26,6 +27,7 @@ export type { RebuildLibraryRequest } from "./generated/RebuildLibraryRequest";
 export type { RuleViolationListItem } from "./generated/RuleViolationListItem";
 export type { SearchRequest } from "./generated/SearchRequest";
 export type { SearchResult } from "./generated/SearchResult";
+export type { SubmissionAvailability } from "./generated/SubmissionAvailability";
 export type { SyncMoodleAssignmentRequest } from "./generated/SyncMoodleAssignmentRequest";
 export type { SyncMoodleAssignmentsRequest } from "./generated/SyncMoodleAssignmentsRequest";
 export type { SyncMoodleCourseRequest } from "./generated/SyncMoodleCourseRequest";
@@ -148,6 +150,10 @@ export interface Assignment {
 	dueAtStatus: DueAtStatus;
 	submissionMode: SubmissionMode;
 	submitted: boolean;
+	/** Moodleの認証済み課題詳細ページ。取得不能・対象外ではnull。 */
+	detailUrl: string | null;
+	/** 締切や提出済み状態とは独立した、現在の提出開始操作の可否。 */
+	submissionAvailability: SubmissionAvailability;
 }
 
 export interface CourseDashboardEntry {
@@ -228,6 +234,8 @@ export type AssignmentChangeField =
 	| "submissionMode"
 	| "dueAtStatus"
 	| "submitted"
+	| "detailUrl"
+	| "submissionAvailability"
 	| "removedAt";
 
 /** 同期のたびに検出された課題1件・1フィールド分の変更点。変更点表示に使う */
@@ -242,4 +250,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 3 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 4 as const;

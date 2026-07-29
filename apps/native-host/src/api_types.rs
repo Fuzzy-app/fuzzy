@@ -233,6 +233,15 @@ pub enum SubmissionMode {
 	Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SubmissionAvailability {
+	Available,
+	Unavailable,
+	Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Assignment {
@@ -245,6 +254,8 @@ pub struct Assignment {
 	pub due_at_status: DueAtStatus,
 	pub submission_mode: SubmissionMode,
 	pub submitted: bool,
+	pub detail_url: Option<String>,
+	pub submission_availability: SubmissionAvailability,
 }
 
 impl TryFrom<AssignmentRecord> for Assignment {
@@ -276,6 +287,13 @@ impl TryFrom<AssignmentRecord> for Assignment {
 				_ => return Err(invalid_stored_value("提出状況の更新方式")),
 			},
 			submitted: value.submitted,
+			detail_url: value.detail_url,
+			submission_availability: match value.submission_availability.as_str() {
+				"available" => SubmissionAvailability::Available,
+				"unavailable" => SubmissionAvailability::Unavailable,
+				"unknown" => SubmissionAvailability::Unknown,
+				_ => return Err(invalid_stored_value("提出可否")),
+			},
 		})
 	}
 }
@@ -332,6 +350,8 @@ pub struct SyncMoodleAssignmentRequest {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
+	pub detail_url: Option<String>,
+	pub submission_availability: SubmissionAvailability,
 }
 
 impl From<SyncMoodleAssignmentRequest> for EngineMoodleAssignmentSyncInput {
@@ -344,6 +364,13 @@ impl From<SyncMoodleAssignmentRequest> for EngineMoodleAssignmentSyncInput {
 			due_at_status: value.due_at_status,
 			submission_mode: value.submission_mode,
 			submitted: value.submitted,
+			detail_url: value.detail_url,
+			submission_availability: match value.submission_availability {
+				SubmissionAvailability::Available => "available",
+				SubmissionAvailability::Unavailable => "unavailable",
+				SubmissionAvailability::Unknown => "unknown",
+			}
+			.to_string(),
 		}
 	}
 }
@@ -365,6 +392,8 @@ pub enum AssignmentChangeField {
 	SubmissionMode,
 	DueAtStatus,
 	Submitted,
+	DetailUrl,
+	SubmissionAvailability,
 	RemovedAt,
 }
 
@@ -390,6 +419,8 @@ impl TryFrom<AssignmentChangeRecord> for AssignmentChange {
 			"submission_mode" => AssignmentChangeField::SubmissionMode,
 			"due_at_status" => AssignmentChangeField::DueAtStatus,
 			"submitted" => AssignmentChangeField::Submitted,
+			"detail_url" => AssignmentChangeField::DetailUrl,
+			"submission_availability" => AssignmentChangeField::SubmissionAvailability,
 			"removed_at" => AssignmentChangeField::RemovedAt,
 			_ => return Err(invalid_stored_value("assignment_changes.field")),
 		};
@@ -937,6 +968,10 @@ mod tests {
 			due_at_status: "needs_review".to_string(),
 			submission_mode: "manual".to_string(),
 			submitted: false,
+			detail_url: Some(
+				"https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701".to_string(),
+			),
+			submission_availability: "available".to_string(),
 		})
 		.unwrap();
 		let value = serde_json::to_value(assignment).unwrap();
@@ -944,6 +979,7 @@ mod tests {
 		assert_eq!(value["source"], "moodle_dashboard");
 		assert_eq!(value["dueAtStatus"], "needs_review");
 		assert_eq!(value["submissionMode"], "manual");
+		assert_eq!(value["submissionAvailability"], "available");
 
 		let dashboard = DashboardSummary::from(DashboardRecord {
 			courses: Vec::new(),
@@ -1042,7 +1078,9 @@ mod tests {
 				"source": "moodle_dashboard",
 				"dueAtStatus": "normal",
 				"submissionMode": "moodle_auto",
-				"submitted": false
+				"submitted": false,
+				"detailUrl": "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=101",
+				"submissionAvailability": "available"
 			}]
 		}))
 		.unwrap();
@@ -1065,10 +1103,10 @@ mod tests {
 
 		let ping = serde_json::to_value(PingResult {
 			version: "0.1.0".to_string(),
-			protocol_version: 3,
+			protocol_version: 4,
 		})
 		.unwrap();
-		assert_eq!(ping["protocolVersion"], 3);
+		assert_eq!(ping["protocolVersion"], 4);
 	}
 
 	#[test]

@@ -45,6 +45,8 @@ export function buildMoodleAssignmentSyncPayload(
 			dueAtStatus: parsedDue.dueAtStatus,
 			submissionMode: "moodle_auto",
 			submitted: hint.submitted,
+			detailUrl: hint.detailUrl,
+			submissionAvailability: hint.submissionAvailability,
 		});
 	}
 

@@ -1,4 +1,4 @@
-import type { MoodleFileMeta } from "@fuzzy/shared";
+import type { MoodleFileMeta, SubmissionAvailability } from "@fuzzy/shared";
 import {
 	fileExtensionFromName,
 	fileTypeFromMoodleIconUrl,
@@ -21,11 +21,15 @@ export interface MoodleFolderLink {
 export interface MoodleAssignmentHint {
 	/** course-module URL等から得たコース内で安定したID。推測できない文面候補はnull。 */
 	moodleAssignmentId: string | null;
+	/** 認証済みブラウザで確認する、正規化済みのMoodle課題詳細URL。 */
+	detailUrl: string | null;
 	title: string;
 	dueText: string | null;
 	sourceText: string;
 	source: "page_text" | "dashboard_widget";
 	submitted: boolean;
+	/** 締切・提出済み状態・submissionModeとは独立した、詳細ページ上の提出可否。 */
+	submissionAvailability: SubmissionAvailability;
 }
 
 export interface MoodlePageSnapshot {
@@ -272,11 +276,13 @@ export function extractAssignmentHints(
 	return dedupeBy(
 		lines.map((line) => ({
 			moodleAssignmentId: null,
+			detailUrl: null,
 			title: extractAssignmentTitle(line),
 			dueText: extractDueText(line),
 			sourceText: line,
 			source,
 			submitted: false,
+			submissionAvailability: "unknown" as const,
 		})),
 		(hint) => `${hint.source}:${hint.sourceText}`,
 	);
@@ -314,16 +320,25 @@ export function extractStructuredAssignmentHints(
 		return [
 			{
 				moodleAssignmentId,
+				detailUrl: normalizedAssignmentDetailUrl(url),
 				title,
 				dueText: extractDueText(sourceText),
 				sourceText,
 				source: isDashboardAssignment(link) ? "dashboard_widget" : "page_text",
 				submitted: /(?:提出済み|提出しました|submitted|graded)/i.test(sourceText),
+				submissionAvailability: "unknown",
 			},
 		];
 	});
 
 	return dedupeBy(hints, (hint) => hint.moodleAssignmentId ?? "");
+}
+
+function normalizedAssignmentDetailUrl(url: string): string | null {
+	const parsed = safeUrl(url);
+	if (!parsed || !/\/mod\/assign\/view\.php$/i.test(parsed.pathname)) return null;
+	parsed.hash = "";
+	return parsed.href;
 }
 
 /**

@@ -60,7 +60,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 | `rebuildLibrary`           | 保存ルートの再走査・SQLite注釈と全文索引の整合 | `{ rebuildIndex? }` → `LibraryMaintenanceSummary`   |
 
-`ping.protocolVersion`は現在値`3`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
+`ping.protocolVersion`は現在値`4`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。v4では課題同期と締切取得へ`detailUrl`と`submissionAvailability`を追加した。
 
 `search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルだけを返す。
 
@@ -108,13 +108,19 @@ interface SyncMoodleAssignmentsRequest {
 		dueAtStatus: "normal" | "needs_review";
 		submissionMode: "moodle_auto" | "manual" | "notify_only" | "unknown";
 		submitted: boolean;
+		detailUrl: string | null;
+		submissionAvailability: "available" | "unavailable" | "unknown";
 	}>;
 }
 ```
 
-`moodleCourseId`と`moodleAssignmentId`はMoodleのcourse／course-module由来の安定IDを必須とし、SQLite内部IDをクライアントから受け取らない。`dueAt`は`Z`または`±HH:MM`を明示した実在するISO 8601日時だけを許可する。同期対象は当該コースの完全スナップショットに限り、単一セクション表示・部分DOM・安定IDを取得できない活動を含む画面からは送信しない。native-hostはコース内だけを1トランザクションで更新し、受信しなかった既存Moodle課題を`removed_at`付きの同期対象外として保持する。別コースと安定IDのない従来行は変更しない。
+`moodleCourseId`と`moodleAssignmentId`はMoodleのcourse／course-module由来の安定IDを必須とし、SQLite内部IDをクライアントから受け取らない。`dueAt`は`Z`または`±HH:MM`を明示した実在するISO 8601日時だけを許可する。`detailUrl`は拡張機能が同一オリジンで検証し、数字のcourse-module IDだけを残して正規化したHTTPSの`/mod/assign/view.php?id=...`または`null`とする。`available`／`unavailable`には非`null`の`detailUrl`を必須とし、取得失敗・未知DOM・根拠競合・未対応活動は`unknown`にする。締切状態、`submitted`、`submissionMode`から`submissionAvailability`を推測しない。
 
-`AssignmentChange.field`は`"dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted" | "removedAt"`とする。完全スナップショットから課題が消えた場合は`removedAt`の`oldValue: null`、`newValue: syncedAt`を記録し、同じ安定IDが再び現れた場合は`oldValue: 以前のremovedAt`、`newValue: null`を記録する。削除は`removedAssignmentCount`だけ、復帰は`newAssignmentCount`だけへ計上し、`changedAssignmentCount`へ重複加算しない。したがって通知件数に用いる`newAssignmentCount + changedAssignmentCount + removedAssignmentCount`は、状態が変わった課題数と一致する。
+同期対象は当該コースの完全スナップショットに限り、単一セクション表示・部分DOM・安定IDを取得できない活動を含む画面からは送信しない。native-hostはコース内だけを1トランザクションで更新し、受信しなかった既存Moodle課題を`removed_at`付きの同期対象外として保持する。別コースと安定IDのない従来行は変更しない。
+
+`getDeadlines`の`Assignment`は同期入力に対応する`detailUrl`と`submissionAvailability`を返す。`AssignmentChange.field`は`"dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted" | "detailUrl" | "submissionAvailability" | "removedAt"`とする。完全スナップショットから課題が消えた場合は`removedAt`の`oldValue: null`、`newValue: syncedAt`を記録し、同じ安定IDが再び現れた場合は`oldValue: 以前のremovedAt`、`newValue: null`を記録する。削除は`removedAssignmentCount`だけ、復帰は`newAssignmentCount`だけへ計上し、`changedAssignmentCount`へ重複加算しない。したがって通知件数に用いる`newAssignmentCount + changedAssignmentCount + removedAssignmentCount`は、状態が変わった課題数と一致する。
+
+課題詳細取得はログイン済みcontent scriptが行う。対象は同一オリジンの許可URL、1同期50件、同時4件、1件10秒、HTML 2MiBまでとし、同じ正規化URLは1回だけ取得する。`credentials: "include"`を使用するが、Cookie、認証情報、取得HTMLをnative-hostや外部サービスへ送らない。1件の失敗は`unknown`として残りを継続する。
 
 `suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。backendは`moodleCourseId`でSQLiteのコースを解決し、省略時は同名候補が一意な場合だけ既存コースへ結び付ける。曖昧な場合は`RULE_CONFLICT`を返し、同じフォルダへの混在を許可しない。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
 
@@ -156,7 +162,7 @@ interface SaveSuggestion {
 
 拡張機能のcontent scriptからbackgroundへ渡す保存要求は`MoodleSaveFilesRequest = { files: MoodleFileMeta[], targetPath, courseId }`とする。`courseId`は`suggestSavePath`がSQLiteへ解決したIDまたは`null`であり、クライアントがコース名から採番しない。backgroundはメッセージ送信元ページと各資料URLが同一オリジンであることを検証し、`credentials: "include"`のGETで本体を取得する。リダイレクト後のURLも同一オリジンでなければ拒否する。Cookie・Authorizationヘッダー等の認証情報はpayloadへ含めず、取得済み内容だけをNative Messagingへ渡す。
 
-`mod/resource/view.php`の種別確定はHEADを先に使用し、HEAD非対応・HTTPエラー・情報不足時はGETへフォールバックする。`Content-Disposition`の`filename*`を`filename`より優先し、対応済み拡張子を持つ実ファイル名を使用する。実ファイル名がない場合は表示名へ確定した拡張子を補う。`text/html`、HTML先頭シグネチャ、ログイン／エラーページ、種別未確定の間接リンクは保存しない。DOCXはnative-hostでZIPアーカイブとして開けることと、`[Content_Types].xml`、`word/document.xml`が空でなく上限内で最後まで読み取れることを確認する。
+`mod/resource/view.php`の種別確定はHEADを先に使用し、HEAD非対応・HTTPエラー・情報不足時はGETへフォールバックする。`Content-Disposition`の`filename*`を`filename`より優先し、宣言charset付きpercent encoding、旧式のRFC 2047 encoded-word、Latin-1として受け取った生UTF-8の順で日本語名を復元する。復元後も制御文字、パス成分、UTF-16長を検証し、対応済み拡張子を持つ実ファイル名を使用する。実ファイル名がない場合は表示名へ確定した拡張子を補う。`text/html`、HTML先頭シグネチャ、ログイン／エラーページ、種別未確定の間接リンクは保存しない。DOCX本体は文字列へ変換せずバイナリのまま転送し、native-hostでZIPアーカイブとして開けることと、`[Content_Types].xml`、`word/document.xml`が空でなく上限内で最後まで読み取れることを確認する。
 
 Native Messagingの転送は同じ接続上で`beginSaveFiles`、0個以上の`appendSaveFileChunk`、`saveFiles`の順に行う。`chunkIndex`はファイルごとに0から連続させる。拡張機能はBase64文字列を192KiB以下に分割し、native-hostは復号後256KiB以下だけを受理する。1要求は20ファイル、1ファイル64MiB、合計128MiBまでとする。backgroundはレスポンスをストリームで読み、Content-Lengthの有無にかかわらず上限到達時に中断する。切断・タイムアウト・一時的なHTTP失敗を固定キャッシュせず、利用者の再実行で新しい`transferId`を使って再試行できるようにする。
 
