@@ -3,11 +3,17 @@ import {
 	MockApiClient,
 	RULE_PRESETS,
 	createRulePreviewValues,
+	createRuleSegment,
+	createRuleSegmentsFromTemplate,
 	previewRulePattern,
+	previewRuleSegments,
+	ruleSegmentsToTemplate,
 	validateRulePattern,
+	validateRuleSegments,
 } from "@fuzzy/shared";
 import { parseHTML } from "linkedom";
 import { createRuleManagementScreen } from "../../apps/extension/src/entrypoints/content/rulesScreen";
+import { createStructuredRuleBuilder } from "../../apps/extension/src/entrypoints/content/structuredRuleBuilder";
 import {
 	BackgroundRuleManagementApi,
 	FUZZY_RULE_MANAGEMENT_MESSAGE_TYPE,
@@ -184,6 +190,35 @@ describe("ルールテンプレート", () => {
 			"course-assignment",
 		]);
 	});
+
+	test("構造化モデルを保存形式へ変換し、内部表現を出さずにプレビューする", () => {
+		const segments = [
+			createRuleSegment("year", 0),
+			createRuleSegment("term", 1),
+			createRuleSegment("course", 2),
+			createRuleSegment("fixed", 3, "配布資料"),
+		];
+		expect(validateRuleSegments(segments)).toBeNull();
+		expect(ruleSegmentsToTemplate(segments)).toBe("{year}/{term}/{course}/配布資料");
+		expect(
+			previewRuleSegments(segments, createRulePreviewValues(new Date("2026-05-01T00:00:00+09:00"))),
+		).toBe("2026 / 2026前期 / アプリ演習 / 配布資料");
+		expect(createRuleSegmentsFromTemplate("{term}/{course}/第{section}回")).toMatchObject([
+			{ kind: "term" },
+			{ kind: "course" },
+			{ kind: "section" },
+		]);
+	});
+
+	test.each([
+		[[createRuleSegment("year", 0)], "科目"],
+		[[createRuleSegment("course", 0), createRuleSegment("course", 1)], "重複"],
+		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "")], "入力"],
+		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "..")], ".."],
+		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "CON")], "予約名"],
+	])("構造化ルールの不正値を説明付きで拒否する", (segments, message) => {
+		expect(validateRuleSegments(segments)).toContain(message);
+	});
 });
 
 describe("RuleManagementStore", () => {
@@ -237,6 +272,36 @@ describe("RuleManagementStore", () => {
 });
 
 describe("ルール管理画面", () => {
+	test("読み取れない内部表現を画面へ出さず、安全な並びと一般的な案内へ退避する", () => {
+		const { document, window } = parseHTML("<html><head></head><body></body></html>");
+		Object.assign(globalThis, {
+			document,
+			window,
+			HTMLElement: window.HTMLElement,
+		});
+		const builder = createStructuredRuleBuilder({
+			idPrefix: "unsafe-saved-rule",
+			initialTemplate: "{course}/{unknown}",
+			previewValues: createRulePreviewValues(new Date("2026-05-01T00:00:00+09:00")),
+			previewLabel: "保存例",
+			onChange: () => {},
+			onClearMessage: () => {},
+		});
+		document.body.append(builder.root);
+
+		expect(builder.root.textContent).not.toContain("{course}");
+		expect(builder.root.textContent).not.toContain("{unknown}");
+		expect(
+			[...builder.root.querySelectorAll<HTMLInputElement>('input[type="text"]')].map(
+				(input) => input.value,
+			),
+		).not.toContain("{unknown}");
+		expect(builder.root.querySelector(".fuzzy-rules-validation")?.textContent).toContain(
+			"この画面で読み取れませんでした",
+		);
+		expect(builder.getPreview()).toBe("アプリ演習 / 第05回制作課題");
+	});
+
 	test("ルールを読み込み、危険な入力では保存ボタンを無効化する", async () => {
 		const { document, window } = parseHTML("<html><head></head><body></body></html>");
 		Object.assign(globalThis, {
@@ -258,15 +323,55 @@ describe("ルール管理画面", () => {
 		);
 		expect(screen.root.querySelectorAll(".fuzzy-rules-preset")).toHaveLength(RULE_PRESETS.length);
 
-		const input = screen.root.querySelector<HTMLInputElement>(
-			'input[aria-label="基本の保存先の形式"]',
+		const panels = [...screen.root.querySelectorAll<HTMLElement>(".fuzzy-rules-panel")];
+		const globalPanel = panels.find(
+			(panel) => panel.querySelector("h2")?.textContent === "基本の保存設定",
 		);
-		if (!input) throw new Error("基本の保存先の形式を入力する欄がありません。");
-		input.value = "{course}/../Windows";
-		input.dispatchEvent(new window.Event("input"));
+		const coursePanel = panels.find(
+			(panel) => panel.querySelector("h2")?.textContent === "授業ごとの保存設定",
+		);
+		if (!globalPanel || !coursePanel) throw new Error("保存設定パネルがありません。");
 
-		expect(screen.root.querySelector(".fuzzy-rules-validation")?.textContent).toContain("相対移動");
-		expect(screen.root.querySelector<HTMLButtonElement>(".fuzzy-rules-save-button")?.disabled).toBe(
+		expect(globalPanel.querySelectorAll(".fuzzy-rule-builder-row")).toHaveLength(3);
+		expect(globalPanel.textContent).not.toContain("{course}");
+		expect(coursePanel.textContent).not.toContain("{term}");
+		expect(coursePanel.textContent).not.toContain("{course}");
+		const courseCard = coursePanel.querySelector<HTMLElement>(".fuzzy-rules-override-card");
+		if (!courseCard) throw new Error("授業別設定がありません。");
+		expect(courseCard.querySelectorAll(".fuzzy-rule-builder-row")).toHaveLength(2);
+		expect(
+			[
+				...courseCard.querySelectorAll<HTMLOptionElement>(
+					'select[aria-label="追加するフォルダー"] option',
+				),
+			].map((option) => option.textContent),
+		).toEqual(["年度", "学期", "科目", "課題", "授業回", "固定フォルダー名"]);
+		expect(courseCard.querySelector(".fuzzy-rules-preview-value")?.textContent).toContain(
+			"アプリ演習",
+		);
+		const basicMode = courseCard.querySelector<HTMLInputElement>('input[value="global"]');
+		const customMode = courseCard.querySelector<HTMLInputElement>('input[value="custom"]');
+		expect(basicMode?.checked).toBe(false);
+		expect(customMode?.checked).toBe(true);
+		if (!basicMode || !customMode) throw new Error("基本設定を継承する選択肢がありません。");
+		basicMode.checked = true;
+		customMode.checked = false;
+		basicMode.dispatchEvent(new window.Event("change", { bubbles: true }));
+		expect(courseCard.querySelector<HTMLElement>(".fuzzy-structured-rule-builder")?.hidden).toBe(
+			true,
+		);
+		expect(courseCard.querySelector(".fuzzy-rules-kind-badge")?.textContent).toBe("基本設定を使用");
+
+		const courseRow = [
+			...globalPanel.querySelectorAll<HTMLElement>(".fuzzy-rule-builder-row"),
+		].find((row) => row.querySelector("select")?.value === "course");
+		if (!courseRow) throw new Error("科目の選択欄がありません。");
+		const removeCourse = [...courseRow.querySelectorAll<HTMLButtonElement>("button")].find(
+			(button) => button.textContent === "削除",
+		);
+		removeCourse?.click();
+		expect(globalPanel.querySelector(".fuzzy-rules-validation")?.textContent).toContain("科目");
+		expect(globalPanel.querySelector<HTMLButtonElement>(".fuzzy-rules-save-button")?.disabled).toBe(
 			true,
 		);
 

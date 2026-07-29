@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import type { ExtensionRecoveryStatus } from "@fuzzy/shared";
+	import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+	import type {
+		ExtensionRecoveryStatus,
+		LibraryMaintenanceProgress,
+	} from "@fuzzy/shared";
 	import {
 		ExtensionInstallError,
 		getExtensionInstallDestination,
 		getPreferredExtensionInstallChannel,
+		isTauriRuntime,
 		openExtensionInstallDestinationClient,
 		repairNativeHostInstallationClient,
 	} from "./extension-install";
@@ -20,6 +25,8 @@
 		rebuildLibraryClient,
 	} from "./library-maintenance";
 	import type { LibraryMaintenanceSummary } from "./library-maintenance";
+	import { userFacingOperationError } from "./application-state";
+	import { presentMaintenanceProgress } from "./maintenance-progress";
 
 	export let initialStatus: ExtensionRecoveryStatus;
 
@@ -30,7 +37,8 @@
 	let status = initialStatus;
 	let recheckStartedAt: string | null = null;
 	let nowMs = Date.now();
-	let isRefreshing = false;
+	let isStatusRequestRunning = false;
+	let isManualRecheck = false;
 	let isOpening = false;
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
@@ -43,8 +51,20 @@
 	let isExportingBackup = false;
 	let isImportingBackup = false;
 	let isRepairingNativeHost = false;
+	let maintenanceProgress: LibraryMaintenanceProgress | null = null;
+	let unlistenMaintenance: UnlistenFn | null = null;
 
 	onMount(() => {
+		if (isTauriRuntime()) {
+			void listen<LibraryMaintenanceProgress>(
+				"library-maintenance-progress",
+				({ payload }) => {
+					maintenanceProgress = payload;
+				},
+			).then((unlisten) => {
+				unlistenMaintenance = unlisten;
+			});
+		}
 		pollTimer = setInterval(() => {
 			if (status.state === "ready" && !recheckStartedAt) return;
 			nowMs = Date.now();
@@ -53,6 +73,7 @@
 
 		return () => {
 			if (pollTimer) clearInterval(pollTimer);
+			unlistenMaintenance?.();
 		};
 	});
 
@@ -67,9 +88,19 @@
 		}).format(new Date(value));
 	}
 
+	function isMaintenanceActionRunning(): boolean {
+		return (
+			isRebuildingLibrary ||
+			isChangingLibraryRoot ||
+			isExportingBackup ||
+			isImportingBackup ||
+			isRepairingNativeHost
+		);
+	}
+
 	async function refreshStatus(): Promise<void> {
-		if (isRefreshing) return;
-		isRefreshing = true;
+		if (isStatusRequestRunning) return;
+		isStatusRequestRunning = true;
 		try {
 			const wasReady = status.state === "ready";
 			status = await getExtensionRecoveryStatusClient();
@@ -87,33 +118,37 @@
 					? error.message
 					: "拡張機能の応答情報を確認できませんでした。";
 		} finally {
-			isRefreshing = false;
+			isStatusRequestRunning = false;
 		}
 	}
 
 	async function startRecheck(openMoodle: boolean): Promise<void> {
+		if (isManualRecheck || isOpening) return;
+		isManualRecheck = true;
 		errorMessage = null;
 		successMessage = null;
-		if (openMoodle) {
-			try {
+		try {
+			if (openMoodle) {
 				await openMoodleForRecoveryClient();
 				successMessage =
 					"Moodleを既定のブラウザで開きました。拡張機能からの新しい応答を待っています。";
-			} catch (error) {
-				errorMessage =
-					error instanceof ExtensionInstallError
-						? error.message
-						: "Moodleを開けませんでした。";
-				recheckStartedAt = null;
-				return;
 			}
+			recheckStartedAt = new Date().toISOString();
+			nowMs = Date.now();
+			await refreshStatus();
+		} catch (error) {
+			errorMessage =
+				error instanceof ExtensionInstallError
+					? error.message
+					: "拡張機能の状態を再確認できませんでした。";
+			recheckStartedAt = null;
+		} finally {
+			isManualRecheck = false;
 		}
-		recheckStartedAt = new Date().toISOString();
-		nowMs = Date.now();
-		await refreshStatus();
 	}
 
 	async function openInstallGuide(): Promise<void> {
+		if (isOpening || isManualRecheck) return;
 		isOpening = true;
 		errorMessage = null;
 		successMessage = null;
@@ -121,7 +156,7 @@
 			const result =
 				await openExtensionInstallDestinationClient(selectedChannel);
 			successMessage = result.mocked
-				? "ブラウザプレビューでは導入先を開きません。Tauriアプリで確認してください。"
+				? "このプレビューでは導入先を開きません。Fuzzyのデスクトップアプリで確認してください。"
 				: "拡張機能の導入先を開きました。更新または再インストール後の応答を待っています。";
 			recheckStartedAt = new Date().toISOString();
 			nowMs = Date.now();
@@ -136,25 +171,28 @@
 	}
 
 	async function rebuildLibrary(): Promise<void> {
+		if (isMaintenanceActionRunning()) return;
 		isRebuildingLibrary = true;
+		maintenanceProgress = null;
 		maintenanceError = null;
 		maintenanceSuccess = null;
 		try {
 			maintenanceSummary = await rebuildLibraryClient();
-			maintenanceSuccess =
-				"保存先の再スキャンと検索索引の再構築が完了しました。";
+			maintenanceSuccess = "保存先の確認と資料情報の作り直しが完了しました。";
 		} catch (error) {
-			maintenanceError =
-				error instanceof Error
-					? error.message
-					: "保存先を再スキャンできませんでした。";
+			maintenanceError = userFacingOperationError(
+				error,
+				"資料情報を作り直せませんでした。資料の保存完了後にブラウザを閉じ、再試行してください。",
+			);
 		} finally {
 			isRebuildingLibrary = false;
 		}
 	}
 
 	async function changeLibraryRoot(): Promise<void> {
+		if (isMaintenanceActionRunning()) return;
 		isChangingLibraryRoot = true;
+		maintenanceProgress = null;
 		maintenanceError = null;
 		maintenanceSuccess = null;
 		try {
@@ -170,24 +208,24 @@
 					? `既存資料${result.rebasedFileCount}件の登録先を新しい保存先へ引き継ぎました。`
 					: "新しい保存先を設定しました。";
 			if (result.maintenance) {
-				maintenanceSuccess = `${rebasedMessage} 既存ルールを保持し、再スキャンと検索索引の再構築を完了しました。資料ファイルは移動・削除していません。`;
+				maintenanceSuccess = `${rebasedMessage} 既存ルールを保持し、保存先の確認と資料情報の作り直しを完了しました。資料ファイルは移動・削除していません。`;
 			} else {
 				maintenanceSuccess = `${rebasedMessage} 既存ルールと資料ファイルは変更していません。`;
 				maintenanceError =
-					result.maintenanceError ??
-					"保存先変更後の再スキャンに失敗しました。ブラウザを閉じて再構築を実行してください。";
+					"保存先の変更は完了しましたが、資料情報を作り直せませんでした。ブラウザを閉じ、「保存先を確認して資料情報を作り直す」を押してください。";
 			}
 		} catch (error) {
-			maintenanceError =
-				error instanceof Error
-					? error.message
-					: "保存先を変更できませんでした。";
+			maintenanceError = userFacingOperationError(
+				error,
+				"保存先を変更できませんでした。資料があるフォルダーを確認し、もう一度お試しください。",
+			);
 		} finally {
 			isChangingLibraryRoot = false;
 		}
 	}
 
 	async function exportBackup(): Promise<void> {
+		if (isMaintenanceActionRunning()) return;
 		isExportingBackup = true;
 		maintenanceError = null;
 		maintenanceSuccess = null;
@@ -198,17 +236,19 @@
 				? `バックアップを書き出しました: ${result.filePath}`
 				: "バックアップを書き出しました。";
 		} catch (error) {
-			maintenanceError =
-				error instanceof Error
-					? error.message
-					: "バックアップを書き出せませんでした。";
+			maintenanceError = userFacingOperationError(
+				error,
+				"バックアップを書き出せませんでした。保存先を変えて、もう一度お試しください。",
+			);
 		} finally {
 			isExportingBackup = false;
 		}
 	}
 
 	async function importBackup(): Promise<void> {
+		if (isMaintenanceActionRunning()) return;
 		isImportingBackup = true;
+		maintenanceProgress = null;
 		maintenanceError = null;
 		maintenanceSuccess = null;
 		try {
@@ -217,41 +257,41 @@
 			maintenanceSummary = result.maintenance ?? null;
 			if (result.maintenance) {
 				maintenanceSuccess =
-					"バックアップを復元し、保存先の再スキャンと検索索引の再構築を完了しました。";
+					"バックアップを復元し、保存先の確認と資料情報の作り直しを完了しました。";
 			} else {
 				maintenanceSuccess =
 					"バックアップの復元は完了しました。保存済みの資料ファイルは変更していません。";
 				maintenanceError =
-					result.maintenanceError ??
-					"復元後の再スキャンに失敗しました。保存先を確認して再構築を実行してください。";
+					"復元後の資料情報を準備できませんでした。保存先を確認し、「保存先を確認して資料情報を作り直す」を押してください。";
 			}
 		} catch (error) {
-			maintenanceError =
-				error instanceof Error
-					? error.message
-					: "バックアップから復元できませんでした。";
+			maintenanceError = userFacingOperationError(
+				error,
+				"バックアップから復元できませんでした。Fuzzyが作成したバックアップを選び、もう一度お試しください。",
+			);
 		} finally {
 			isImportingBackup = false;
 		}
 	}
 
 	async function repairNativeHost(): Promise<void> {
+		if (isMaintenanceActionRunning()) return;
 		isRepairingNativeHost = true;
 		maintenanceError = null;
 		maintenanceSuccess = null;
 		try {
 			const result = await repairNativeHostInstallationClient();
 			if (result.ready) {
-				maintenanceSuccess =
-					"Native Messaging接続を自動修復しました。コマンド操作は不要です。";
+				maintenanceSuccess = "拡張機能との接続を自動修復しました。";
 			} else {
-				maintenanceError = result.message;
+				maintenanceError =
+					"拡張機能との接続を自動修復できませんでした。Fuzzyを再起動してから再試行してください。";
 			}
 		} catch (error) {
-			maintenanceError =
-				error instanceof Error
-					? error.message
-					: "Native Messaging接続を自動修復できませんでした。";
+			maintenanceError = userFacingOperationError(
+				error,
+				"拡張機能との接続を自動修復できませんでした。Fuzzyを再起動してから再試行してください。",
+			);
 		} finally {
 			isRepairingNativeHost = false;
 		}
@@ -263,6 +303,9 @@
 		nowMs,
 	);
 	$: observation = status.observation;
+	$: maintenanceProgressPresentation =
+		presentMaintenanceProgress(maintenanceProgress);
+	$: maintenanceActionRunning = isMaintenanceActionRunning();
 </script>
 
 <section class="recovery-panel" aria-labelledby="extension-recovery-heading">
@@ -271,10 +314,10 @@
 			<p class="chip">拡張機能の状態</p>
 			<h1 id="extension-recovery-heading">Fuzzyの利用状態を確認</h1>
 			<p class="intro">
-				SQLiteに保存された拡張機能の最終応答とバージョンを確認します。ブラウザの種類による判定は行いません。
+				拡張機能から最後に届いた応答とバージョンを確認します。ブラウザの種類による判定は行いません。
 			</p>
 		</div>
-		<span class="local-badge">ローカル完結</span>
+		<span class="local-badge">あなたのPC上で確認</span>
 	</header>
 
 	{#if errorMessage}
@@ -298,8 +341,7 @@
 				<p class="section-label">正常</p>
 				<h2>拡張機能から最近の応答を確認しました</h2>
 				<p>
-					バージョン {observation.extensionVersion}（通信仕様
-					{observation.protocolVersion}）から
+					拡張機能バージョン {observation.extensionVersion}から
 					{formatDate(observation.lastSeenAt)} に応答がありました。
 				</p>
 			</div>
@@ -309,8 +351,7 @@
 				<p class="section-label">更新が必要です</p>
 				<h2>現在の拡張機能はこのアプリのバージョンに対応していません</h2>
 				<p>
-					確認したバージョンは {observation.extensionVersion}（通信仕様
-					{observation.protocolVersion}）です。最新版の拡張機能をインストールしてください。
+					確認した拡張機能はバージョン {observation.extensionVersion}です。「拡張機能の導入手順を開く」から最新版をインストールし、Moodleを開いて再確認してください。
 				</p>
 			</div>
 		{:else if viewState === "checking"}
@@ -319,7 +360,7 @@
 				<p class="section-label">再確認中</p>
 				<h2>拡張機能からの新しい応答を待っています</h2>
 				<p>
-					Moodleを開いたままお待ちください。互換性のある応答を受信すると自動的に正常状態へ戻ります。
+					Moodleを開いたままお待ちください。新しい応答を確認すると自動的に正常状態へ戻ります。
 				</p>
 			</div>
 		{:else if viewState === "stale" && observation}
@@ -348,7 +389,7 @@
 			class="primary-button"
 			type="button"
 			on:click={() => startRecheck(true)}
-			disabled={isRefreshing}
+			disabled={isManualRecheck || isOpening}
 		>
 			Moodleを開いて再確認
 		</button>
@@ -356,22 +397,22 @@
 			class="secondary-button"
 			type="button"
 			on:click={() => startRecheck(false)}
-			disabled={isRefreshing}
+			disabled={isManualRecheck || isOpening}
 		>
-			{isRefreshing ? "確認中..." : "応答を再確認"}
+			{isManualRecheck ? "確認中..." : "応答を再確認"}
 		</button>
 		<button
 			class="text-button"
 			type="button"
 			on:click={openInstallGuide}
-			disabled={!destination.available || isOpening}
+			disabled={!destination.available || isOpening || isManualRecheck}
 		>
 			{isOpening ? "導入先を開いています..." : "拡張機能の導入手順を開く"}
 		</button>
 	</div>
 
 	<p class="help">
-		更新または再インストールした後はMoodleを開いてください。互換性のある新しい応答を受信すると、この画面は自動的に復旧完了へ切り替わります。
+		更新または再インストールした後はMoodleを開いてください。新しい応答を確認すると、この画面は自動的に復旧完了へ切り替わります。
 	</p>
 
 	<section
@@ -379,12 +420,10 @@
 		aria-labelledby="library-maintenance-heading"
 	>
 		<div>
-			<p class="section-label">ローカルデータの保守</p>
-			<h2 id="library-maintenance-heading">
-				保存先の再スキャン・検索索引・バックアップ
-			</h2>
+			<p class="section-label">このPCのデータ</p>
+			<h2 id="library-maintenance-heading">保存先・資料情報・バックアップ</h2>
 			<p>
-				別のPCへ復元した場合などは「保存先を変更」から新しいフォルダーを選べます。既存ルールを保持し、資料を移動・削除せずに登録先と検索索引を更新します。保守操作の前に資料の保存完了を確認し、ブラウザを閉じてください。
+				別のPCへ復元した場合などは「保存先を変更」から新しいフォルダーを選べます。既存ルールを保持し、資料を移動・削除せずに保存先と検索・整理情報を更新します。操作の前に資料の保存完了を確認し、ブラウザを閉じてください。
 			</p>
 		</div>
 
@@ -394,38 +433,59 @@
 		{#if maintenanceSuccess}
 			<p class="success-banner" role="status">{maintenanceSuccess}</p>
 		{/if}
+		{#if isChangingLibraryRoot || isRebuildingLibrary || isImportingBackup}
+			<div class="maintenance-progress" aria-live="polite">
+				<div>
+					<strong>{maintenanceProgressPresentation.title}</strong>
+					<span>{maintenanceProgressPresentation.countLabel}</span>
+				</div>
+				<div
+					class:indeterminate={maintenanceProgressPresentation.percent === null}
+					class="maintenance-progress-track"
+					role="progressbar"
+					aria-label="資料情報の準備"
+					aria-valuemin="0"
+					aria-valuemax="100"
+					aria-valuenow={maintenanceProgressPresentation.percent ?? undefined}
+					aria-valuetext={maintenanceProgressPresentation.ariaValueText}
+				>
+					<span
+						style:width={`${maintenanceProgressPresentation.percent ?? 30}%`}
+					></span>
+				</div>
+				{#if maintenanceProgress?.warningCount}
+					<p>確認が必要な項目: {maintenanceProgress.warningCount}件</p>
+				{/if}
+				<p>{maintenanceProgressPresentation.availabilityLabel}</p>
+			</div>
+		{/if}
 
 		<div class="maintenance-actions">
 			<button
 				class="secondary-button"
 				type="button"
 				on:click={changeLibraryRoot}
-				disabled={isChangingLibraryRoot ||
-					isRebuildingLibrary ||
-					isImportingBackup ||
-					isExportingBackup}
+				disabled={maintenanceActionRunning}
 			>
-				{isChangingLibraryRoot ? "保存先を変更・再構築中..." : "保存先を変更"}
+				{isChangingLibraryRoot
+					? "保存先を変更し、資料情報を準備中..."
+					: "保存先を変更"}
 			</button>
 			<button
 				class="primary-button"
 				type="button"
 				on:click={rebuildLibrary}
-				disabled={isRebuildingLibrary ||
-					isChangingLibraryRoot ||
-					isImportingBackup}
+				disabled={maintenanceActionRunning}
 			>
 				{isRebuildingLibrary
-					? "再スキャン・再構築中..."
-					: "保存先を再スキャンして検索索引を再構築"}
+					? "資料情報を作り直しています..."
+					: "保存先を確認して資料情報を作り直す"}
 			</button>
 			<button
 				class="secondary-button"
 				type="button"
 				on:click={exportBackup}
-				disabled={isExportingBackup ||
-					isChangingLibraryRoot ||
-					isImportingBackup}
+				disabled={maintenanceActionRunning}
 			>
 				{isExportingBackup ? "書き出し中..." : "バックアップを書き出す"}
 			</button>
@@ -433,26 +493,26 @@
 				class="secondary-button"
 				type="button"
 				on:click={importBackup}
-				disabled={isImportingBackup ||
-					isChangingLibraryRoot ||
-					isRebuildingLibrary}
+				disabled={maintenanceActionRunning}
 			>
-				{isImportingBackup ? "復元・再構築中..." : "バックアップから復元"}
+				{isImportingBackup
+					? "復元し、資料情報を準備中..."
+					: "バックアップから復元"}
 			</button>
 			<button
 				class="secondary-button"
 				type="button"
 				on:click={repairNativeHost}
-				disabled={isRepairingNativeHost}
+				disabled={maintenanceActionRunning}
 			>
 				{isRepairingNativeHost
-					? "Native Messaging接続を自動修復中..."
-					: "Native Messaging接続を自動修復"}
+					? "拡張機能との接続を修復中..."
+					: "拡張機能との接続を自動修復"}
 			</button>
 		</div>
 
 		{#if maintenanceSummary}
-			<div class="maintenance-summary" aria-label="再スキャン結果">
+			<div class="maintenance-summary" aria-label="資料情報の準備結果">
 				<div>
 					<span>検出</span><strong>{maintenanceSummary.scannedFileCount}</strong
 					>
@@ -467,7 +527,7 @@
 					>
 				</div>
 				<div>
-					<span>索引化</span><strong
+					<span>検索準備</span><strong
 						>{maintenanceSummary.indexedFileCount}</strong
 					>
 				</div>
@@ -701,6 +761,10 @@
 		color: var(--fuzzy-color-primary);
 	}
 
+	.actions > .secondary-button {
+		min-width: 104px;
+	}
+
 	.text-button {
 		background: transparent;
 		color: var(--fuzzy-color-primary);
@@ -733,6 +797,53 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 10px;
+	}
+
+	.maintenance-progress {
+		display: grid;
+		gap: 9px;
+		margin-top: 14px;
+		padding: 13px;
+		border-radius: 10px;
+		background: var(--fuzzy-color-page);
+	}
+
+	.maintenance-progress > div:first-child {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+	}
+
+	.maintenance-progress p {
+		margin: 0;
+		color: var(--fuzzy-color-warning);
+	}
+
+	.maintenance-progress-track {
+		height: 9px;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--fuzzy-color-border);
+	}
+
+	.maintenance-progress-track span {
+		display: block;
+		height: 100%;
+		background: var(--fuzzy-color-primary);
+		transition: width 0.2s ease;
+	}
+
+	.maintenance-progress-track.indeterminate span {
+		animation: maintenance-progress 1.2s ease-in-out infinite alternate;
+	}
+
+	@keyframes maintenance-progress {
+		from {
+			transform: translateX(-35%);
+		}
+		to {
+			transform: translateX(185%);
+		}
 	}
 
 	.maintenance-summary {
@@ -797,6 +908,17 @@
 	@keyframes spin {
 		to {
 			transform: rotate(360deg);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.status-icon.checking,
+		.maintenance-progress-track.indeterminate span {
+			animation: none;
+		}
+
+		.maintenance-progress-track span {
+			transition: none;
 		}
 	}
 

@@ -8,7 +8,9 @@ import {
 	createSelectedFilePaths,
 	fileId,
 	loadFileSuggestions,
+	loadFileSuggestionsWithFailures,
 	rankSuggestions,
+	saveSuggestionStatus,
 } from "../../apps/extension/src/entrypoints/content/savePlan";
 import type {
 	MoodleFileLink,
@@ -45,6 +47,95 @@ describe("資料別の保存計画", () => {
 		expect(suggestions.get(fileId(files[1] as MoodleFileLink))?.[0]?.relativePath).toContain(
 			"第2回",
 		);
+	});
+
+	test("一部の候補生成が失敗しても成功した資料の保存先を残す", async () => {
+		const files = [createFile("資料1.pdf", "第1回", "1"), createFile("資料2.pdf", "第2回", "2")];
+		const result = await loadFileSuggestionsWithFailures(
+			{
+				async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
+					if (request.fileMeta?.moodleFileId === "2") {
+						throw new Error("入力内容が不正です");
+					}
+					return [createSuggestion("データベース\\第1回")];
+				},
+			},
+			createSnapshot(files),
+		);
+
+		expect(result.suggestions.get(fileId(files[0] as MoodleFileLink))).toHaveLength(1);
+		expect(result.suggestions.has(fileId(files[1] as MoodleFileLink))).toBe(false);
+		expect(result.failedFileIds).toEqual([fileId(files[1] as MoodleFileLink)]);
+		expect(result.firstError).toBeInstanceOf(Error);
+	});
+
+	test("全候補の生成に失敗した場合も資料ごとの失敗を保持する", async () => {
+		const files = [createFile("資料1.pdf", "第1回", "1"), createFile("資料2.pdf", "第2回", "2")];
+		const result = await loadFileSuggestionsWithFailures(
+			{
+				async suggestSavePath(): Promise<SaveSuggestion[]> {
+					throw new Error("入力内容が不正です");
+				},
+			},
+			createSnapshot(files),
+		);
+
+		expect(result.suggestions.size).toBe(0);
+		expect(result.failedFileIds).toEqual(files.map(fileId));
+		expect(
+			saveSuggestionStatus(files.length, result.suggestions, result.failedFileIds.length)?.kind,
+		).toBe("all-failed");
+	});
+
+	test("資料未検出・全失敗・一部失敗・候補なしを区別して次の操作を案内する", () => {
+		const noFiles = saveSuggestionStatus(0, new Map(), 0);
+		expect(noFiles).toMatchObject({
+			kind: "no-files",
+			reviewRules: false,
+			suggestedFileCount: 0,
+			unavailableFileCount: 0,
+		});
+		expect(noFiles?.message).toContain("コース画面");
+		expect(noFiles?.message).toContain("資料一覧を再読み込み");
+
+		const allFailed = saveSuggestionStatus(2, new Map(), 2);
+		expect(allFailed).toMatchObject({
+			kind: "all-failed",
+			reviewRules: true,
+			suggestedFileCount: 0,
+			unavailableFileCount: 2,
+		});
+		expect(allFailed?.message).toContain("保存・整理設定");
+		expect(allFailed?.message).toContain("年度や学期");
+
+		const oneSuggestion = new Map([
+			["file-1", [createSuggestion("データベース\\第1回")]],
+			["file-2", []],
+		]);
+		const partial = saveSuggestionStatus(3, oneSuggestion, 1);
+		expect(partial).toMatchObject({
+			kind: "partial",
+			reviewRules: true,
+			suggestedFileCount: 1,
+			unavailableFileCount: 2,
+		});
+		expect(partial?.message).toContain("残り2件");
+		expect(partial?.message).toContain("選択を外す");
+
+		const noCandidates = saveSuggestionStatus(
+			2,
+			new Map([
+				["file-1", []],
+				["file-2", []],
+			]),
+			0,
+		);
+		expect(noCandidates).toMatchObject({
+			kind: "no-candidates",
+			reviewRules: true,
+			suggestedFileCount: 0,
+			unavailableFileCount: 2,
+		});
 	});
 
 	test("異なる推奨先を保存先別に分け、手動指定時だけ一つへまとめる", () => {

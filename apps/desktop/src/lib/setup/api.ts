@@ -239,7 +239,7 @@ export async function saveInitialSetupClient(
 		return { ok: true, maintenance };
 	} catch {
 		throw new SetupApiError(
-			"初期設定をSQLiteへ保存できませんでした。保存先とルールを確認してください。",
+			"初期設定を保存できませんでした。保存先とフォルダーの作り方を確認してください。",
 		);
 	}
 }
@@ -252,8 +252,6 @@ export async function getSetupStatusClient(runtime?: SetupRuntime): Promise<Setu
 		if (!status) throw new Error("invalid response");
 		return status;
 	} catch {
-		throw new SetupApiError(
-			"初期設定の状態をSQLiteから読み込めませんでした。Fuzzyを再起動してください。",
-		);
+		throw new SetupApiError("初期設定の状態を読み込めませんでした。Fuzzyを再起動してください。");
 	}
 }

@@ -12,6 +12,22 @@ import type { MoodleFileLink, MoodlePageSnapshot } from "../../lib/moodle/pageSn
 export type FileSuggestions = Map<string, SaveSuggestion[]>;
 export type SelectedFilePaths = Map<string, string>;
 
+export interface FileSuggestionLoadResult {
+	suggestions: FileSuggestions;
+	failedFileIds: string[];
+	firstError: unknown;
+}
+
+export type SaveSuggestionStatusKind = "no-files" | "all-failed" | "partial" | "no-candidates";
+
+export interface SaveSuggestionStatus {
+	kind: SaveSuggestionStatusKind;
+	message: string;
+	reviewRules: boolean;
+	suggestedFileCount: number;
+	unavailableFileCount: number;
+}
+
 export interface SaveDestinationGroup {
 	key: string;
 	path: string;
@@ -31,23 +47,122 @@ export async function loadFileSuggestions(
 	api: Pick<FuzzyApiClient, "suggestSavePath">,
 	snapshot: MoodlePageSnapshot,
 ): Promise<FileSuggestions> {
-	const entries = await Promise.all(
+	const result = await loadFileSuggestionsWithFailures(api, snapshot);
+	if (result.firstError) throw result.firstError;
+	return result.suggestions;
+}
+
+/**
+ * 一部の資料で候補生成に失敗しても、成功済みの正式な候補を利用者へ残す。
+ * 失敗理由を推測した保存先は作らない。
+ */
+export async function loadFileSuggestionsWithFailures(
+	api: Pick<FuzzyApiClient, "suggestSavePath">,
+	snapshot: MoodlePageSnapshot,
+): Promise<FileSuggestionLoadResult> {
+	const results = await Promise.all(
 		snapshot.files.map(async (file) => {
-			const suggestions = await api.suggestSavePath({
-				course: {
-					moodleCourseId: snapshot.moodleCourseId,
-					name: snapshot.courseName,
-					academicYear: snapshot.academicYear,
-					term: snapshot.term,
-					sectionTitle: snapshot.sectionTitle,
-					breadcrumbs: snapshot.breadcrumbs,
-				},
-				fileMeta: file,
-			});
-			return [fileId(file), rankSuggestions(suggestions)] as const;
+			try {
+				const suggestions = await api.suggestSavePath({
+					course: {
+						moodleCourseId: snapshot.moodleCourseId,
+						name: snapshot.courseName,
+						academicYear: snapshot.academicYear,
+						term: snapshot.term,
+						sectionTitle: snapshot.sectionTitle,
+						breadcrumbs: snapshot.breadcrumbs,
+					},
+					fileMeta: file,
+				});
+				return {
+					id: fileId(file),
+					suggestions: rankSuggestions(suggestions),
+					error: null,
+				};
+			} catch (error) {
+				return {
+					id: fileId(file),
+					suggestions: null,
+					error,
+				};
+			}
 		}),
 	);
-	return new Map(entries);
+	const successfulEntries = results
+		.filter(
+			(
+				result,
+			): result is {
+				id: string;
+				suggestions: SaveSuggestion[];
+				error: null;
+			} => result.suggestions !== null,
+		)
+		.map(({ id, suggestions }) => [id, suggestions] as const);
+	const failures = results.filter(
+		(result): result is { id: string; suggestions: null; error: unknown } =>
+			result.suggestions === null,
+	);
+
+	return {
+		suggestions: new Map(successfulEntries),
+		failedFileIds: failures.map(({ id }) => id),
+		firstError: failures[0]?.error ?? null,
+	};
+}
+
+/**
+ * 保存パネルで利用者へ示す、候補取得後の状態を一つにまとめる。
+ * APIが空配列を返した資料も「候補なし」に含め、失敗件数だけを残件として誤表示しない。
+ */
+export function saveSuggestionStatus(
+	fileCount: number,
+	suggestions: FileSuggestions,
+	failedFileCount: number,
+): SaveSuggestionStatus | null {
+	if (fileCount === 0) {
+		return {
+			kind: "no-files",
+			message:
+				"このページでは保存できる資料が見つかりませんでした。資料が並んでいるコース画面を開くか、「資料一覧を再読み込み」を押してください。",
+			reviewRules: false,
+			suggestedFileCount: 0,
+			unavailableFileCount: 0,
+		};
+	}
+
+	const suggestedFileCount = [...suggestions.values()].filter((items) => items.length > 0).length;
+	const unavailableFileCount = Math.max(0, fileCount - suggestedFileCount);
+	if (failedFileCount >= fileCount) {
+		return {
+			kind: "all-failed",
+			message:
+				"保存先を提案できませんでした。Moodleから年度や学期などを確認できず、現在のフォルダーの作り方を当てはめられない可能性があります。「保存・整理設定」で見直すか、「資料一覧を再読み込み」を押してください。",
+			reviewRules: true,
+			suggestedFileCount: 0,
+			unavailableFileCount,
+		};
+	}
+	if (suggestedFileCount > 0 && unavailableFileCount > 0) {
+		return {
+			kind: "partial",
+			message: `${suggestedFileCount}件の保存先を表示しています。残り${unavailableFileCount}件は提案できませんでした。表示できない資料の選択を外すと、候補がある資料だけ保存できます。「保存・整理設定」を見直すか、「資料一覧を再読み込み」を押してください。`,
+			reviewRules: true,
+			suggestedFileCount,
+			unavailableFileCount,
+		};
+	}
+	if (suggestedFileCount === 0) {
+		return {
+			kind: "no-candidates",
+			message:
+				"このページの資料に合う保存先を提案できませんでした。「保存・整理設定」でフォルダーの作り方を確認するか、「資料一覧を再読み込み」を押してください。",
+			reviewRules: true,
+			suggestedFileCount: 0,
+			unavailableFileCount,
+		};
+	}
+	return null;
 }
 
 export function createSelectedFilePaths(suggestions: FileSuggestions): SelectedFilePaths {

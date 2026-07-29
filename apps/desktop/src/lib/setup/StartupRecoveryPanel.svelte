@@ -1,24 +1,29 @@
 <script lang="ts">
+	import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+	import type { LibraryMaintenanceProgress } from "@fuzzy/shared";
+	import {
+		deriveApplicationState,
+		userFacingOperationError,
+	} from "./application-state";
+	import { presentMaintenanceProgress } from "./maintenance-progress";
 	import {
 		changeLibraryRootClient,
 		createFreshDatabaseClient,
 		getApplicationRecoveryStatusClient,
 		importBackupClient,
 		rebuildLibraryClient,
+		type ApplicationRecoveryStatus,
 	} from "./library-maintenance";
-	import type { ApplicationRecoveryStatus } from "./library-maintenance";
 
 	export let initialStatus: ApplicationRecoveryStatus;
 	export let onRecovered: (message: string) => void = () => undefined;
 
 	let status = initialStatus;
-	let isRestoring = false;
-	let isCreatingFresh = false;
-	let isRebuilding = false;
-	let isChangingRoot = false;
+	let busyAction: "restore" | "fresh" | "rebuild" | "change-root" | null = null;
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
 	let recoveryCopyPath: string | null = null;
+	let progress: LibraryMaintenanceProgress | null = null;
 
 	async function refreshStatus(message: string): Promise<void> {
 		status = await getApplicationRecoveryStatusClient();
@@ -30,213 +35,229 @@
 		}
 	}
 
-	async function restoreBackup(): Promise<void> {
-		isRestoring = true;
+	async function runAction(
+		action: typeof busyAction,
+		task: () => Promise<void>,
+	): Promise<void> {
+		if (busyAction) return;
+		busyAction = action;
 		errorMessage = null;
 		successMessage = null;
+		progress = null;
+		let unlisten: UnlistenFn | null = null;
 		try {
-			const result = await importBackupClient();
-			if (result.cancelled) return;
-			recoveryCopyPath = result.recoveryCopyPath ?? null;
-			successMessage =
-				"SQLiteバックアップを復元しました。保存済みの資料ファイルは変更していません。";
-			if (result.maintenanceError) {
-				errorMessage = result.maintenanceError;
-			}
-			await refreshStatus(
-				result.recoveryCopyPath
-					? `SQLiteバックアップを復元しました。開けなかったDBの保全先: ${result.recoveryCopyPath}`
-					: "SQLiteバックアップを復元し、ローカルデータを復旧しました。",
+			unlisten = await listen<LibraryMaintenanceProgress>(
+				"library-maintenance-progress",
+				({ payload }) => {
+					progress = payload;
+				},
 			);
-		} catch (error) {
-			errorMessage =
-				error instanceof Error
-					? error.message
-					: "バックアップから復元できませんでした。";
+			await task();
 		} finally {
-			isRestoring = false;
+			unlisten?.();
+			busyAction = null;
 		}
+	}
+
+	async function restoreBackup(): Promise<void> {
+		await runAction("restore", async () => {
+			try {
+				const result = await importBackupClient();
+				if (result.cancelled) return;
+				recoveryCopyPath = result.recoveryCopyPath ?? null;
+				successMessage =
+					"バックアップを復元しました。保存済みの授業資料は変更していません。";
+				if (result.maintenanceError) {
+					errorMessage =
+						"復元は完了しましたが、資料情報の準備を完了できませんでした。もう一度お試しください。";
+				}
+				await refreshStatus(
+					"バックアップから復元し、Fuzzyを利用できる状態に戻しました。",
+				);
+			} catch (error) {
+				errorMessage = userFacingOperationError(
+					error,
+					"バックアップから復元できませんでした。Fuzzyが作成したバックアップを選び、もう一度お試しください。",
+				);
+			}
+		});
 	}
 
 	async function createFreshDatabase(): Promise<void> {
-		isCreatingFresh = true;
-		errorMessage = null;
-		successMessage = null;
-		try {
-			const result = await createFreshDatabaseClient();
-			if (result.cancelled) return;
-			recoveryCopyPath = result.recoveryCopyPath ?? null;
-			successMessage =
-				"開けなかったDBを別名で保全し、新しいSQLite正本を作成しました。保存済みの資料ファイルは変更していません。";
-			if (result.indexError) {
-				errorMessage = result.indexError;
+		await runAction("fresh", async () => {
+			try {
+				const result = await createFreshDatabaseClient();
+				if (result.cancelled) return;
+				recoveryCopyPath = result.recoveryCopyPath ?? null;
+				successMessage =
+					"開けなかった設定を保全し、新しく開始する準備ができました。授業資料は変更していません。";
+				if (result.indexError) {
+					errorMessage =
+						"新しい設定は作成できましたが、資料情報の準備を完了できませんでした。";
+				}
+				await refreshStatus(
+					"新しく開始する準備ができました。保存先とフォルダーの作り方を設定してください。",
+				);
+			} catch (error) {
+				errorMessage = userFacingOperationError(
+					error,
+					"新しく開始する準備ができませんでした。Fuzzyを終了せず、時間をおいてもう一度お試しください。",
+				);
 			}
-			await refreshStatus(
-				`開けなかったDBを保全して新しく開始しました。保全先: ${result.recoveryCopyPath}。保存先と初期ルールを設定してください。`,
-			);
-		} catch (error) {
-			errorMessage =
-				error instanceof Error
-					? error.message
-					: "新しいSQLite正本を作成できませんでした。";
-		} finally {
-			isCreatingFresh = false;
-		}
+		});
 	}
 
-	async function rebuildIndex(): Promise<void> {
-		isRebuilding = true;
-		errorMessage = null;
-		successMessage = null;
-		try {
-			await rebuildLibraryClient();
-			successMessage =
-				"SQLite正本を基に検索索引を再構築しました。資料ファイルは変更していません。";
-			await refreshStatus("検索索引を再構築し、ローカルデータを復旧しました。");
-		} catch (error) {
-			errorMessage =
-				error instanceof Error
-					? error.message
-					: "検索索引を再構築できませんでした。";
-		} finally {
-			isRebuilding = false;
-		}
+	async function rebuildInformation(): Promise<void> {
+		await runAction("rebuild", async () => {
+			try {
+				await rebuildLibraryClient();
+				successMessage =
+					"資料の検索・整理情報を作り直しました。授業資料は変更していません。";
+				await refreshStatus("資料情報の準備が完了し、Fuzzyを利用できます。");
+			} catch (error) {
+				errorMessage = userFacingOperationError(
+					error,
+					"資料情報を作り直せませんでした。資料の保存が終わってからブラウザを閉じ、もう一度お試しください。",
+				);
+			}
+		});
 	}
 
 	async function changeLibraryRoot(): Promise<void> {
-		isChangingRoot = true;
-		errorMessage = null;
-		successMessage = null;
-		try {
-			const result = await changeLibraryRootClient();
-			if (result.cancelled) return;
-			successMessage = `保存先を変更し、登録済み資料${result.rebasedFileCount}件の参照先を更新しました。資料ファイルは移動・削除していません。`;
-			if (result.maintenanceError) {
-				errorMessage = result.maintenanceError;
+		await runAction("change-root", async () => {
+			try {
+				const result = await changeLibraryRootClient();
+				if (result.cancelled) return;
+				successMessage = `保存先を変更し、登録済み資料${result.rebasedFileCount}件を確認しました。資料は移動・削除していません。`;
+				if (result.maintenanceError) {
+					errorMessage =
+						"保存先は変更できましたが、資料情報の準備を完了できませんでした。";
+				}
+				await refreshStatus("保存先の変更と資料情報の準備が完了しました。");
+			} catch (error) {
+				errorMessage = userFacingOperationError(
+					error,
+					"保存先を変更できませんでした。資料があるフォルダーを確認し、もう一度お試しください。",
+				);
 			}
-			await refreshStatus(
-				"保存先をこのPCのフォルダーへ変更し、検索索引を再構築しました。",
-			);
-		} catch (error) {
-			errorMessage =
-				error instanceof Error
-					? error.message
-					: "保存先を変更できませんでした。";
-		} finally {
-			isChangingRoot = false;
-		}
+		});
 	}
 
-	$: databaseNeedsRecovery = status.database.state === "recoveryRequired";
-	$: indexNeedsRecovery = status.searchIndex.state !== "ready";
-	$: canChangeLibraryRoot = !databaseNeedsRecovery;
-	$: isBusy = isRestoring || isCreatingFresh || isRebuilding || isChangingRoot;
+	$: primaryState = deriveApplicationState(status, true);
+	$: needsSettingsRecovery = status.database.state !== "ready";
+	$: needsInformationRebuild =
+		!needsSettingsRecovery && status.searchIndex.state !== "ready";
+	$: progressPresentation = presentMaintenanceProgress(progress);
 </script>
 
 <section class="recovery-panel" aria-labelledby="startup-recovery-heading">
 	<header>
-		<div>
-			<p class="chip">ローカルデータの復旧</p>
-			<h1 id="startup-recovery-heading">Fuzzyを安全に起動するための確認</h1>
-			<p class="intro">
-				SQLite正本または検索索引を開けませんでした。ターミナル操作は不要です。この画面から復旧しても、保存済みの授業資料は移動・削除しません。
-			</p>
-		</div>
-		<span class="local-badge">ローカル完結</span>
+		<p class="chip">Fuzzyの起動準備</p>
+		<h1 id="startup-recovery-heading">{primaryState.title}</h1>
+		<p class="intro">{primaryState.impact}</p>
 	</header>
 
-	{#if errorMessage}
-		<p class="error-banner" role="alert">{errorMessage}</p>
-	{/if}
-	{#if successMessage}
-		<p class="success-banner" role="status">{successMessage}</p>
-	{/if}
-	{#if recoveryCopyPath}
-		<p class="copy-path" role="status">
-			開けなかったDBの保全先: <strong>{recoveryCopyPath}</strong>
-		</p>
-	{/if}
-
-	<div class="status-grid">
-		<section class:problem={databaseNeedsRecovery} class="status-card">
-			<p class="section-label">SQLite正本</p>
-			<h2>{databaseNeedsRecovery ? "復旧が必要です" : "利用できます"}</h2>
-			<p>{status.database.message}</p>
-		</section>
-		<section class:problem={indexNeedsRecovery} class="status-card">
-			<p class="section-label">検索索引</p>
-			<h2>{indexNeedsRecovery ? "再構築が必要です" : "利用できます"}</h2>
-			<p>{status.searchIndex.message}</p>
-		</section>
+	<div class="primary-state" aria-live="polite" aria-busy={busyAction !== null}>
+		{#if busyAction}
+			<h2>{progressPresentation.title}</h2>
+			<p>{progressPresentation.countLabel}</p>
+			<div
+				class:indeterminate={progressPresentation.percent === null}
+				class="progress-track"
+				role="progressbar"
+				aria-label="資料情報の準備"
+				aria-valuemin="0"
+				aria-valuemax="100"
+				aria-valuenow={progressPresentation.percent ?? undefined}
+				aria-valuetext={progressPresentation.ariaValueText}
+			>
+				<span
+					style:width={progressPresentation.percent === null
+						? "35%"
+						: `${progressPresentation.percent}%`}
+				></span>
+			</div>
+			{#if progress?.warningCount}
+				<p class="warning">確認が必要な項目: {progress.warningCount}件</p>
+			{/if}
+			<p>{progressPresentation.availabilityLabel}</p>
+		{:else}
+			<h2>{primaryState.title}</h2>
+			<p>{primaryState.impact}</p>
+		{/if}
 	</div>
 
-	{#if databaseNeedsRecovery}
+	{#if errorMessage}<p class="error-banner" role="alert">{errorMessage}</p>{/if}
+	{#if successMessage}<p class="success-banner" role="status">
+			{successMessage}
+		</p>{/if}
+
+	{#if needsSettingsRecovery}
 		<section class="action-card">
-			<h2>1. バックアップがある場合</h2>
-			<p>
-				「バックアップから復元」を押し、Fuzzyが書き出したSQLiteファイルを選んでください。復元前に確認ダイアログを表示します。
-			</p>
+			<h2>バックアップがある場合</h2>
+			<p>Fuzzyが作成したバックアップを選ぶと、設定と履歴を復元できます。</p>
 			<button
 				class="primary-button"
 				type="button"
 				on:click={restoreBackup}
-				disabled={isBusy}
+				disabled={busyAction !== null}
 			>
-				{isRestoring ? "復元中..." : "バックアップから復元"}
+				{busyAction === "restore" ? "復元中…" : "バックアップから復元"}
 			</button>
 		</section>
-
 		<section class="action-card caution">
-			<h2>2. バックアップがない場合</h2>
+			<h2>バックアップがない場合</h2>
 			<p>
-				開けないDBと付随ファイルを別名の復旧用フォルダーへ保全してから、新しいSQLite正本を作成します。設定と履歴は初期状態になります。実行前にもう一度確認します。
+				開けなかった設定を別の場所へ保全してから、新しい設定で開始します。設定と履歴は初期状態になります。
 			</p>
 			<button
 				class="secondary-button"
 				type="button"
 				on:click={createFreshDatabase}
-				disabled={isBusy}
+				disabled={busyAction !== null}
 			>
-				{isCreatingFresh ? "保全・作成中..." : "破損DBを保全して新しく開始"}
+				{busyAction === "fresh" ? "保全・準備中…" : "設定を保全して新しく開始"}
 			</button>
 		</section>
-	{:else if indexNeedsRecovery}
-		{#if canChangeLibraryRoot}
-			<section class="action-card">
-				<h2>バックアップ元の保存先がこのPCにない場合</h2>
-				<p>
-					別のPCで作成したバックアップなど、以前の保存先を開けない場合は、このPCで資料を置いているフォルダーへ設定だけを変更できます。資料ファイルは移動・削除しません。
-				</p>
-				<button
-					class="secondary-button"
-					type="button"
-					on:click={changeLibraryRoot}
-					disabled={isBusy}
-				>
-					{isChangingRoot ? "保存先を変更中..." : "保存先を変更"}
-				</button>
-			</section>
-		{/if}
-
+	{:else if needsInformationRebuild}
 		<section class="action-card">
-			<h2>検索索引だけを復旧</h2>
+			<h2>資料があるフォルダーを変更した場合</h2>
 			<p>
-				SQLite正本は正常です。開けない索引を別名で退避し、SQLiteと保存先の資料から内部索引だけを作り直します。
+				このPCで授業資料を置いているフォルダーへ保存先の設定だけを変更できます。
 			</p>
+			<button
+				class="secondary-button"
+				type="button"
+				on:click={changeLibraryRoot}
+				disabled={busyAction !== null}
+			>
+				{busyAction === "change-root" ? "変更中…" : "保存先を変更"}
+			</button>
+		</section>
+		<section class="action-card">
+			<h2>検索・整理情報を作り直す</h2>
+			<p>保存済みの授業資料と設定から、Fuzzyが利用する情報を作り直します。</p>
 			<button
 				class="primary-button"
 				type="button"
-				on:click={rebuildIndex}
-				disabled={isBusy}
+				on:click={rebuildInformation}
+				disabled={busyAction !== null}
 			>
-				{isRebuilding ? "再構築中..." : "検索索引を再構築"}
+				{busyAction === "rebuild" ? "準備中…" : "資料情報を作り直す"}
 			</button>
 		</section>
 	{/if}
 
 	<p class="safety-note">
-		復旧対象はFuzzyのSQLiteと派生検索索引だけです。授業資料の自動移動・自動削除、外部送信は行いません。
+		この操作では授業資料や設定を外部へ送信しません。保存済みの授業資料は移動・削除されません。
 	</p>
+
+	<details>
+		<summary>診断情報を表示</summary>
+		<p>{status.database.message}</p>
+		<p>{status.searchIndex.message}</p>
+		{#if recoveryCopyPath}<p>保全先: {recoveryCopyPath}</p>{/if}
+	</details>
 </section>
 
 <style>
@@ -247,130 +268,86 @@
 		box-sizing: border-box;
 		border-radius: 12px;
 		background: var(--fuzzy-color-surface-glass);
-		box-shadow: 0 28px 52px var(--fuzzy-color-primary-overlay);
+		box-shadow: var(--fuzzy-shadow-dialog);
 	}
-
-	header {
-		display: flex;
-		justify-content: space-between;
-		gap: 20px;
-	}
-
 	h1,
 	h2,
 	p {
 		margin-top: 0;
 	}
-
 	h1 {
 		margin-bottom: 8px;
 		font-size: 1.8rem;
 	}
-
 	h2 {
 		margin-bottom: 7px;
 		font-size: 1rem;
 	}
-
-	.chip,
-	.local-badge {
-		width: fit-content;
-		border-radius: 999px;
-		font-weight: 700;
-	}
-
 	.chip {
+		width: fit-content;
 		margin-bottom: 12px;
 		padding: 4px 10px;
-		background: var(--fuzzy-color-danger-soft);
-		color: var(--fuzzy-color-danger);
+		border-radius: 999px;
+		background: var(--fuzzy-color-warning-soft);
+		color: var(--fuzzy-color-warning);
 		font-size: 0.7rem;
+		font-weight: 700;
 	}
-
-	.local-badge {
-		height: fit-content;
-		padding: 7px 12px;
-		background: var(--fuzzy-color-success-soft);
-		color: var(--fuzzy-color-success);
-		font-size: 0.72rem;
-		white-space: nowrap;
-	}
-
 	.intro,
-	.status-card p:not(.section-label),
 	.action-card p,
-	.safety-note {
+	.safety-note,
+	details {
 		color: var(--fuzzy-color-text-muted);
 		font-size: 0.8rem;
 		line-height: 1.7;
 	}
-
-	.error-banner,
-	.success-banner,
-	.copy-path {
-		margin: 18px 0 0;
-		padding: 13px 15px;
-		border-radius: 8px;
-		font-size: 0.78rem;
-		overflow-wrap: anywhere;
-	}
-
-	.error-banner {
-		background: var(--fuzzy-color-danger-soft);
-		border: 1px solid var(--fuzzy-color-danger);
-		color: var(--fuzzy-color-danger);
-	}
-
-	.success-banner {
-		background: var(--fuzzy-color-success-soft);
-		border: 1px solid var(--fuzzy-color-success);
-		color: var(--fuzzy-color-success);
-	}
-
-	.copy-path {
-		background: var(--fuzzy-color-surface-muted);
-		border: 1px solid var(--fuzzy-color-border);
-		color: var(--fuzzy-color-text);
-	}
-
-	.status-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 12px;
-		margin-top: 22px;
-	}
-
-	.status-card,
+	.primary-state,
 	.action-card {
+		margin-top: 14px;
 		padding: 18px;
 		border: 1px solid var(--fuzzy-color-border);
 		border-radius: 10px;
 		background: var(--fuzzy-color-surface-muted);
 	}
-
-	.status-card.problem {
-		background: var(--fuzzy-color-danger-soft);
-		border-color: var(--fuzzy-color-danger);
-	}
-
-	.section-label {
-		margin-bottom: 6px;
-		color: var(--fuzzy-color-text-muted);
-		font-size: 0.7rem;
-		font-weight: 700;
-	}
-
-	.action-card {
-		margin-top: 14px;
-	}
-
 	.action-card.caution {
 		background: var(--fuzzy-color-warning-soft);
 		border-color: var(--fuzzy-color-warning-border);
 	}
-
+	.error-banner,
+	.success-banner {
+		margin: 14px 0 0;
+		padding: 13px 15px;
+		border-radius: 8px;
+		font-size: 0.8rem;
+	}
+	.error-banner {
+		background: var(--fuzzy-color-danger-soft);
+		color: var(--fuzzy-color-danger);
+	}
+	.success-banner {
+		background: var(--fuzzy-color-success-soft);
+		color: var(--fuzzy-color-success-strong);
+	}
+	.warning {
+		color: var(--fuzzy-color-warning);
+	}
+	.progress-track {
+		height: 10px;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--fuzzy-color-border);
+	}
+	.progress-track span {
+		display: block;
+		height: 100%;
+		background: var(--fuzzy-color-primary);
+		transition: width 0.2s ease;
+	}
+	.progress-track.indeterminate span {
+		animation: progress 1.2s ease-in-out infinite alternate;
+	}
 	button {
-		border: none;
+		border: 0;
 		border-radius: 8px;
 		padding: 11px 14px;
 		font: inherit;
@@ -378,45 +355,56 @@
 		font-weight: 700;
 		cursor: pointer;
 	}
-
 	button:disabled {
 		cursor: default;
 		opacity: 0.62;
 	}
-
-	button:focus-visible {
-		outline: 3px solid var(--fuzzy-color-primary-overlay);
+	button:focus-visible,
+	summary:focus-visible {
+		outline: 3px solid var(--fuzzy-focus-ring);
 		outline-offset: 2px;
 	}
-
 	.primary-button {
 		background: var(--fuzzy-color-primary);
-		color: var(--fuzzy-color-surface);
+		color: var(--fuzzy-color-text-inverse);
 	}
-
 	.secondary-button {
 		background: var(--fuzzy-color-surface);
 		border: 1px solid var(--fuzzy-color-warning-border);
 		color: var(--fuzzy-color-warning);
 	}
-
 	.safety-note {
 		margin: 18px 0 0;
 		padding-top: 16px;
 		border-top: 1px solid var(--fuzzy-color-border);
 	}
-
+	details {
+		margin-top: 14px;
+	}
+	summary {
+		cursor: pointer;
+		font-weight: 700;
+	}
+	@keyframes progress {
+		from {
+			transform: translateX(-35%);
+		}
+		to {
+			transform: translateX(185%);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.progress-track.indeterminate span {
+			animation: none;
+		}
+		.progress-track span {
+			transition: none;
+		}
+	}
 	@media (max-width: 720px) {
 		.recovery-panel {
 			padding: 20px 16px;
 		}
-
-		header,
-		.status-grid {
-			grid-template-columns: 1fr;
-			flex-direction: column;
-		}
-
 		button {
 			width: 100%;
 		}

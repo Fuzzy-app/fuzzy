@@ -4,6 +4,32 @@ export const RULE_TEMPLATE_TOKENS = ["year", "term", "course", "assignment", "se
 
 export type RuleTemplateToken = (typeof RULE_TEMPLATE_TOKENS)[number];
 
+export const RULE_SEGMENT_KINDS = [
+	"year",
+	"term",
+	"course",
+	"assignment",
+	"section",
+	"fixed",
+] as const;
+
+export type RuleSegmentKind = (typeof RULE_SEGMENT_KINDS)[number];
+
+export interface RuleSegment {
+	id: string;
+	kind: RuleSegmentKind;
+	value?: string;
+}
+
+export const RULE_SEGMENT_LABELS: Readonly<Record<RuleSegmentKind, string>> = {
+	year: "年度",
+	term: "学期",
+	course: "科目",
+	assignment: "課題",
+	section: "授業回",
+	fixed: "固定フォルダー名",
+};
+
 export interface RulePreset {
 	id: string;
 	name: string;
@@ -44,6 +70,95 @@ export interface RulePreviewValues {
 
 const windowsReservedNamePattern = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const tokenPattern = /\{([^{}]+)\}/g;
+const segmentTokenPattern = /^\{(year|term|course|assignment|section)\}$/;
+
+function createRuleSegmentId(index: number, kind: RuleSegmentKind): string {
+	return `rule-segment-${index + 1}-${kind}`;
+}
+
+export function createRuleSegmentsFromTemplate(patternTemplate: string): RuleSegment[] {
+	return patternTemplate
+		.trim()
+		.split(/[\\/]/)
+		.filter(Boolean)
+		.map((segment, index) => {
+			const normalized = segment.trim();
+			const token = normalized.match(segmentTokenPattern)?.[1] as RuleTemplateToken | undefined;
+			if (token) return { id: createRuleSegmentId(index, token), kind: token };
+			if (/^第\s*\{section\}\s*回$/.test(normalized)) {
+				return { id: createRuleSegmentId(index, "section"), kind: "section" };
+			}
+			return {
+				id: createRuleSegmentId(index, "fixed"),
+				kind: "fixed",
+				value: normalized,
+			};
+		});
+}
+
+export function createRuleSegment(kind: RuleSegmentKind, index: number, value = ""): RuleSegment {
+	return {
+		id: createRuleSegmentId(index, kind),
+		kind,
+		...(kind === "fixed" ? { value } : {}),
+	};
+}
+
+export function ruleSegmentsToTemplate(segments: readonly RuleSegment[]): string {
+	return segments
+		.map((segment) =>
+			segment.kind === "fixed" ? (segment.value ?? "").trim() : `{${segment.kind}}`,
+		)
+		.join("/");
+}
+
+export function validateRuleSegments(segments: readonly RuleSegment[]): string | null {
+	if (segments.length === 0) return "フォルダーの並びを1つ以上追加してください。";
+	const courseCount = segments.filter(({ kind }) => kind === "course").length;
+	if (courseCount === 0) return "「科目」は必ず1つ追加してください。";
+	if (courseCount > 1) return "「科目」は重複して追加できません。";
+
+	const seenKinds = new Set<RuleSegmentKind>();
+	for (const segment of segments) {
+		if (segment.kind !== "fixed") {
+			if (seenKinds.has(segment.kind)) {
+				return `「${RULE_SEGMENT_LABELS[segment.kind]}」は重複して追加できません。`;
+			}
+			seenKinds.add(segment.kind);
+			continue;
+		}
+		const value = segment.value?.trim() ?? "";
+		if (!value) return "固定フォルダー名を入力してください。";
+		if (/^(?:[a-z]:[\\/]|[\\/]{1,2})/i.test(value)) {
+			return "固定フォルダー名に絶対パスやUNCパスは指定できません。";
+		}
+		if (value === "." || value === ".." || /[\\/]/.test(value)) {
+			return "固定フォルダー名には「.」「..」やパス区切りを使用できません。";
+		}
+		if ([...value].some(isInvalidWindowsPathCharacter)) {
+			return "固定フォルダー名にWindowsで使用できない文字が含まれています。";
+		}
+		if (/[. ]$/.test(value)) {
+			return "固定フォルダー名の末尾にピリオドや空白は使用できません。";
+		}
+		if (windowsReservedNamePattern.test(value)) {
+			return `Windowsの予約名「${value}」は固定フォルダー名に使用できません。`;
+		}
+	}
+	return validateRulePattern(ruleSegmentsToTemplate(segments));
+}
+
+export function previewRuleSegments(
+	segments: readonly RuleSegment[],
+	values: RulePreviewValues = createRulePreviewValues(),
+): string {
+	return segments
+		.map((segment) =>
+			segment.kind === "fixed" ? (segment.value ?? "").trim() : values[segment.kind],
+		)
+		.filter(Boolean)
+		.join(" / ");
+}
 
 export function createRulePreviewValues(now = new Date()): RulePreviewValues {
 	const calendarYear = now.getFullYear();

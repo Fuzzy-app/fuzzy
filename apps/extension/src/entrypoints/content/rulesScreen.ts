@@ -21,6 +21,8 @@ import {
 	validateRulePattern,
 } from "./rulesScreenModel";
 import { ensureRulesScreenStyle } from "./rulesScreenStyle";
+import { previewStructuredRuleTemplate } from "./structuredRuleBuilder";
+import { userFacingErrorMessage } from "./userFacingError";
 
 export interface RuleManagementScreen {
 	root: HTMLElement;
@@ -343,7 +345,7 @@ export function createRuleManagementScreen(
 			buildSummaryCard(
 				"現在の基本設定",
 				patternLabel(rules.globalPatternTemplate),
-				rules.globalPatternTemplate,
+				`保存例: ${previewStructuredRuleTemplate(rules.globalPatternTemplate, previewValues)}`,
 				"is-accent",
 			),
 			buildSummaryCard(
@@ -449,5 +451,8 @@ export function createRuleManagementScreen(
 }
 
 function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : "ルールを更新できませんでした。";
+	return userFacingErrorMessage(
+		error,
+		"保存・整理設定を更新できませんでした。接続を確認し、再読み込みしてください。",
+	);
 }

@@ -34,15 +34,19 @@ import {
 import {
 	type FileSuggestions,
 	type SaveDestinationGroup,
+	type SaveSuggestionStatus,
 	type SelectedFilePaths,
 	buildSaveDestinationGroups,
 	commonGroupSuggestions,
 	courseFolderFromSuggestions,
 	createSelectedFilePaths,
 	fileId,
-	loadFileSuggestions,
+	loadFileSuggestionsWithFailures,
 	saveRootFromSuggestions,
+	saveSuggestionStatus,
 } from "./savePlan";
+import { SHELL_NAV_BUTTON_ID, SHELL_PAGE_ID } from "./shellIds";
+import { userFacingErrorMessage } from "./userFacingError";
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
@@ -97,6 +101,7 @@ export async function mountSavePanel(): Promise<void> {
 	let saving = false;
 	let isPanelOpen = false;
 	let message: string | null = null;
+	let suggestionStatus: SaveSuggestionStatus | null = null;
 	const savePanelOpenState = createSavePanelOpenStateWriter(browser.storage.local);
 
 	injectPanelStyle();
@@ -116,11 +121,18 @@ export async function mountSavePanel(): Promise<void> {
 			snapshot = fullSnapshot;
 			lastSavePath = storedPath;
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadFileSuggestions(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
+			suggestionStatus = saveSuggestionStatus(
+				snapshot.files.length,
+				suggestions,
+				suggestionResult.failedFileIds.length,
+			);
 			message = null;
 		} catch (error) {
+			suggestionStatus = null;
 			message = toErrorMessage(error, "保存先候補の取得に失敗しました");
 		} finally {
 			loading = false;
@@ -131,17 +143,25 @@ export async function mountSavePanel(): Promise<void> {
 	async function reloadSnapshotAndSuggestions() {
 		loading = true;
 		resetConfirmState();
+		suggestionStatus = null;
 		message = "Moodleページ内の資料を再読み込みしています。";
 		render();
 		try {
 			snapshot = await collectMoodlePageSnapshotWithNestedFolders();
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadFileSuggestions(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
 			manualRelativePath = "";
+			suggestionStatus = saveSuggestionStatus(
+				snapshot.files.length,
+				suggestions,
+				suggestionResult.failedFileIds.length,
+			);
 			message = null;
 		} catch (error) {
+			suggestionStatus = null;
 			message = toErrorMessage(error, "Moodleページ内の資料取得に失敗しました");
 		} finally {
 			loading = false;
@@ -299,7 +319,10 @@ export async function mountSavePanel(): Promise<void> {
 		courseFolderError = null;
 		render();
 		try {
-			await api.updateCourseFolderName({ courseId: courseFolder.courseId, folderName });
+			await api.updateCourseFolderName({
+				courseId: courseFolder.courseId,
+				folderName,
+			});
 		} catch (error) {
 			courseFolderError = courseFolderNameUpdateError(error);
 			courseFolderSaving = false;
@@ -308,14 +331,22 @@ export async function mountSavePanel(): Promise<void> {
 		}
 
 		try {
-			suggestions = await loadFileSuggestions(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
-			message =
-				folderName === null
+			suggestionStatus = saveSuggestionStatus(
+				snapshot.files.length,
+				suggestions,
+				suggestionResult.failedFileIds.length,
+			);
+			message = suggestionStatus
+				? null
+				: folderName === null
 					? "コース保存名を自動提案へ戻しました。"
 					: "コース保存名を更新し、保存先候補を再取得しました。";
 		} catch {
+			suggestionStatus = null;
 			message =
 				"コース保存名は更新済みですが、保存先候補を再取得できませんでした。再読み込みしてください。";
 		} finally {
@@ -345,6 +376,7 @@ export async function mountSavePanel(): Promise<void> {
 		scroll.className = "fuzzy-panel-scroll";
 		scroll.append(renderHeader());
 		if (message) scroll.append(renderNote());
+		if (suggestionStatus) scroll.append(renderSuggestionStatus());
 		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
 		const zipFiles = selectedFiles.filter(isZipFile);
 		scroll.append(renderFileList(snapshot.files));
@@ -412,6 +444,39 @@ export async function mountSavePanel(): Promise<void> {
 		note.className = busy ? "fuzzy-note" : "fuzzy-note fuzzy-note-result";
 		note.textContent = message ?? "";
 		return note;
+	}
+
+	function renderSuggestionStatus() {
+		const note = document.createElement("section");
+		note.className =
+			suggestionStatus?.kind === "no-files" ? "fuzzy-note" : "fuzzy-note fuzzy-note-warning";
+		note.setAttribute("role", "status");
+		note.append(document.createTextNode(suggestionStatus?.message ?? ""));
+
+		const actions = document.createElement("div");
+		actions.className = "fuzzy-confirm-buttons";
+		const retry = document.createElement("button");
+		retry.type = "button";
+		retry.textContent = "資料一覧を再読み込み";
+		retry.addEventListener("click", () => void reloadSnapshotAndSuggestions());
+		actions.append(retry);
+
+		if (suggestionStatus?.reviewRules) {
+			const reviewRules = document.createElement("button");
+			reviewRules.type = "button";
+			reviewRules.textContent = "保存・整理設定を開く";
+			reviewRules.addEventListener("click", openRuleSettings);
+			actions.append(reviewRules);
+		}
+		note.append(actions);
+		return note;
+	}
+
+	function openRuleSettings() {
+		setPanelOpen(false);
+		const navButton = document.getElementById(SHELL_NAV_BUTTON_ID);
+		if (navButton?.getAttribute("aria-pressed") !== "true") navButton?.click();
+		document.querySelector<HTMLButtonElement>(`#${SHELL_PAGE_ID} [data-screen="rules"]`)?.click();
 	}
 
 	function renderFileList(files: MoodleFileLink[]) {
@@ -852,7 +917,9 @@ async function saveLastSavePath(path: string): Promise<void> {
 }
 
 function toErrorMessage(error: unknown, fallback: string): string {
-	return error instanceof Error ? `${fallback}: ${error.message}` : `${fallback}。`;
+	return userFacingErrorMessage(error, `${fallback}。`, {
+		prefixFallback: true,
+	});
 }
 
 function renderPathBreadcrumb(relativePath: string): string {
