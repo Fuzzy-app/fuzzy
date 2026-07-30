@@ -38,6 +38,7 @@
 	let recheckStartedAt: string | null = null;
 	let nowMs = Date.now();
 	let isStatusRequestRunning = false;
+	let statusRequestFailed = false;
 	let isManualRecheck = false;
 	let isOpening = false;
 	let errorMessage: string | null = null;
@@ -98,12 +99,52 @@
 		);
 	}
 
+	function completeMaintenanceProgress(
+		summary: LibraryMaintenanceSummary,
+	): void {
+		maintenanceProgress = {
+			phase: "completed",
+			state:
+				summary.warnings.length > 0 ? "completedWithWarnings" : "completed",
+			completedCount: summary.scannedFileCount,
+			totalCount: summary.scannedFileCount,
+			warningCount: summary.warnings.length,
+		};
+	}
+
+	function failMaintenanceProgress(): void {
+		if (
+			maintenanceProgress?.phase === "completed" &&
+			maintenanceProgress.state === "failed"
+		) {
+			return;
+		}
+		maintenanceProgress = {
+			phase: "completed",
+			state: "failed",
+			completedCount: maintenanceProgress?.completedCount ?? 0,
+			totalCount: maintenanceProgress?.totalCount ?? null,
+			warningCount: maintenanceProgress?.warningCount ?? 0,
+		};
+	}
+
+	function warnMaintenanceProgress(): void {
+		maintenanceProgress = {
+			phase: "completed",
+			state: "completedWithWarnings",
+			completedCount: maintenanceProgress?.completedCount ?? 0,
+			totalCount: maintenanceProgress?.totalCount ?? 0,
+			warningCount: Math.max(1, maintenanceProgress?.warningCount ?? 0),
+		};
+	}
+
 	async function refreshStatus(): Promise<void> {
 		if (isStatusRequestRunning) return;
 		isStatusRequestRunning = true;
 		try {
 			const wasReady = status.state === "ready";
 			status = await getExtensionRecoveryStatusClient();
+			statusRequestFailed = false;
 			errorMessage = null;
 			if (status.state === "ready") {
 				recheckStartedAt = null;
@@ -113,6 +154,8 @@
 				}
 			}
 		} catch (error) {
+			statusRequestFailed = true;
+			successMessage = null;
 			errorMessage =
 				error instanceof Error
 					? error.message
@@ -178,8 +221,10 @@
 		maintenanceSuccess = null;
 		try {
 			maintenanceSummary = await rebuildLibraryClient();
+			completeMaintenanceProgress(maintenanceSummary);
 			maintenanceSuccess = "保存先の確認と資料情報の作り直しが完了しました。";
 		} catch (error) {
+			failMaintenanceProgress();
 			maintenanceError = userFacingOperationError(
 				error,
 				"資料情報を作り直せませんでした。資料の保存完了後にブラウザを閉じ、再試行してください。",
@@ -208,13 +253,16 @@
 					? `既存資料${result.rebasedFileCount}件の登録先を新しい保存先へ引き継ぎました。`
 					: "新しい保存先を設定しました。";
 			if (result.maintenance) {
+				completeMaintenanceProgress(result.maintenance);
 				maintenanceSuccess = `${rebasedMessage} 既存ルールを保持し、保存先の確認と資料情報の作り直しを完了しました。資料ファイルは移動・削除していません。`;
 			} else {
+				warnMaintenanceProgress();
 				maintenanceSuccess = `${rebasedMessage} 既存ルールと資料ファイルは変更していません。`;
 				maintenanceError =
 					"保存先の変更は完了しましたが、資料情報を作り直せませんでした。ブラウザを閉じ、「保存先を確認して資料情報を作り直す」を押してください。";
 			}
 		} catch (error) {
+			failMaintenanceProgress();
 			maintenanceError = userFacingOperationError(
 				error,
 				"保存先を変更できませんでした。資料があるフォルダーを確認し、もう一度お試しください。",
@@ -232,9 +280,7 @@
 		try {
 			const result = await exportBackupClient();
 			if (result.cancelled) return;
-			maintenanceSuccess = result.filePath
-				? `バックアップを書き出しました: ${result.filePath}`
-				: "バックアップを書き出しました。";
+			maintenanceSuccess = "選択した場所へバックアップを書き出しました。";
 		} catch (error) {
 			maintenanceError = userFacingOperationError(
 				error,
@@ -256,15 +302,18 @@
 			if (result.cancelled) return;
 			maintenanceSummary = result.maintenance ?? null;
 			if (result.maintenance) {
+				completeMaintenanceProgress(result.maintenance);
 				maintenanceSuccess =
 					"バックアップを復元し、保存先の確認と資料情報の作り直しを完了しました。";
 			} else {
+				warnMaintenanceProgress();
 				maintenanceSuccess =
 					"バックアップの復元は完了しました。保存済みの資料ファイルは変更していません。";
 				maintenanceError =
 					"復元後の資料情報を準備できませんでした。保存先を確認し、「保存先を確認して資料情報を作り直す」を押してください。";
 			}
 		} catch (error) {
+			failMaintenanceProgress();
 			maintenanceError = userFacingOperationError(
 				error,
 				"バックアップから復元できませんでした。Fuzzyが作成したバックアップを選び、もう一度お試しください。",
@@ -320,22 +369,31 @@
 		<span class="local-badge">あなたのPC上で確認</span>
 	</header>
 
-	{#if errorMessage}
+	{#if errorMessage && !statusRequestFailed}
 		<p class="error-banner" role="alert">{errorMessage}</p>
-	{/if}
-	{#if successMessage}
+	{:else if successMessage}
 		<p class="success-banner" role="status">{successMessage}</p>
 	{/if}
 
 	<section
 		class:complete={viewState === "ready"}
 		class:warning={viewState === "stale" || viewState === "checking"}
-		class:error={viewState === "timed-out" ||
+		class:error={statusRequestFailed ||
+			viewState === "timed-out" ||
 			viewState === "incompatible" ||
 			viewState === "missing"}
 		class="status-card"
 	>
-		{#if viewState === "ready" && observation}
+		{#if statusRequestFailed}
+			<div class="status-icon error" aria-hidden="true">!</div>
+			<div>
+				<p class="section-label">確認できません</p>
+				<h2>現在の利用状態を確認できませんでした</h2>
+				<p>
+					通信を確認して「応答を再確認」を押してください。現在の設定と保存済み資料は変更されていません。
+				</p>
+			</div>
+		{:else if viewState === "ready" && observation}
 			<div class="status-icon complete" aria-hidden="true">✓</div>
 			<div>
 				<p class="section-label">正常</p>
@@ -428,19 +486,27 @@
 		</div>
 
 		{#if maintenanceError}
-			<p class="error-banner" role="alert">{maintenanceError}</p>
-		{/if}
-		{#if maintenanceSuccess}
+			<p
+				class:error-banner={!maintenanceSuccess}
+				class:warning-banner={Boolean(maintenanceSuccess)}
+				role="alert"
+			>
+				{maintenanceSuccess
+					? `${maintenanceSuccess} ${maintenanceError}`
+					: maintenanceError}
+			</p>
+		{:else if maintenanceSuccess}
 			<p class="success-banner" role="status">{maintenanceSuccess}</p>
 		{/if}
-		{#if isChangingLibraryRoot || isRebuildingLibrary || isImportingBackup}
-			<div class="maintenance-progress" aria-live="polite">
+		{#if maintenanceProgress}
+			<div class="maintenance-progress" aria-live="polite" aria-atomic="true">
 				<div>
 					<strong>{maintenanceProgressPresentation.title}</strong>
 					<span>{maintenanceProgressPresentation.countLabel}</span>
 				</div>
 				<div
-					class:indeterminate={maintenanceProgressPresentation.percent === null}
+					class:indeterminate={maintenanceProgressPresentation.percent ===
+						null && maintenanceProgress.state === "running"}
 					class="maintenance-progress-track"
 					role="progressbar"
 					aria-label="資料情報の準備"
@@ -547,17 +613,9 @@
 					<summary>
 						確認が必要な項目 {maintenanceSummary.warnings.length} 件
 					</summary>
-					<ul>
-						{#each maintenanceSummary.warnings.slice(0, 50) as warning}
-							<li>
-								<strong>{warning.path}</strong>
-								<span>{warning.message}</span>
-							</li>
-						{/each}
-					</ul>
-					{#if maintenanceSummary.warnings.length > 50}
-						<p>先頭50件を表示しています。</p>
-					{/if}
+					<p>
+						一部の資料を確認できませんでした。資料の保存が終わっていることと保存先を確認し、もう一度「保存先を確認して資料情報を作り直す」を実行してください。保存済み資料は移動・削除しません。
+					</p>
 				</details>
 			{/if}
 		{/if}
@@ -640,6 +698,7 @@
 
 	.status-card,
 	.error-banner,
+	.warning-banner,
 	.success-banner {
 		margin-top: 22px;
 		border-radius: 8px;
@@ -708,6 +767,7 @@
 	}
 
 	.error-banner,
+	.warning-banner,
 	.success-banner {
 		padding: 14px 16px;
 		font-size: 0.8rem;
@@ -717,6 +777,12 @@
 		background: var(--fuzzy-color-danger-soft);
 		border: 1px solid var(--fuzzy-color-danger);
 		color: var(--fuzzy-color-danger);
+	}
+
+	.warning-banner {
+		background: var(--fuzzy-color-warning-soft);
+		border: 1px solid var(--fuzzy-color-warning-border);
+		color: var(--fuzzy-color-warning);
 	}
 
 	.success-banner {
@@ -747,7 +813,7 @@
 	}
 
 	button:focus-visible {
-		outline: 3px solid var(--fuzzy-color-primary-overlay);
+		outline: 3px solid var(--fuzzy-focus-ring);
 		outline-offset: 2px;
 	}
 
@@ -884,19 +950,6 @@
 	.maintenance-warnings summary {
 		cursor: pointer;
 		font-weight: 700;
-	}
-
-	.maintenance-warnings ul {
-		margin: 10px 0 0;
-		padding-left: 1.1rem;
-		display: grid;
-		gap: 8px;
-	}
-
-	.maintenance-warnings li span {
-		display: block;
-		margin-top: 2px;
-		color: var(--fuzzy-color-warning);
 	}
 
 	.maintenance-note {

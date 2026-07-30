@@ -1,7 +1,14 @@
+import { RULE_SEGMENT_KINDS, type StructuredRuleSegment } from "@fuzzy/shared";
 import { isTauriRuntime } from "./extension-install";
 import { parseLibraryMaintenanceSummary } from "./library-maintenance";
 import type { LibraryMaintenanceSummary } from "./library-maintenance";
-import type { InitialSetupPayload, PatternCandidate, SetupStatus } from "./types";
+import type {
+	InitialSetupPayload,
+	PatternCandidate,
+	SavedSetupConfiguration,
+	SetupChangesPayload,
+	SetupStatus,
+} from "./types";
 
 export type SetupRuntime = {
 	invoke: <T>(command: string, args: Record<string, unknown>) => Promise<T>;
@@ -16,6 +23,13 @@ export class SetupApiError extends Error {
 
 export type InitialSetupSaveResult = {
 	ok: true;
+	maintenance: LibraryMaintenanceSummary;
+};
+
+export type SetupChangesSaveResult = {
+	ok: true;
+	rootChanged: boolean;
+	rebasedFileCount: number;
 	maintenance: LibraryMaintenanceSummary;
 };
 
@@ -41,6 +55,7 @@ const previewCandidates: PatternCandidate[] = [
 		name: "年度 / 科目 / 課題",
 		description: "年度単位でまとめつつ、各科目の中に課題フォルダを配置する構成です。",
 		folders: ["2026", ...createPreviewCourseFolders("2026")],
+		directorySegments: [{ kind: "year" }, { kind: "course" }, { kind: "assignment" }],
 		courseSegmentIndex: 1,
 		fileNameTemplate: null,
 		matchScore: 92,
@@ -54,6 +69,7 @@ const previewCandidates: PatternCandidate[] = [
 		name: "科目 / 課題",
 		description: "シンプルに科目ごとで分け、その下に課題を入れる構成です。",
 		folders: createPreviewCourseFolders(),
+		directorySegments: [{ kind: "course" }, { kind: "assignment" }],
 		courseSegmentIndex: 0,
 		fileNameTemplate: null,
 		matchScore: 76,
@@ -67,6 +83,7 @@ const previewCandidates: PatternCandidate[] = [
 		name: "単一フォルダ保存",
 		description: "ダウンロード先を固定し、課題名だけで管理する構成です。",
 		folders: previewCourses.map(({ name, assignment }) => `${name}_${assignment}`),
+		directorySegments: null,
 		courseSegmentIndex: null,
 		fileNameTemplate: null,
 		matchScore: 41,
@@ -78,20 +95,38 @@ const previewCandidates: PatternCandidate[] = [
 ];
 
 let previewSavedAt: string | null = null;
+let previewConfiguration: SavedSetupConfiguration | null = null;
 
 /**
  * `vite dev`で画面だけを確認する場合の明示的なプレビューアダプター。
  * Tauri本番では使用せず、完了状態をlocalStorageへ保存しない。
  */
 export const previewSetupAdapter: SetupRuntime = {
-	async invoke<T>(command: string): Promise<T> {
+	async invoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
 		switch (command) {
 			case "pick_base_folder":
 				return previewFolder as T;
 			case "scan_existing_structure":
 				return structuredClone(previewCandidates) as T;
-			case "save_initial_setup":
+			case "save_initial_setup": {
+				const payload = args as unknown as InitialSetupPayload;
 				previewSavedAt = new Date().toISOString();
+				previewConfiguration = {
+					revision: `preview-${previewSavedAt}`,
+					savedAt: previewSavedAt,
+					baseFolderPath: payload.path,
+					pattern: {
+						id: payload.pattern.id,
+						courseSegmentIndex: payload.pattern.courseSegmentIndex,
+					},
+					rule: {
+						id: payload.rule.id,
+						template: payload.rule.template,
+					},
+					courseOverrides: payload.courseOverrides
+						.filter(({ enabled }) => enabled)
+						.map(({ courseName }) => ({ courseName, enabled: true })),
+				};
 				return {
 					ok: true,
 					maintenance: {
@@ -105,6 +140,48 @@ export const previewSetupAdapter: SetupRuntime = {
 						warnings: [],
 					},
 				} as T;
+			}
+			case "get_saved_setup_configuration":
+				return structuredClone(previewConfiguration) as T;
+			case "save_setup_changes": {
+				const payload = args as unknown as SetupChangesPayload;
+				if (!previewConfiguration || payload.expectedRevision !== previewConfiguration.revision) {
+					throw new SetupApiError("設定が更新されています。");
+				}
+				const previousPath = previewConfiguration.baseFolderPath;
+				previewSavedAt = new Date().toISOString();
+				previewConfiguration = {
+					revision: `preview-${previewSavedAt}`,
+					savedAt: previewSavedAt,
+					baseFolderPath: payload.path,
+					pattern: {
+						id: payload.pattern.id,
+						courseSegmentIndex: payload.pattern.courseSegmentIndex,
+					},
+					rule: {
+						id: payload.rule.id,
+						template: payload.rule.template,
+					},
+					courseOverrides: payload.courseOverrides
+						.filter(({ enabled }) => enabled)
+						.map(({ courseName }) => ({ courseName, enabled: true })),
+				};
+				return {
+					ok: true,
+					rootChanged: previousPath !== payload.path,
+					rebasedFileCount: 0,
+					maintenance: {
+						scannedFileCount: previewCandidates[0]?.folders.length ?? 0,
+						registeredFileCount: 0,
+						updatedFileCount: 0,
+						indexedFileCount: 0,
+						reusedFingerprintCount: 0,
+						missingFileCount: 0,
+						skippedFileCount: 0,
+						warnings: [],
+					},
+				} as T;
+			}
 			case "get_setup_status":
 				return {
 					done: previewSavedAt !== null,
@@ -136,6 +213,33 @@ export function parsePatternCandidates(value: unknown): PatternCandidate[] | nul
 			!Array.isArray(candidate.folders) ||
 			!candidate.folders.every((folder) => typeof folder === "string") ||
 			!(
+				candidate.directorySegments === null ||
+				(Array.isArray(candidate.directorySegments) &&
+					candidate.directorySegments.every((segment) => {
+						if (!segment || typeof segment !== "object") return false;
+						const value = segment as Record<string, unknown>;
+						if (
+							typeof value.kind !== "string" ||
+							!RULE_SEGMENT_KINDS.includes(value.kind as (typeof RULE_SEGMENT_KINDS)[number])
+						) {
+							return false;
+						}
+						if (value.kind === "fixed") {
+							if (typeof value.value !== "string" || value.value.length === 0) {
+								return false;
+							}
+						} else if (value.value !== undefined) {
+							return false;
+						}
+						return (
+							value.format === undefined ||
+							(value.kind === "section" && value.format === "numbered") ||
+							(value.kind === "year" &&
+								(value.format === "yearSuffix" || value.format === "academicYearSuffix"))
+						);
+					}))
+			) ||
+			!(
 				candidate.courseSegmentIndex === null ||
 				(typeof candidate.courseSegmentIndex === "number" &&
 					Number.isInteger(candidate.courseSegmentIndex) &&
@@ -163,6 +267,7 @@ export function parsePatternCandidates(value: unknown): PatternCandidate[] | nul
 			name: candidate.name,
 			description: candidate.description,
 			folders: candidate.folders,
+			directorySegments: candidate.directorySegments as StructuredRuleSegment[] | null,
 			courseSegmentIndex: candidate.courseSegmentIndex,
 			fileNameTemplate: candidate.fileNameTemplate,
 			matchScore: candidate.matchScore,
@@ -186,6 +291,75 @@ export function parseSetupStatus(value: unknown): SetupStatus | null {
 		return { done: status.done, savedAt: status.savedAt };
 	}
 	return { done: status.done };
+}
+
+export function parseSavedSetupConfiguration(value: unknown): SavedSetupConfiguration | null {
+	if (!value || typeof value !== "object") return null;
+	const configuration = value as Record<string, unknown>;
+	const pattern =
+		configuration.pattern && typeof configuration.pattern === "object"
+			? (configuration.pattern as Record<string, unknown>)
+			: null;
+	const rule =
+		configuration.rule && typeof configuration.rule === "object"
+			? (configuration.rule as Record<string, unknown>)
+			: null;
+	if (
+		typeof configuration.revision !== "string" ||
+		configuration.revision.length === 0 ||
+		typeof configuration.savedAt !== "string" ||
+		Number.isNaN(Date.parse(configuration.savedAt)) ||
+		typeof configuration.baseFolderPath !== "string" ||
+		configuration.baseFolderPath.length === 0 ||
+		!pattern ||
+		typeof pattern.id !== "string" ||
+		pattern.id.length === 0 ||
+		!(
+			pattern.courseSegmentIndex === null ||
+			(typeof pattern.courseSegmentIndex === "number" &&
+				Number.isInteger(pattern.courseSegmentIndex) &&
+				pattern.courseSegmentIndex >= 0)
+		) ||
+		!rule ||
+		typeof rule.id !== "string" ||
+		rule.id.length === 0 ||
+		typeof rule.template !== "string" ||
+		rule.template.length === 0 ||
+		!Array.isArray(configuration.courseOverrides)
+	) {
+		return null;
+	}
+	const courseOverrides: SavedSetupConfiguration["courseOverrides"] = [];
+	const seenCourseNames = new Set<string>();
+	for (const item of configuration.courseOverrides) {
+		if (!item || typeof item !== "object") return null;
+		const override = item as Record<string, unknown>;
+		if (
+			typeof override.courseName !== "string" ||
+			override.courseName.trim().length === 0 ||
+			override.enabled !== true
+		) {
+			return null;
+		}
+		const courseName = override.courseName.trim();
+		if (seenCourseNames.has(courseName)) continue;
+		seenCourseNames.add(courseName);
+		courseOverrides.push({ courseName, enabled: true });
+	}
+	return {
+		revision: configuration.revision,
+		savedAt: configuration.savedAt,
+		baseFolderPath: configuration.baseFolderPath,
+		pattern: {
+			id: pattern.id,
+			courseSegmentIndex: pattern.courseSegmentIndex as number | null,
+		},
+		rule: {
+			id: rule.id,
+			template: rule.template,
+		},
+		courseOverrides,
+	};
 }
 
 export async function pickBaseFolderClient(runtime?: SetupRuntime): Promise<string | null> {
@@ -253,5 +427,73 @@ export async function getSetupStatusClient(runtime?: SetupRuntime): Promise<Setu
 		return status;
 	} catch {
 		throw new SetupApiError("初期設定の状態を読み込めませんでした。Fuzzyを再起動してください。");
+	}
+}
+
+export async function getSavedSetupConfigurationClient(
+	runtime?: SetupRuntime,
+): Promise<SavedSetupConfiguration> {
+	const setupRuntime = runtime ?? (await createSetupRuntime());
+	try {
+		const value = await setupRuntime.invoke<unknown>("get_saved_setup_configuration", {});
+		const configuration = parseSavedSetupConfiguration(value);
+		if (!configuration) throw new Error("invalid response");
+		return configuration;
+	} catch {
+		throw new SetupApiError(
+			"保存済みの設定を読み込めませんでした。現在の設定は変更されていません。",
+		);
+	}
+}
+
+export async function saveSetupChangesClient(
+	payload: SetupChangesPayload,
+	runtime?: SetupRuntime,
+): Promise<SetupChangesSaveResult> {
+	const setupRuntime = runtime ?? (await createSetupRuntime());
+	try {
+		const value = await setupRuntime.invoke<unknown>(
+			"save_setup_changes",
+			payload as unknown as Record<string, unknown>,
+		);
+		if (!value || typeof value !== "object") throw new Error("invalid response");
+		const result = value as Record<string, unknown>;
+		const maintenance = parseLibraryMaintenanceSummary(result.maintenance);
+		if (
+			result.ok !== true ||
+			typeof result.rootChanged !== "boolean" ||
+			typeof result.rebasedFileCount !== "number" ||
+			!Number.isInteger(result.rebasedFileCount) ||
+			result.rebasedFileCount < 0 ||
+			!maintenance
+		) {
+			throw new Error("invalid response");
+		}
+		return {
+			ok: true,
+			rootChanged: result.rootChanged,
+			rebasedFileCount: result.rebasedFileCount,
+			maintenance,
+		};
+	} catch (error) {
+		const code = typeof error === "string" ? error : error instanceof Error ? error.message : "";
+		if (code.includes("SETUP_CONFLICT")) {
+			throw new SetupApiError(
+				"保存済みの設定が別の画面で更新されました。最新の設定を読み直し、変更内容をもう一度確認してください。",
+			);
+		}
+		if (code.includes("RULE_CONFLICT")) {
+			throw new SetupApiError(
+				"フォルダーの作り方が授業ごとの設定と合いません。整理ルールを見直してください。",
+			);
+		}
+		if (code.includes("INVALID_PATH")) {
+			throw new SetupApiError(
+				"選択した保存先を利用できません。フォルダーの場所とアクセス権を確認してください。",
+			);
+		}
+		throw new SetupApiError(
+			"変更内容を保存できませんでした。入力内容を確認して再試行してください。",
+		);
 	}
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	deriveApplicationState,
+	presentApplicationRecoveryDetails,
 	userFacingOperationError,
 } from "../../apps/desktop/src/lib/setup/application-state";
 
@@ -45,6 +46,27 @@ describe("desktopの利用者向け主状態", () => {
 				"もう一度お試しください。",
 			);
 		}
+	});
+
+	test("backendの状態メッセージを復旧画面へ直接表示しない", () => {
+		const details = presentApplicationRecoveryDetails({
+			database: {
+				state: "recoveryRequired",
+				message: "SQLite DBを開けません。ターミナルで確認してください。",
+			},
+			searchIndex: {
+				state: "needsRebuild",
+				message: "内部索引と検索索引を再構築してください。",
+			},
+		});
+
+		expect(details).toEqual({
+			settings: "設定と履歴を読み込めません。バックアップから復元するか、新しく開始してください。",
+			information: "資料情報を作り直すと、検索と整理を利用できます。",
+		});
+		expect(`${details.settings}${details.information}`).not.toMatch(
+			/SQLite|\bDB\b|検索索引|内部索引|ターミナル/,
+		);
 	});
 
 	test("利用者が対処できるエラーはそのまま表示する", () => {

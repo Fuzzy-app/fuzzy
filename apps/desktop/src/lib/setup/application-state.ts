@@ -17,6 +17,26 @@ export interface ApplicationStatePresentation {
 	action: "restore" | "rebuild" | "change-root" | null;
 }
 
+export interface ApplicationRecoveryDetails {
+	settings: string;
+	information: string;
+}
+
+export function presentApplicationRecoveryDetails(
+	status: ApplicationRecoveryStatus,
+): ApplicationRecoveryDetails {
+	return {
+		settings:
+			status.database.state === "ready"
+				? "設定と履歴を読み込めます。"
+				: "設定と履歴を読み込めません。バックアップから復元するか、新しく開始してください。",
+		information:
+			status.searchIndex.state === "ready"
+				? "資料の検索と整理を利用できます。"
+				: "資料情報を作り直すと、検索と整理を利用できます。",
+	};
+}
+
 export function deriveApplicationState(
 	status: ApplicationRecoveryStatus | null,
 	setupDone: boolean,

@@ -54,6 +54,29 @@ describe("共通テーマのコントラスト", () => {
 		}
 	});
 
+	test("本文・補足文字が主要な明背景で4.5:1以上になる", () => {
+		const bodyTextColors = [
+			"--fuzzy-color-text-secondary",
+			"--fuzzy-color-text-muted",
+			"--fuzzy-color-text-subtle",
+		] as const;
+		const lightBackgrounds = [
+			"--fuzzy-color-surface",
+			"--fuzzy-color-surface-muted",
+			"--fuzzy-color-page",
+			"--fuzzy-color-background",
+			"--fuzzy-color-warm-background",
+		] as const;
+
+		for (const foreground of bodyTextColors) {
+			for (const background of lightBackgrounds) {
+				expect(contrastRatio(cssColor(foreground), cssColor(background))).toBeGreaterThanOrEqual(
+					4.5,
+				);
+			}
+		}
+	});
+
 	test("フォーカスリングが明背景と暗いサイドバーで3:1以上になる", () => {
 		expect(
 			contrastRatio(cssColor("--fuzzy-focus-ring"), cssColor("--fuzzy-color-surface")),

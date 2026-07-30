@@ -9,10 +9,10 @@ use std::collections::BTreeSet;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
 use super::library::saved_path_key;
-use super::rules::apply_rule_compliance;
+use super::rules::{apply_rule_compliance, load_rule_set};
 use super::{db_err, Database};
 use crate::rule::{validate_rule_set, DefaultRuleEngine};
-use crate::types::RuleSet;
+use crate::types::{RuleSet, SavedSetupConfigurationRecord, SetupConfigurationUpdate};
 use crate::{EngineError, EngineResult};
 
 const BASE_FOLDER_SETTING: &str = "base_folder_path";
@@ -40,6 +40,66 @@ impl Database {
 		course_segment_index: Option<usize>,
 		course_overrides_json: &str,
 	) -> EngineResult<String> {
+		self.save_setup_configuration(
+			base_folder,
+			rule_key,
+			rule_template,
+			scan_pattern_id,
+			course_segment_index,
+			course_overrides_json,
+			None,
+			false,
+			false,
+		)
+		.map(|update| update.saved_at)
+	}
+
+	/// 保存済み設定を、利用者が確認した再セットアップ内容へ更新する。
+	///
+	/// 保存ルートが変わる場合は、既存ファイル行の相対パスを同じSQLite
+	/// トランザクション内で付け替える。資料ファイル自体は移動・削除しない。
+	#[allow(clippy::too_many_arguments)]
+	pub fn update_setup_configuration(
+		&mut self,
+		expected_revision: &str,
+		base_folder: &Path,
+		rule_key: &str,
+		rule_template: &str,
+		scan_pattern_id: &str,
+		course_segment_index: Option<usize>,
+		course_overrides_json: &str,
+	) -> EngineResult<SetupConfigurationUpdate> {
+		self.save_setup_configuration(
+			base_folder,
+			rule_key,
+			rule_template,
+			scan_pattern_id,
+			course_segment_index,
+			course_overrides_json,
+			Some(expected_revision),
+			true,
+			true,
+		)
+	}
+
+	/// SQLiteを正本として、再セットアップ画面へ戻す保存済み設定を取得する。
+	pub fn saved_setup_configuration(&self) -> EngineResult<Option<SavedSetupConfigurationRecord>> {
+		load_saved_setup_configuration(&self.conn)
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	fn save_setup_configuration(
+		&mut self,
+		base_folder: &Path,
+		rule_key: &str,
+		rule_template: &str,
+		scan_pattern_id: &str,
+		course_segment_index: Option<usize>,
+		course_overrides_json: &str,
+		expected_revision: Option<&str>,
+		allow_root_change: bool,
+		require_existing_setup: bool,
+	) -> EngineResult<SetupConfigurationUpdate> {
 		let base_folder = validate_base_folder(base_folder)?;
 		validate_identifier("ruleKey", rule_key)?;
 		validate_identifier("scanPatternId", scan_pattern_id)?;
@@ -66,6 +126,64 @@ impl Database {
 			.conn
 			.transaction_with_behavior(TransactionBehavior::Immediate)
 			.map_err(db_err)?;
+		let setup_exists = transaction
+			.query_row(
+				"SELECT EXISTS(
+					SELECT 1 FROM app_settings WHERE key = ?1
+				)",
+				[SETUP_SAVED_AT_SETTING],
+				|row| row.get::<_, bool>(0),
+			)
+			.map_err(db_err)?;
+		if require_existing_setup && !setup_exists {
+			return Err(EngineError::InvalidInput {
+				field: "setup".to_string(),
+				reason: "初期セットアップが完了していません".to_string(),
+			});
+		}
+		if let Some(expected_revision) = expected_revision {
+			let current = load_saved_setup_configuration(&transaction)?.ok_or_else(|| {
+				EngineError::InvalidInput {
+					field: "setup".to_string(),
+					reason: "保存済み設定を確認できません".to_string(),
+				}
+			})?;
+			if expected_revision != current.revision {
+				return Err(EngineError::SetupConflict {
+					reason: "設定画面を開いた後に別の画面で整理ルールが更新されました".to_string(),
+				});
+			}
+		}
+		if setup_exists {
+			let mut current_rules = load_rule_set(&transaction)?;
+			current_rules.global_pattern_template = rule_template.to_string();
+			validate_rule_set(&current_rules)?;
+		}
+		let previous_base_folder = transaction
+			.query_row(
+				"SELECT value FROM app_settings WHERE key = ?1",
+				[BASE_FOLDER_SETTING],
+				|row| row.get::<_, String>(0),
+			)
+			.optional()
+			.map_err(db_err)?
+			.map(PathBuf::from);
+		let root_changed = previous_base_folder
+			.as_ref()
+			.is_some_and(|previous| previous != &base_folder);
+		if root_changed && !allow_root_change {
+			return Err(EngineError::InvalidInput {
+				field: "path".to_string(),
+				reason: "保存済み設定の保存先変更には再セットアップ用の保存操作を使用してください"
+					.to_string(),
+			});
+		}
+		let rebased_file_count =
+			if let Some(previous_base_folder) = previous_base_folder.filter(|_| root_changed) {
+				rebase_registered_file_paths(&transaction, &previous_base_folder, &base_folder)?
+			} else {
+				0
+			};
 		transaction
 			.execute(
 				"INSERT INTO global_rule (id, pattern_key, pattern_template, updated_at)
@@ -110,6 +228,7 @@ impl Database {
 				[SETUP_SAVED_AT_SETTING],
 			)
 			.map_err(db_err)?;
+		apply_rule_compliance(&transaction, &DefaultRuleEngine)?;
 		let saved_at = transaction
 			.query_row(
 				"SELECT value FROM app_settings WHERE key = ?1",
@@ -118,7 +237,11 @@ impl Database {
 			)
 			.map_err(db_err)?;
 		transaction.commit().map_err(db_err)?;
-		Ok(saved_at)
+		Ok(SetupConfigurationUpdate {
+			saved_at,
+			root_changed,
+			rebased_file_count,
+		})
 	}
 
 	/// 初期セットアップで選んだパターンにおける、保存ルート直下からの科目位置。
@@ -280,64 +403,8 @@ impl Database {
 			.conn
 			.transaction_with_behavior(TransactionBehavior::Immediate)
 			.map_err(db_err)?;
-		let registered_paths = {
-			let mut statement = transaction
-				.prepare("SELECT id, saved_path FROM files ORDER BY id")
-				.map_err(db_err)?;
-			let paths = statement
-				.query_map([], |row| {
-					Ok((
-						row.get::<_, i64>(0)?,
-						PathBuf::from(row.get::<_, String>(1)?),
-					))
-				})
-				.map_err(db_err)?
-				.collect::<rusqlite::Result<Vec<_>>>()
-				.map_err(db_err)?;
-			paths
-		};
-		let mut rebased_file_count = 0usize;
-		for (file_id, saved_path) in registered_paths {
-			let Some(relative_path) = relative_path_within_base(&saved_path, &old_base_folder)
-			else {
-				continue;
-			};
-			if relative_path.components().any(|component| {
-				matches!(
-					component,
-					Component::ParentDir | Component::RootDir | Component::Prefix(_)
-				)
-			}) {
-				return Err(EngineError::InvalidPath {
-					path: saved_path.display().to_string(),
-					reason: "旧保存先からの相対パスを安全に引き継げません".to_string(),
-				});
-			}
-			let relocated_path = new_base_folder.join(relative_path);
-			let relocated_path = saved_path_key(&relocated_path);
-			transaction
-				.execute(
-					"UPDATE files SET saved_path = ?1 WHERE id = ?2",
-					params![relocated_path, file_id],
-				)
-				.map_err(db_err)?;
-			rebased_file_count += 1;
-		}
-		transaction
-			.execute(
-				"UPDATE files
-				 SET missing_at = COALESCE(
-					 missing_at,
-					 strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-				 ),
-				     rule_compliant = 1,
-				     violation_reason = NULL",
-				[],
-			)
-			.map_err(db_err)?;
-		transaction
-			.execute("DELETE FROM search_index_meta", [])
-			.map_err(db_err)?;
+		let rebased_file_count =
+			rebase_registered_file_paths(&transaction, &old_base_folder, &new_base_folder)?;
 		upsert_setting(
 			&transaction,
 			BASE_FOLDER_SETTING,
@@ -349,25 +416,137 @@ impl Database {
 
 	/// 必要な設定が揃っている場合だけ、初期セットアップの保存日時を返す。
 	pub fn initial_setup_saved_at(&self) -> EngineResult<Option<String>> {
-		self.conn
-			.query_row(
-				"SELECT saved.value
-				 FROM app_settings saved
-				 WHERE saved.key = ?1
-				   AND EXISTS (
-						SELECT 1 FROM app_settings base
-						WHERE base.key = ?2 AND trim(base.value) <> ''
-				   )
-				   AND EXISTS (
-						SELECT 1 FROM global_rule
-						WHERE id = 1 AND trim(pattern_template) <> ''
-				   )",
-				params![SETUP_SAVED_AT_SETTING, BASE_FOLDER_SETTING],
-				|row| row.get(0),
-			)
-			.optional()
-			.map_err(db_err)
+		Ok(load_saved_setup_configuration(&self.conn)?.map(|configuration| configuration.saved_at))
 	}
+}
+
+fn load_saved_setup_configuration(
+	conn: &rusqlite::Connection,
+) -> EngineResult<Option<SavedSetupConfigurationRecord>> {
+	let setup_marker_exists = conn
+		.query_row(
+			"SELECT EXISTS(
+				SELECT 1 FROM app_settings WHERE key = ?1
+			)",
+			[SETUP_SAVED_AT_SETTING],
+			|row| row.get::<_, bool>(0),
+		)
+		.map_err(db_err)?;
+	if !setup_marker_exists {
+		return Ok(None);
+	}
+	let record = conn
+		.query_row(
+			"SELECT
+				saved.value,
+				base.value,
+				pattern.value,
+				segment.value,
+				rule.pattern_key,
+				rule.pattern_template,
+				rule.updated_at,
+				COALESCE(overrides.value, '[]')
+			 FROM app_settings saved
+			 JOIN app_settings base
+			   ON base.key = ?2 AND trim(base.value) <> ''
+			 JOIN app_settings pattern
+			   ON pattern.key = ?3 AND trim(pattern.value) <> ''
+			 LEFT JOIN app_settings segment ON segment.key = ?4
+			 LEFT JOIN app_settings overrides ON overrides.key = ?5
+			 JOIN global_rule rule ON rule.id = 1
+			 WHERE saved.key = ?1",
+			params![
+				SETUP_SAVED_AT_SETTING,
+				BASE_FOLDER_SETTING,
+				SCAN_PATTERN_SETTING,
+				SCAN_COURSE_SEGMENT_SETTING,
+				COURSE_OVERRIDES_SETTING
+			],
+			|row| {
+				Ok((
+					row.get::<_, String>(0)?,
+					row.get::<_, String>(1)?,
+					row.get::<_, String>(2)?,
+					row.get::<_, Option<String>>(3)?,
+					row.get::<_, String>(4)?,
+					row.get::<_, String>(5)?,
+					row.get::<_, String>(6)?,
+					row.get::<_, String>(7)?,
+				))
+			},
+		)
+		.optional()
+		.map_err(db_err)?;
+	let Some((
+		saved_at,
+		base_folder_path,
+		scan_pattern_id,
+		course_segment_index,
+		rule_key,
+		rule_template,
+		rule_updated_at,
+		course_overrides_json,
+	)) = record
+	else {
+		return Err(EngineError::Database {
+			message: "保存済みセットアップの必須設定が不足しています".to_string(),
+		});
+	};
+	let revision = setup_configuration_revision(&[
+		&saved_at,
+		&base_folder_path,
+		&scan_pattern_id,
+		course_segment_index.as_deref().unwrap_or(""),
+		&rule_key,
+		&rule_template,
+		&rule_updated_at,
+		&course_overrides_json,
+	]);
+	let course_segment_index = course_segment_index
+		.map(|value| {
+			let index = value.parse::<usize>().map_err(|_| EngineError::Database {
+				message: "保存済み設定の科目位置が不正です".to_string(),
+			})?;
+			if index > MAX_COURSE_SEGMENT_INDEX {
+				return Err(EngineError::Database {
+					message: "保存済み設定の科目位置が範囲外です".to_string(),
+				});
+			}
+			Ok(index)
+		})
+		.transpose()?;
+	validate_identifier("ruleKey", &rule_key)?;
+	validate_identifier("scanPatternId", &scan_pattern_id)?;
+	if course_overrides_json.len() > MAX_SETTING_VALUE_BYTES {
+		return Err(EngineError::Database {
+			message: "保存済み設定の授業別候補が上限を超えています".to_string(),
+		});
+	}
+	validate_rule_set(&RuleSet {
+		global_pattern_template: rule_template.clone(),
+		course_overrides: Vec::new(),
+	})?;
+
+	Ok(Some(SavedSetupConfigurationRecord {
+		revision,
+		saved_at,
+		base_folder_path: PathBuf::from(base_folder_path),
+		scan_pattern_id,
+		course_segment_index,
+		rule_key,
+		rule_template,
+		course_overrides_json,
+	}))
+}
+
+fn setup_configuration_revision(values: &[&str]) -> String {
+	let mut hasher = blake3::Hasher::new();
+	hasher.update(b"fuzzy-setup-configuration-v1");
+	for value in values {
+		hasher.update(&(value.len() as u64).to_le_bytes());
+		hasher.update(value.as_bytes());
+	}
+	format!("setup-v1:{}", hasher.finalize().to_hex())
 }
 
 fn relative_path_within_base(path: &Path, base: &Path) -> Option<PathBuf> {
@@ -381,6 +560,70 @@ fn relative_path_within_base(path: &Path, base: &Path) -> Option<PathBuf> {
 				.ok()
 				.map(Path::to_path_buf)
 		})
+}
+
+fn rebase_registered_file_paths(
+	transaction: &rusqlite::Transaction<'_>,
+	old_base_folder: &Path,
+	new_base_folder: &Path,
+) -> EngineResult<usize> {
+	let registered_paths = {
+		let mut statement = transaction
+			.prepare("SELECT id, saved_path FROM files ORDER BY id")
+			.map_err(db_err)?;
+		let paths = statement
+			.query_map([], |row| {
+				Ok((
+					row.get::<_, i64>(0)?,
+					PathBuf::from(row.get::<_, String>(1)?),
+				))
+			})
+			.map_err(db_err)?
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.map_err(db_err)?;
+		paths
+	};
+	let mut rebased_file_count = 0usize;
+	for (file_id, saved_path) in registered_paths {
+		let Some(relative_path) = relative_path_within_base(&saved_path, old_base_folder) else {
+			continue;
+		};
+		if relative_path.components().any(|component| {
+			matches!(
+				component,
+				Component::ParentDir | Component::RootDir | Component::Prefix(_)
+			)
+		}) {
+			return Err(EngineError::InvalidPath {
+				path: saved_path.display().to_string(),
+				reason: "旧保存先からの相対パスを安全に引き継げません".to_string(),
+			});
+		}
+		let relocated_path = saved_path_key(&new_base_folder.join(relative_path));
+		transaction
+			.execute(
+				"UPDATE files SET saved_path = ?1 WHERE id = ?2",
+				params![relocated_path, file_id],
+			)
+			.map_err(db_err)?;
+		rebased_file_count += 1;
+	}
+	transaction
+		.execute(
+			"UPDATE files
+			 SET missing_at = COALESCE(
+				 missing_at,
+				 strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			 ),
+			     rule_compliant = 1,
+			     violation_reason = NULL",
+			[],
+		)
+		.map_err(db_err)?;
+	transaction
+		.execute("DELETE FROM search_index_meta", [])
+		.map_err(db_err)?;
+	Ok(rebased_file_count)
 }
 
 fn active_course_ids_in_base(
@@ -542,12 +785,13 @@ mod tests {
 	use rusqlite::params;
 
 	use super::{
-		saved_path_key, validate_base_folder, Database, INITIAL_COURSE_OVERRIDE_NOTE,
-		INITIAL_COURSE_OVERRIDE_PATTERN,
+		saved_path_key, validate_base_folder, Database, BASE_FOLDER_SETTING,
+		INITIAL_COURSE_OVERRIDE_NOTE, INITIAL_COURSE_OVERRIDE_PATTERN, SETUP_SAVED_AT_SETTING,
 	};
 	use crate::index::DefaultIndexEngine;
 	use crate::library::LibraryMaintenance;
 	use crate::rule::DefaultRuleEngine;
+	use crate::EngineError;
 
 	struct TestDirectory {
 		path: PathBuf,
@@ -610,6 +854,268 @@ mod tests {
 			database.initial_scan_course_segment_index().unwrap(),
 			Some(1)
 		);
+		let saved = database.saved_setup_configuration().unwrap().unwrap();
+		assert!(saved.revision.starts_with("setup-v1:"));
+		assert_eq!(saved.saved_at, saved_at);
+		assert_eq!(
+			saved.base_folder_path,
+			directory.path.canonicalize().unwrap()
+		);
+		assert_eq!(saved.scan_pattern_id, "estimated-1");
+		assert_eq!(saved.course_segment_index, Some(1));
+		assert_eq!(saved.rule_key, "year-course-assignment");
+		assert_eq!(saved.rule_template, "{year}/{course}/{assignment}");
+		assert_eq!(
+			saved.course_overrides_json,
+			r#"[{"courseName":"情報アーキテクチャ"}]"#
+		);
+	}
+
+	#[test]
+	fn reconfiguration_rebases_metadata_and_updates_settings_without_moving_materials() {
+		let directory = TestDirectory::new();
+		let old_root = directory.path.join("old");
+		let new_root = directory.path.join("new");
+		fs::create_dir_all(old_root.join("データベース")).unwrap();
+		fs::create_dir_all(&new_root).unwrap();
+		let old_file = old_root.join("データベース/正規化.pdf");
+		fs::write(&old_file, b"normalization").unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&old_root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let course_id = database.ensure_local_scan_course("データベース").unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO files (
+					id, course_id, original_name, saved_path, size_bytes, hash_blake3
+				 ) VALUES (41, ?1, '正規化.pdf', ?2, 13, 'b3:test')",
+				params![course_id, old_file.to_string_lossy()],
+			)
+			.unwrap();
+		database.mark_search_indexed(41, Some(2)).unwrap();
+
+		let original_revision = database
+			.saved_setup_configuration()
+			.unwrap()
+			.unwrap()
+			.revision;
+		let updated = database
+			.update_setup_configuration(
+				&original_revision,
+				&new_root,
+				"term-course-assignment",
+				"{term}/{course}/{assignment}",
+				"estimated-2",
+				Some(1),
+				r#"[{"courseName":"データベース","enabled":true}]"#,
+			)
+			.unwrap();
+
+		assert!(updated.root_changed);
+		assert_eq!(updated.rebased_file_count, 1);
+		assert!(old_file.exists());
+		assert!(!new_root.join("データベース/正規化.pdf").exists());
+		let saved = database.saved_setup_configuration().unwrap().unwrap();
+		assert_eq!(saved.base_folder_path, new_root.canonicalize().unwrap());
+		assert_eq!(saved.scan_pattern_id, "estimated-2");
+		assert_eq!(saved.course_segment_index, Some(1));
+		assert_eq!(saved.rule_key, "term-course-assignment");
+		assert_eq!(saved.rule_template, "{term}/{course}/{assignment}");
+		assert_eq!(
+			saved.course_overrides_json,
+			r#"[{"courseName":"データベース","enabled":true}]"#
+		);
+		let relocated: (String, bool) = database
+			.conn()
+			.query_row(
+				"SELECT saved_path, missing_at IS NOT NULL FROM files WHERE id = 41",
+				[],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(
+			PathBuf::from(relocated.0),
+			PathBuf::from(saved_path_key(
+				&new_root
+					.canonicalize()
+					.unwrap()
+					.join("データベース/正規化.pdf")
+			))
+		);
+		assert!(relocated.1);
+		assert!(database.search_document_metadata(41).unwrap().is_none());
+	}
+
+	#[test]
+	fn reconfiguration_rejects_a_stale_revision_without_partial_changes() {
+		let directory = TestDirectory::new();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&directory.path,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let original = database.saved_setup_configuration().unwrap().unwrap();
+		database
+			.update_global_rule("{term}/{course}/{assignment}", &DefaultRuleEngine)
+			.unwrap();
+
+		assert!(database
+			.update_setup_configuration(
+				&original.revision,
+				&directory.path,
+				"year-course-assignment",
+				"{year}/{course}/{assignment}",
+				"estimated-2",
+				Some(1),
+				"[]",
+			)
+			.is_err());
+		let current = database.saved_setup_configuration().unwrap().unwrap();
+		assert_ne!(current.revision, original.revision);
+		assert_eq!(current.rule_template, "{term}/{course}/{assignment}");
+		assert_eq!(current.scan_pattern_id, "estimated-1");
+		assert_eq!(current.course_segment_index, Some(0));
+	}
+
+	#[test]
+	fn reconfiguration_rejects_a_global_rule_that_breaks_an_existing_override() {
+		let directory = TestDirectory::new();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&directory.path,
+				"course-section",
+				"{course}/{section}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let course_id = database.ensure_local_scan_course("データベース").unwrap();
+		database
+			.update_course_rule_override(
+				course_id,
+				true,
+				None,
+				Some("共通設定を使う"),
+				&DefaultRuleEngine,
+			)
+			.unwrap();
+		let before = database.saved_setup_configuration().unwrap().unwrap();
+
+		let result = database.update_setup_configuration(
+			&before.revision,
+			&directory.path,
+			"course-assignment",
+			"{course}/{assignment}",
+			"estimated-2",
+			Some(0),
+			"[]",
+		);
+
+		assert!(matches!(result, Err(EngineError::RuleConflict { .. })));
+		let after = database.saved_setup_configuration().unwrap().unwrap();
+		assert_eq!(after.revision, before.revision);
+		assert_eq!(after.rule_key, before.rule_key);
+		assert_eq!(after.rule_template, before.rule_template);
+		assert_eq!(after.scan_pattern_id, before.scan_pattern_id);
+	}
+
+	#[test]
+	fn initial_setup_command_cannot_change_an_existing_root() {
+		let directory = TestDirectory::new();
+		let old_root = directory.path.join("old");
+		let new_root = directory.path.join("new");
+		fs::create_dir_all(&old_root).unwrap();
+		fs::create_dir_all(&new_root).unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&old_root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+
+		assert!(database
+			.save_initial_setup(
+				&new_root,
+				"term-course-assignment",
+				"{term}/{course}/{assignment}",
+				"estimated-2",
+				Some(1),
+				"[]",
+			)
+			.is_err());
+		assert_eq!(
+			database.base_folder_path().unwrap(),
+			old_root.canonicalize().unwrap()
+		);
+	}
+
+	#[test]
+	fn saved_configuration_round_trips_after_database_reopen() {
+		let directory = TestDirectory::new();
+		let root = directory.path.join("library");
+		let database_path = directory.path.join("fuzzy.db");
+		fs::create_dir_all(&root).unwrap();
+		{
+			let mut database = Database::open(&database_path).unwrap();
+			database
+				.save_initial_setup(
+					&root,
+					"course-assignment",
+					"{course}/{assignment}",
+					"estimated-1",
+					Some(0),
+					"[]",
+				)
+				.unwrap();
+		}
+		let revision = {
+			let database = Database::open(&database_path).unwrap();
+			let saved = database.saved_setup_configuration().unwrap().unwrap();
+			assert_eq!(saved.rule_template, "{course}/{assignment}");
+			saved.revision
+		};
+		{
+			let mut database = Database::open(&database_path).unwrap();
+			database
+				.update_setup_configuration(
+					&revision,
+					&root,
+					"term-course-assignment",
+					"{term}/{course}/{assignment}",
+					"estimated-2",
+					Some(1),
+					"[]",
+				)
+				.unwrap();
+		}
+		let database = Database::open(&database_path).unwrap();
+		let saved = database.saved_setup_configuration().unwrap().unwrap();
+		assert_eq!(saved.rule_key, "term-course-assignment");
+		assert_eq!(saved.rule_template, "{term}/{course}/{assignment}");
+		assert_eq!(saved.scan_pattern_id, "estimated-2");
+		assert_eq!(saved.course_segment_index, Some(1));
 	}
 
 	#[test]
@@ -649,6 +1155,38 @@ mod tests {
 			.is_err());
 		assert_eq!(database.initial_setup_saved_at().unwrap(), None);
 		assert!(database.base_folder_path().is_err());
+	}
+
+	#[test]
+	fn setup_status_and_saved_configuration_share_the_same_required_state() {
+		let directory = TestDirectory::new();
+		let database = Database::open_in_memory().unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO app_settings (key, value) VALUES (?1, ?2)",
+				params![
+					BASE_FOLDER_SETTING,
+					directory.path.canonicalize().unwrap().to_string_lossy()
+				],
+			)
+			.unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO app_settings (key, value) VALUES (?1, ?2)",
+				params![SETUP_SAVED_AT_SETTING, "2026-07-29T00:00:00.000Z"],
+			)
+			.unwrap();
+
+		assert!(matches!(
+			database.initial_setup_saved_at(),
+			Err(EngineError::Database { .. })
+		));
+		assert!(matches!(
+			database.saved_setup_configuration(),
+			Err(EngineError::Database { .. })
+		));
 	}
 
 	#[test]

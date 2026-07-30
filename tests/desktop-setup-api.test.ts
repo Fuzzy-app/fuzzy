@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type SetupRuntime,
+	getSavedSetupConfigurationClient,
 	getSetupStatusClient,
 	parsePatternCandidates,
+	parseSavedSetupConfiguration,
 	parseSetupStatus,
 	pickBaseFolderClient,
 	saveInitialSetupClient,
+	saveSetupChangesClient,
 	scanExistingStructureClient,
 } from "../apps/desktop/src/lib/setup/api";
-import type { InitialSetupPayload } from "../apps/desktop/src/lib/setup/types";
+import type { InitialSetupPayload, PatternCandidate } from "../apps/desktop/src/lib/setup/types";
 
 function runtimeFor(responses: Record<string, unknown>): SetupRuntime {
 	return {
@@ -20,11 +23,12 @@ function runtimeFor(responses: Record<string, unknown>): SetupRuntime {
 
 describe("desktop setup API", () => {
 	test("Tauri応答を検証して実データとして返す", async () => {
-		const candidate = {
+		const candidate: PatternCandidate = {
 			id: "estimated-1",
 			name: "科目 / 回次",
 			description: "推定結果",
 			folders: ["情報アーキテクチャ/第03回"],
+			directorySegments: [{ kind: "course" }, { kind: "section", format: "numbered" }],
 			courseSegmentIndex: 0,
 			fileNameTemplate: null,
 			matchScore: 90,
@@ -37,6 +41,17 @@ describe("desktop setup API", () => {
 			pick_base_folder: "C:/Fuzzy",
 			scan_existing_structure: [candidate],
 			get_setup_status: { done: true, savedAt: "2026-07-25T00:00:00.000Z" },
+			get_saved_setup_configuration: {
+				revision: "setup-v1:test",
+				savedAt: "2026-07-25T00:00:00.000Z",
+				baseFolderPath: "C:/Fuzzy",
+				pattern: { id: "estimated-1", courseSegmentIndex: 0 },
+				rule: {
+					id: "course-assignment",
+					template: "{course}/{assignment}",
+				},
+				courseOverrides: [{ courseName: "データベース", enabled: true }],
+			},
 			save_initial_setup: {
 				ok: true,
 				maintenance: {
@@ -50,6 +65,21 @@ describe("desktop setup API", () => {
 					warnings: [],
 				},
 			},
+			save_setup_changes: {
+				ok: true,
+				rootChanged: false,
+				rebasedFileCount: 0,
+				maintenance: {
+					scannedFileCount: 1,
+					registeredFileCount: 0,
+					updatedFileCount: 1,
+					indexedFileCount: 0,
+					reusedFingerprintCount: 1,
+					missingFileCount: 0,
+					skippedFileCount: 0,
+					warnings: [],
+				},
+			},
 		});
 
 		expect(await pickBaseFolderClient(runtime)).toBe("C:/Fuzzy");
@@ -57,6 +87,17 @@ describe("desktop setup API", () => {
 		expect(await getSetupStatusClient(runtime)).toEqual({
 			done: true,
 			savedAt: "2026-07-25T00:00:00.000Z",
+		});
+		expect(await getSavedSetupConfigurationClient(runtime)).toEqual({
+			revision: "setup-v1:test",
+			savedAt: "2026-07-25T00:00:00.000Z",
+			baseFolderPath: "C:/Fuzzy",
+			pattern: { id: "estimated-1", courseSegmentIndex: 0 },
+			rule: {
+				id: "course-assignment",
+				template: "{course}/{assignment}",
+			},
+			courseOverrides: [{ courseName: "データベース", enabled: true }],
 		});
 		const payload = {
 			path: "C:/Fuzzy",
@@ -83,10 +124,78 @@ describe("desktop setup API", () => {
 				warnings: [],
 			},
 		});
+		expect(
+			await saveSetupChangesClient({ ...payload, expectedRevision: "setup-v1:test" }, runtime),
+		).toEqual({
+			ok: true,
+			rootChanged: false,
+			rebasedFileCount: 0,
+			maintenance: {
+				scannedFileCount: 1,
+				registeredFileCount: 0,
+				updatedFileCount: 1,
+				indexedFileCount: 0,
+				reusedFingerprintCount: 1,
+				missingFileCount: 0,
+				skippedFileCount: 0,
+				warnings: [],
+			},
+		});
 	});
 
 	test("壊れた応答を受け入れない", () => {
 		expect(parsePatternCandidates([{ id: "missing-fields" }])).toBeNull();
 		expect(parseSetupStatus({ done: "yes" })).toBeNull();
+		expect(
+			parseSavedSetupConfiguration({
+				revision: "setup-v1:test",
+				savedAt: "not-a-date",
+			}),
+		).toBeNull();
+	});
+
+	test.each([
+		["SETUP_CONFLICT", "最新の設定を読み直し"],
+		["RULE_CONFLICT", "授業ごとの設定"],
+		["INVALID_PATH", "保存先を利用できません"],
+	])("再保存エラー %s に対応する次の操作を示す", async (code, message) => {
+		const pattern: PatternCandidate = {
+			id: "course-assignment",
+			name: "科目 / 課題",
+			description: "",
+			folders: [],
+			directorySegments: [{ kind: "course" }, { kind: "assignment" }],
+			courseSegmentIndex: 0,
+			fileNameTemplate: null,
+			matchScore: 100,
+			evaluatedCount: 0,
+			reason: "",
+			recommended: true,
+			requiresConfirmation: false,
+		};
+		const runtime: SetupRuntime = {
+			async invoke(): Promise<never> {
+				throw code;
+			},
+		};
+
+		await expect(
+			saveSetupChangesClient(
+				{
+					expectedRevision: "setup-v1:test",
+					path: "C:/Fuzzy",
+					pattern,
+					rule: {
+						id: "course-assignment",
+						name: "科目 / 課題",
+						description: "",
+						template: "{course}/{assignment}",
+						preview: ["アプリ演習 / 課題"],
+					},
+					courseOverrides: [],
+				},
+				runtime,
+			),
+		).rejects.toThrow(message);
 	});
 });

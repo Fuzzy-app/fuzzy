@@ -259,7 +259,7 @@ export function createRuleManagementScreen(
 				override: {
 					splitBySection: false,
 					patternTemplate: defaultPattern,
-					note: "このコースは回ごとに保存しない",
+					note: "この授業は回ごとに保存しない",
 				},
 			});
 			syncOverrideDraft(course.courseId, nextRules);
@@ -386,7 +386,7 @@ export function createRuleManagementScreen(
 				),
 			);
 		}
-		if (message) rulesPanel.append(buildRulesMessage(message));
+		if (message && rules) rulesPanel.append(buildRulesMessage(message));
 		if (loadingRules && !rules) {
 			rulesPanel.append(
 				element("section", "fuzzy-placeholder", "保存済みルールを読み込んでいます…"),
@@ -396,16 +396,16 @@ export function createRuleManagementScreen(
 
 		if (!rules) {
 			const errorPanel = element("section", "fuzzy-error-panel");
+			errorPanel.setAttribute("role", "alert");
 			const retry = element("button", "fuzzy-primary-button", "再読み込み");
 			retry.type = "button";
 			retry.addEventListener("click", () => {
 				rulesLoaded = false;
 				activate();
 			});
-			errorPanel.append(
-				element("p", "", options.store.snapshot.error ?? "ルールを読み込めませんでした。"),
-				retry,
-			);
+			const loadError =
+				message?.kind === "error" ? message.text : errorMessage(options.store.snapshot.error);
+			errorPanel.append(element("p", "", loadError), retry);
 			rulesPanel.append(errorPanel);
 			return;
 		}

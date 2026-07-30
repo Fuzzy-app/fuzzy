@@ -8,10 +8,12 @@ import {
 	previewRulePattern,
 	previewRuleSegments,
 	ruleSegmentsToTemplate,
+	validateCourseRuleOverride,
 	validateRulePattern,
 	validateRuleSegments,
 } from "@fuzzy/shared";
 import { parseHTML } from "linkedom";
+import { buildCourseRulePanel } from "../../apps/extension/src/entrypoints/content/courseRulePanel";
 import { createRuleManagementScreen } from "../../apps/extension/src/entrypoints/content/rulesScreen";
 import { createStructuredRuleBuilder } from "../../apps/extension/src/entrypoints/content/structuredRuleBuilder";
 import {
@@ -210,14 +212,65 @@ describe("ルールテンプレート", () => {
 		]);
 	});
 
+	test("削除後に同じ位置へ同種の項目を追加しても行IDが重複しない", () => {
+		const retained = createRuleSegment("fixed", 2, "配布資料");
+		const addedAfterDeletion = createRuleSegment("fixed", 2, "参考資料");
+
+		expect(addedAfterDeletion.id).not.toBe(retained.id);
+		expect(new Set([retained.id, addedAfterDeletion.id]).size).toBe(2);
+		expect(ruleSegmentsToTemplate([retained, addedAfterDeletion])).toBe("配布資料/参考資料");
+	});
+
 	test.each([
 		[[createRuleSegment("year", 0)], "科目"],
 		[[createRuleSegment("course", 0), createRuleSegment("course", 1)], "重複"],
+		[
+			[
+				createRuleSegment("course", 0),
+				createRuleSegment("assignment", 1),
+				createRuleSegment("assignment", 2),
+			],
+			"重複",
+		],
 		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "")], "入力"],
+		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, " 配布資料")], "前後"],
+		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "{course}")], "波括弧"],
+		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "{year}")], "波括弧"],
+		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "第{section}回")], "波括弧"],
+		[
+			[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "C:\\Users\\student")],
+			"絶対パス",
+		],
 		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "..")], ".."],
 		[[createRuleSegment("course", 0), createRuleSegment("fixed", 1, "CON")], "予約名"],
 	])("構造化ルールの不正値を説明付きで拒否する", (segments, message) => {
 		expect(validateRuleSegments(segments)).toContain(message);
+	});
+
+	test.each([
+		[
+			{
+				splitBySection: false,
+				patternTemplate: "{course}/{section}",
+				note: null,
+			},
+			"外して",
+		],
+		[
+			{
+				splitBySection: true,
+				patternTemplate: "{course}",
+				note: null,
+			},
+			"追加して",
+		],
+	])("授業回の検証は内部表現を出さず操作を案内する", (override, action) => {
+		const message = validateCourseRuleOverride(override, "{course}");
+
+		expect(message).toContain("授業回");
+		expect(message).toContain(action);
+		expect(message).not.toContain("{section}");
+		expect(message).not.toContain("テンプレート");
 	});
 });
 
@@ -333,9 +386,14 @@ describe("ルール管理画面", () => {
 		if (!globalPanel || !coursePanel) throw new Error("保存設定パネルがありません。");
 
 		expect(globalPanel.querySelectorAll(".fuzzy-rule-builder-row")).toHaveLength(3);
+		expect(globalPanel.textContent).toContain("選んだ保存先");
+		expect(globalPanel.textContent).not.toContain("保存ルート");
 		expect(globalPanel.textContent).not.toContain("{course}");
+		expect(coursePanel.textContent).toContain("この授業での保存例");
+		expect(coursePanel.textContent).not.toContain("このコース");
 		expect(coursePanel.textContent).not.toContain("{term}");
 		expect(coursePanel.textContent).not.toContain("{course}");
+		expect(screen.root.textContent).not.toMatch(/\{(?:year|term|course|assignment|section)\}/);
 		const courseCard = coursePanel.querySelector<HTMLElement>(".fuzzy-rules-override-card");
 		if (!courseCard) throw new Error("授業別設定がありません。");
 		expect(courseCard.querySelectorAll(".fuzzy-rule-builder-row")).toHaveLength(2);
@@ -398,5 +456,72 @@ describe("ルール管理画面", () => {
 		expect(
 			screen.root.querySelector("#fuzzy-rule-settings-tab")?.getAttribute("aria-selected"),
 		).toBe("true");
+	});
+
+	test.each([
+		[{ loadingCourses: true, courseLoadError: null }, "授業を読み込んでいます…"],
+		[{ loadingCourses: false, courseLoadError: "接続できません" }, "授業を読み込めませんでした"],
+		[{ loadingCourses: false, courseLoadError: null }, "追加できる授業はありません"],
+	])("授業一覧の状態を利用者向け用語で表示する", (state, expected) => {
+		const { document, window } = parseHTML("<html><head></head><body></body></html>");
+		Object.assign(globalThis, {
+			document,
+			window,
+			HTMLElement: window.HTMLElement,
+		});
+		const panel = buildCourseRulePanel({
+			rules: { globalPatternTemplate: "{course}", courseOverrides: [] },
+			courses: [],
+			drafts: new Map(),
+			selectedCourseId: null,
+			loadingCourses: state.loadingCourses,
+			courseLoadError: state.courseLoadError,
+			savingTarget: null,
+			previewValues: createRulePreviewValues(),
+			isMock: false,
+			onSelectedCourseChange: () => {},
+			onClearMessage: () => {},
+			onAdd: () => {},
+			onSave: () => {},
+		});
+
+		expect(panel.querySelector("select option")?.textContent).toBe(expected);
+		expect(panel.textContent).not.toContain("コースを");
+	});
+
+	test("読込失敗時は内部エラーを隠し、次の操作を1か所だけ表示する", async () => {
+		const { document, window } = parseHTML("<html><head></head><body></body></html>");
+		Object.assign(globalThis, {
+			document,
+			window,
+			HTMLElement: window.HTMLElement,
+		});
+		const fail = async (): Promise<never> => {
+			throw new Error("SQLite DBのbackground応答を取得できません");
+		};
+		const api: RuleManagementApi = {
+			mode: "native",
+			getRules: fail,
+			updateGlobalRule: fail,
+			updateCourseRuleOverride: fail,
+			getRuleViolations: fail,
+			getDuplicateGroups: fail,
+		};
+		const screen = createRuleManagementScreen({
+			store: new RuleManagementStore(api),
+			loadCourses: async () => [],
+		});
+		document.body.append(screen.root);
+
+		await screen.activate();
+
+		const text = screen.root.textContent ?? "";
+		const guidance = "保存・整理設定を更新できませんでした。接続を確認し、再読み込みしてください。";
+		expect(text).not.toContain("SQLite");
+		expect(text).not.toContain("DB");
+		expect(text).not.toContain("background");
+		expect(text.split(guidance)).toHaveLength(2);
+		expect(screen.root.querySelectorAll('[role="alert"]')).toHaveLength(1);
+		expect(screen.root.querySelector(".fuzzy-error-panel")?.textContent).toContain("再読み込み");
 	});
 });

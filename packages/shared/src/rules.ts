@@ -1,4 +1,4 @@
-import type { CourseRuleOverrideInput } from "./types";
+import type { CourseRuleOverrideInput, StructuredRuleSegment } from "./types";
 
 export const RULE_TEMPLATE_TOKENS = ["year", "term", "course", "assignment", "section"] as const;
 
@@ -15,10 +15,9 @@ export const RULE_SEGMENT_KINDS = [
 
 export type RuleSegmentKind = (typeof RULE_SEGMENT_KINDS)[number];
 
-export interface RuleSegment {
+export interface RuleSegment extends StructuredRuleSegment {
 	id: string;
 	kind: RuleSegmentKind;
-	value?: string;
 }
 
 export const RULE_SEGMENT_LABELS: Readonly<Record<RuleSegmentKind, string>> = {
@@ -71,9 +70,11 @@ export interface RulePreviewValues {
 const windowsReservedNamePattern = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const tokenPattern = /\{([^{}]+)\}/g;
 const segmentTokenPattern = /^\{(year|term|course|assignment|section)\}$/;
+let ruleSegmentSequence = 0;
 
-function createRuleSegmentId(index: number, kind: RuleSegmentKind): string {
-	return `rule-segment-${index + 1}-${kind}`;
+function createRuleSegmentId(kind: RuleSegmentKind): string {
+	ruleSegmentSequence += 1;
+	return `rule-segment-${ruleSegmentSequence}-${kind}`;
 }
 
 export function createRuleSegmentsFromTemplate(patternTemplate: string): RuleSegment[] {
@@ -81,24 +82,42 @@ export function createRuleSegmentsFromTemplate(patternTemplate: string): RuleSeg
 		.trim()
 		.split(/[\\/]/)
 		.filter(Boolean)
-		.map((segment, index) => {
+		.map((segment) => {
 			const normalized = segment.trim();
 			const token = normalized.match(segmentTokenPattern)?.[1] as RuleTemplateToken | undefined;
-			if (token) return { id: createRuleSegmentId(index, token), kind: token };
+			if (token) return { id: createRuleSegmentId(token), kind: token };
 			if (/^第\s*\{section\}\s*回$/.test(normalized)) {
-				return { id: createRuleSegmentId(index, "section"), kind: "section" };
+				return {
+					id: createRuleSegmentId("section"),
+					kind: "section",
+					format: "numbered",
+				};
+			}
+			if (/^\{year\}年度$/.test(normalized)) {
+				return {
+					id: createRuleSegmentId("year"),
+					kind: "year",
+					format: "academicYearSuffix",
+				};
+			}
+			if (/^\{year\}年$/.test(normalized)) {
+				return {
+					id: createRuleSegmentId("year"),
+					kind: "year",
+					format: "yearSuffix",
+				};
 			}
 			return {
-				id: createRuleSegmentId(index, "fixed"),
+				id: createRuleSegmentId("fixed"),
 				kind: "fixed",
 				value: normalized,
 			};
 		});
 }
 
-export function createRuleSegment(kind: RuleSegmentKind, index: number, value = ""): RuleSegment {
+export function createRuleSegment(kind: RuleSegmentKind, _index: number, value = ""): RuleSegment {
 	return {
-		id: createRuleSegmentId(index, kind),
+		id: createRuleSegmentId(kind),
 		kind,
 		...(kind === "fixed" ? { value } : {}),
 	};
@@ -106,9 +125,19 @@ export function createRuleSegment(kind: RuleSegmentKind, index: number, value = 
 
 export function ruleSegmentsToTemplate(segments: readonly RuleSegment[]): string {
 	return segments
-		.map((segment) =>
-			segment.kind === "fixed" ? (segment.value ?? "").trim() : `{${segment.kind}}`,
-		)
+		.map((segment) => {
+			if (segment.kind === "fixed") return (segment.value ?? "").trim();
+			if (segment.kind === "section" && segment.format === "numbered") {
+				return "第{section}回";
+			}
+			if (segment.kind === "year" && segment.format === "academicYearSuffix") {
+				return "{year}年度";
+			}
+			if (segment.kind === "year" && segment.format === "yearSuffix") {
+				return "{year}年";
+			}
+			return `{${segment.kind}}`;
+		})
 		.join("/");
 }
 
@@ -121,14 +150,28 @@ export function validateRuleSegments(segments: readonly RuleSegment[]): string |
 	const seenKinds = new Set<RuleSegmentKind>();
 	for (const segment of segments) {
 		if (segment.kind !== "fixed") {
+			if (
+				(segment.format === "numbered" && segment.kind !== "section") ||
+				((segment.format === "yearSuffix" || segment.format === "academicYearSuffix") &&
+					segment.kind !== "year")
+			) {
+				return "選択したフォルダー項目の表示形式を使用できません。";
+			}
 			if (seenKinds.has(segment.kind)) {
 				return `「${RULE_SEGMENT_LABELS[segment.kind]}」は重複して追加できません。`;
 			}
 			seenKinds.add(segment.kind);
 			continue;
 		}
-		const value = segment.value?.trim() ?? "";
+		const rawValue = segment.value ?? "";
+		const value = rawValue.trim();
 		if (!value) return "固定フォルダー名を入力してください。";
+		if (rawValue !== value) {
+			return "固定フォルダー名の前後に空白は使用できません。";
+		}
+		if (/[{}]/.test(value)) {
+			return "固定フォルダー名に波括弧は使用できません。";
+		}
 		if (/^(?:[a-z]:[\\/]|[\\/]{1,2})/i.test(value)) {
 			return "固定フォルダー名に絶対パスやUNCパスは指定できません。";
 		}
@@ -153,9 +196,19 @@ export function previewRuleSegments(
 	values: RulePreviewValues = createRulePreviewValues(),
 ): string {
 	return segments
-		.map((segment) =>
-			segment.kind === "fixed" ? (segment.value ?? "").trim() : values[segment.kind],
-		)
+		.map((segment) => {
+			if (segment.kind === "fixed") return (segment.value ?? "").trim();
+			if (segment.kind === "section" && segment.format === "numbered") {
+				return `第${values.section}回`;
+			}
+			if (segment.kind === "year" && segment.format === "academicYearSuffix") {
+				return `${values.year}年度`;
+			}
+			if (segment.kind === "year" && segment.format === "yearSuffix") {
+				return `${values.year}年`;
+			}
+			return values[segment.kind];
+		})
 		.filter(Boolean)
 		.join(" / ");
 }
@@ -224,10 +277,10 @@ export function validateCourseRuleOverride(
 	const patternError = validateRulePattern(effectivePattern);
 	if (patternError) return patternError;
 	if (!override.splitBySection && effectivePattern.includes("{section}")) {
-		return "回ごとに分けない場合はテンプレートから {section} を外してください。";
+		return "回ごとに分けない場合は、フォルダーの並びから「授業回」を外してください。";
 	}
 	if (override.splitBySection && !effectivePattern.includes("{section}")) {
-		return "回ごとに分ける場合はテンプレートに {section} を含めてください。";
+		return "回ごとに分ける場合は、フォルダーの並びに「授業回」を追加してください。";
 	}
 	return null;
 }

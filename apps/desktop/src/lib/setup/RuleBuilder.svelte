@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from "svelte";
 	import {
 		RULE_PRESETS,
 		RULE_SEGMENT_KINDS,
@@ -17,11 +18,22 @@
 	export let disabled = false;
 	export let onChange: (segments: RuleSegment[]) => void = () => undefined;
 
+	const segmentControls = new Map<string, HTMLSelectElement>();
+	let announcement = "";
+
+	function registerSegmentControl(node: HTMLSelectElement, segmentId: string) {
+		segmentControls.set(segmentId, node);
+		return {
+			destroy() {
+				if (segmentControls.get(segmentId) === node) {
+					segmentControls.delete(segmentId);
+				}
+			},
+		};
+	}
+
 	function update(next: RuleSegment[]): void {
-		segments = next.map((segment, index) => ({
-			...segment,
-			id: `${segment.kind}-${index}`,
-		}));
+		segments = next;
 		onChange(segments);
 	}
 
@@ -29,7 +41,7 @@
 		update(
 			segments.map((segment, segmentIndex) =>
 				segmentIndex === index
-					? createRuleSegment(kind, index, segment.value)
+					? { ...createRuleSegment(kind, index, segment.value), id: segment.id }
 					: segment,
 			),
 		);
@@ -43,12 +55,25 @@
 		);
 	}
 
-	function move(index: number, offset: -1 | 1): void {
+	async function move(index: number, offset: -1 | 1): Promise<void> {
 		const target = index + offset;
 		if (target < 0 || target >= segments.length) return;
 		const next = [...segments];
 		[next[index], next[target]] = [next[target], next[index]];
+		const moved = next[target];
 		update(next);
+		announcement = `${RULE_SEGMENT_LABELS[moved.kind]}を${target + 1}番目へ移動しました。`;
+		await tick();
+		segmentControls.get(moved.id)?.focus();
+	}
+
+	async function remove(index: number): Promise<void> {
+		const removed = segments[index];
+		const focusTarget = segments[index + 1] ?? segments[index - 1] ?? null;
+		update(segments.filter((_, itemIndex) => itemIndex !== index));
+		announcement = `${RULE_SEGMENT_LABELS[removed.kind]}を削除しました。`;
+		await tick();
+		if (focusTarget) segmentControls.get(focusTarget.id)?.focus();
 	}
 
 	$: validationError = validateRuleSegments(segments);
@@ -71,7 +96,12 @@
 	{#each segments as segment, index (segment.id)}
 		<div class="row">
 			<select
+				use:registerSegmentControl={segment.id}
 				aria-label={`${index + 1}番目のフォルダー`}
+				aria-invalid={validationError ? "true" : undefined}
+				aria-describedby={validationError
+					? "rule-builder-validation"
+					: undefined}
 				value={segment.kind}
 				on:change={(event) =>
 					changeKind(index, event.currentTarget.value as RuleSegmentKind)}
@@ -84,6 +114,10 @@
 			{#if segment.kind === "fixed"}
 				<input
 					aria-label={`${index + 1}番目の固定フォルダー名`}
+					aria-invalid={validationError ? "true" : undefined}
+					aria-describedby={validationError
+						? "rule-builder-validation"
+						: undefined}
 					placeholder="例: 配布資料"
 					value={segment.value ?? ""}
 					on:input={(event) =>
@@ -108,8 +142,7 @@
 				>
 				<button
 					type="button"
-					on:click={() =>
-						update(segments.filter((_, itemIndex) => itemIndex !== index))}
+					on:click={() => remove(index)}
 					{disabled}
 					aria-label={`${RULE_SEGMENT_LABELS[segment.kind]}を削除`}>削除</button
 				>
@@ -126,8 +159,11 @@
 </div>
 
 {#if validationError}
-	<p class="validation" role="alert">{validationError}</p>
+	<p class="validation" id="rule-builder-validation" role="alert">
+		{validationError}
+	</p>
 {/if}
+<p class="sr-only" aria-live="polite">{announcement}</p>
 <div class="preview">
 	<p>実際のフォルダー名での例</p>
 	<strong>{previewRuleSegments(segments, previewValues)}</strong>
@@ -216,6 +252,17 @@
 		color: var(--fuzzy-color-danger);
 		font-size: 0.78rem;
 		font-weight: 700;
+	}
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 	.preview {
 		margin-top: 12px;

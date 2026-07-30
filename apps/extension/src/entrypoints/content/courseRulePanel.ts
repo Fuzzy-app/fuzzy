@@ -74,13 +74,13 @@ function buildAddRow(options: CourseRulePanelOptions): HTMLElement {
 	select.setAttribute("aria-label", "保存方法を変更する授業");
 
 	if (options.loadingCourses) {
-		select.append(optionElement("", "コースを読み込んでいます…"));
+		select.append(optionElement("", "授業を読み込んでいます…"));
 		select.disabled = true;
 	} else if (options.courseLoadError) {
-		select.append(optionElement("", "コースを読み込めませんでした"));
+		select.append(optionElement("", "授業を読み込めませんでした"));
 		select.disabled = true;
 	} else if (available.length === 0) {
-		select.append(optionElement("", "追加できるコースはありません"));
+		select.append(optionElement("", "追加できる授業はありません"));
 		select.disabled = true;
 	} else {
 		for (const course of available) {
@@ -214,7 +214,7 @@ function buildOverrideCard(
 
 	const previewValue = element("p", "fuzzy-rules-preview-value", builder.getPreview());
 	const preview = element("div", "fuzzy-rules-preview");
-	preview.append(element("p", "fuzzy-rules-preview-label", "このコースでの保存例"), previewValue);
+	preview.append(element("p", "fuzzy-rules-preview-label", "この授業での保存例"), previewValue);
 
 	const saveButton = element(
 		"button",

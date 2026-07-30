@@ -3,6 +3,7 @@
 	import type { LibraryMaintenanceProgress } from "@fuzzy/shared";
 	import {
 		deriveApplicationState,
+		presentApplicationRecoveryDetails,
 		userFacingOperationError,
 	} from "./application-state";
 	import { presentMaintenanceProgress } from "./maintenance-progress";
@@ -13,6 +14,7 @@
 		importBackupClient,
 		rebuildLibraryClient,
 		type ApplicationRecoveryStatus,
+		type LibraryMaintenanceSummary,
 	} from "./library-maintenance";
 
 	export let initialStatus: ApplicationRecoveryStatus;
@@ -24,6 +26,38 @@
 	let successMessage: string | null = null;
 	let recoveryCopyPath: string | null = null;
 	let progress: LibraryMaintenanceProgress | null = null;
+
+	function completeProgress(summary: LibraryMaintenanceSummary): void {
+		progress = {
+			phase: "completed",
+			state:
+				summary.warnings.length > 0 ? "completedWithWarnings" : "completed",
+			completedCount: summary.scannedFileCount,
+			totalCount: summary.scannedFileCount,
+			warningCount: summary.warnings.length,
+		};
+	}
+
+	function failProgress(): void {
+		if (progress?.phase === "completed" && progress.state === "failed") return;
+		progress = {
+			phase: "completed",
+			state: "failed",
+			completedCount: progress?.completedCount ?? 0,
+			totalCount: progress?.totalCount ?? null,
+			warningCount: progress?.warningCount ?? 0,
+		};
+	}
+
+	function warnProgress(): void {
+		progress = {
+			phase: "completed",
+			state: "completedWithWarnings",
+			completedCount: progress?.completedCount ?? 0,
+			totalCount: progress?.totalCount ?? 0,
+			warningCount: Math.max(1, progress?.warningCount ?? 0),
+		};
+	}
 
 	async function refreshStatus(message: string): Promise<void> {
 		status = await getApplicationRecoveryStatusClient();
@@ -65,6 +99,11 @@
 				const result = await importBackupClient();
 				if (result.cancelled) return;
 				recoveryCopyPath = result.recoveryCopyPath ?? null;
+				if (result.maintenance) {
+					completeProgress(result.maintenance);
+				} else if (result.maintenanceError) {
+					warnProgress();
+				}
 				successMessage =
 					"バックアップを復元しました。保存済みの授業資料は変更していません。";
 				if (result.maintenanceError) {
@@ -75,6 +114,7 @@
 					"バックアップから復元し、Fuzzyを利用できる状態に戻しました。",
 				);
 			} catch (error) {
+				failProgress();
 				errorMessage = userFacingOperationError(
 					error,
 					"バックアップから復元できませんでした。Fuzzyが作成したバックアップを選び、もう一度お試しください。",
@@ -99,6 +139,7 @@
 					"新しく開始する準備ができました。保存先とフォルダーの作り方を設定してください。",
 				);
 			} catch (error) {
+				failProgress();
 				errorMessage = userFacingOperationError(
 					error,
 					"新しく開始する準備ができませんでした。Fuzzyを終了せず、時間をおいてもう一度お試しください。",
@@ -110,11 +151,13 @@
 	async function rebuildInformation(): Promise<void> {
 		await runAction("rebuild", async () => {
 			try {
-				await rebuildLibraryClient();
+				const summary = await rebuildLibraryClient();
+				completeProgress(summary);
 				successMessage =
 					"資料の検索・整理情報を作り直しました。授業資料は変更していません。";
 				await refreshStatus("資料情報の準備が完了し、Fuzzyを利用できます。");
 			} catch (error) {
+				failProgress();
 				errorMessage = userFacingOperationError(
 					error,
 					"資料情報を作り直せませんでした。資料の保存が終わってからブラウザを閉じ、もう一度お試しください。",
@@ -128,6 +171,11 @@
 			try {
 				const result = await changeLibraryRootClient();
 				if (result.cancelled) return;
+				if (result.maintenance) {
+					completeProgress(result.maintenance);
+				} else if (result.maintenanceError) {
+					warnProgress();
+				}
 				successMessage = `保存先を変更し、登録済み資料${result.rebasedFileCount}件を確認しました。資料は移動・削除していません。`;
 				if (result.maintenanceError) {
 					errorMessage =
@@ -135,6 +183,7 @@
 				}
 				await refreshStatus("保存先の変更と資料情報の準備が完了しました。");
 			} catch (error) {
+				failProgress();
 				errorMessage = userFacingOperationError(
 					error,
 					"保存先を変更できませんでした。資料があるフォルダーを確認し、もう一度お試しください。",
@@ -148,6 +197,7 @@
 	$: needsInformationRebuild =
 		!needsSettingsRecovery && status.searchIndex.state !== "ready";
 	$: progressPresentation = presentMaintenanceProgress(progress);
+	$: recoveryDetails = presentApplicationRecoveryDetails(status);
 </script>
 
 <section class="recovery-panel" aria-labelledby="startup-recovery-heading">
@@ -158,11 +208,12 @@
 	</header>
 
 	<div class="primary-state" aria-live="polite" aria-busy={busyAction !== null}>
-		{#if busyAction}
+		{#if busyAction || progress}
 			<h2>{progressPresentation.title}</h2>
 			<p>{progressPresentation.countLabel}</p>
 			<div
-				class:indeterminate={progressPresentation.percent === null}
+				class:indeterminate={progressPresentation.percent === null &&
+					(progress === null || progress.state === "running")}
 				class="progress-track"
 				role="progressbar"
 				aria-label="資料情報の準備"
@@ -253,10 +304,10 @@
 	</p>
 
 	<details>
-		<summary>診断情報を表示</summary>
-		<p>{status.database.message}</p>
-		<p>{status.searchIndex.message}</p>
-		{#if recoveryCopyPath}<p>保全先: {recoveryCopyPath}</p>{/if}
+		<summary>状態の内訳を表示</summary>
+		<p>{recoveryDetails.settings}</p>
+		<p>{recoveryDetails.information}</p>
+		{#if recoveryCopyPath}<p>復旧用の保全コピーを作成しました。</p>{/if}
 	</details>
 </section>
 

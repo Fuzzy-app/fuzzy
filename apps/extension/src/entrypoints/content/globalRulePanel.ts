@@ -25,7 +25,7 @@ export function buildGlobalRulePanel(options: GlobalRulePanelOptions): HTMLEleme
 		element(
 			"p",
 			"fuzzy-rules-panel-copy",
-			"保存ルートの下に作るフォルダーを、上から順に並べます。授業ごとの設定がない場合にこの並びを使います。",
+			"選んだ保存先に作るフォルダーを、上から順に並べます。授業ごとの設定がない場合にこの並びを使います。",
 		),
 	);
 	const reloadButton = element("button", "fuzzy-rules-secondary-button", "保存値を再読み込み");

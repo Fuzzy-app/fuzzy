@@ -662,7 +662,7 @@
 	}
 
 	button:focus-visible {
-		outline: 3px solid var(--fuzzy-color-primary-overlay);
+		outline: 3px solid var(--fuzzy-focus-ring);
 		outline-offset: 2px;
 	}
 

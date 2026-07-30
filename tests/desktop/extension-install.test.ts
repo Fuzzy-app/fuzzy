@@ -72,6 +72,7 @@ describe("browser-independent extension installation", () => {
 		expect(componentSource).not.toContain('type="checkbox"');
 		expect(componentSource).not.toContain("今回はスキップ");
 		expect(componentSource).not.toContain("localStorage");
+		expect(componentSource).toContain("outline: 3px solid var(--fuzzy-focus-ring)");
 	});
 
 	test("復旧画面から資料情報とバックアップを利用者向け文言で保守できる", async () => {
@@ -86,12 +87,34 @@ describe("browser-independent extension installation", () => {
 		expect(componentSource).toContain("拡張機能との接続を自動修復しました");
 		expect(componentSource).toContain("移動・削除せず");
 		expect(componentSource).toContain('role="progressbar"');
+		expect(componentSource).toContain("{#if maintenanceProgress}");
+		expect(componentSource).toContain('phase: "completed"');
+		expect(componentSource).toContain('state: "completedWithWarnings"');
+		expect(componentSource).toContain('state: "failed"');
 		expect(componentSource).toContain("let isStatusRequestRunning = false");
 		expect(componentSource).toContain("let isManualRecheck = false");
 		expect(componentSource).toContain("disabled={isManualRecheck || isOpening}");
+		expect(componentSource).toContain("outline: 3px solid var(--fuzzy-focus-ring)");
 		expect(componentSource).not.toContain("disabled={isRefreshing}");
+		expect(componentSource).not.toContain("SQLite");
+		expect(componentSource).not.toContain("内部索引");
 		expect(componentSource).not.toContain("検索索引");
+		expect(componentSource).not.toContain("ターミナル");
 		expect(componentSource).not.toContain("localStorage");
+	});
+
+	test("起動復旧画面は処理終了後も同じ領域に終端状態を保持する", async () => {
+		const componentSource = await Bun.file(
+			resolve(import.meta.dir, "../../apps/desktop/src/lib/setup/StartupRecoveryPanel.svelte"),
+		).text();
+
+		expect(componentSource).toContain("{#if busyAction || progress}");
+		expect(componentSource).toContain('phase: "completed"');
+		expect(componentSource).toContain('state: "completedWithWarnings"');
+		expect(componentSource).toContain('state: "failed"');
+		expect(componentSource).toContain("presentApplicationRecoveryDetails(status)");
+		expect(componentSource).not.toContain("{status.database.message}");
+		expect(componentSource).not.toContain("{status.searchIndex.message}");
 	});
 
 	test("セットアップ後もアプリのHTMLタイトルを初期セットアップに固定しない", async () => {
@@ -119,8 +142,14 @@ describe("browser-independent extension installation", () => {
 		expect(pageSource).toContain("isSaving ||\n\t\t\tisScanning ||\n\t\t\tisPickingFolder");
 		expect(pageSource).toContain("presentMaintenanceProgress");
 		expect(pageSource).toContain("aria-valuetext={maintenancePresentation.ariaValueText}");
-		expect(pageSource).toContain("変更内容の保存は準備中");
-		expect(pageSource).toContain("if (setupStatus.done || isEditingSetup)");
+		expect(pageSource).toContain("getSavedSetupConfigurationClient");
+		expect(pageSource).toContain("saveSetupChangesClient");
+		expect(pageSource).toContain("expectedRevision: savedConfiguration.revision");
+		expect(pageSource).toContain("変更内容を保存");
+		expect(pageSource).toContain('type SetupFlowMode = "initial" | "reconfigure" | "recovery"');
+		expect(pageSource).toContain("{#if maintenanceProgress}");
+		expect(pageSource).not.toContain("変更内容の保存は準備中");
+		expect(pageSource).not.toContain("isEditingSetup");
 		expect(pageSource).toContain("変更せず戻る");
 		expect(pageSource).not.toContain("拡張機能の導入へ進む");
 		expect(pageSource).not.toContain("<h1>再セットアップ</h1>");
@@ -149,7 +178,14 @@ describe("browser-independent extension installation", () => {
 		expect(startupRecoverySource).not.toContain("SQLite");
 		expect(startupRecoverySource).not.toContain("検索索引");
 		expect(startupRecoverySource).not.toContain("ターミナル");
-		expect(pageSource).toContain("isRecoveryMode = setupStatus.done");
+		expect(pageSource).toContain('flowMode = "recovery"');
+		expect(pageSource).toContain('$: isRecoveryMode = flowMode === "recovery"');
+		expect(pageSource).toContain("applicationRecoveryLoadError");
+		expect(pageSource).toContain("checkApplicationRecoveryStatus");
+		expect(pageSource).toContain("現在の利用状態を確認できませんでした");
+		expect(pageSource).toMatch(
+			/\{:else if applicationRecoveryLoadError\}[\s\S]*?もう一度確認[\s\S]*?\{:else if applicationRecoveryStatus && applicationNeedsRecovery\}/,
+		);
 		expect(pageSource).not.toContain('status.state !== "missing"');
 		expect(rustSource).not.toContain("Database::open_default().unwrap");
 		expect(rustSource).not.toContain("DefaultIndexEngine::open_default().unwrap");
@@ -489,8 +525,9 @@ describe("SQLite-backed extension recovery status", () => {
 		expect(componentSource).not.toContain("Edge");
 		expect(routeSource).toContain("extensionRecoveryLoadError");
 		expect(routeSource).toContain("on:click={loadExtensionRecoveryStatus}");
-		expect(routeSource).toContain("let isRecoveryMode = false;");
-		expect(routeSource).toContain("isRecoveryMode = setupStatus.done");
+		expect(routeSource).toContain('let flowMode: SetupFlowMode = "initial";');
+		expect(routeSource).toContain('flowMode = "recovery"');
+		expect(routeSource).toContain('$: isRecoveryMode = flowMode === "recovery"');
 		expect(routeSource).not.toContain('isRecoveryMode = status.state !== "missing"');
 		expect(routeSource).not.toContain("$: isRecoveryMode = setupStatus.done");
 	});

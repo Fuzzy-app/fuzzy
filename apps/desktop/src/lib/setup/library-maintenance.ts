@@ -348,7 +348,7 @@ export async function createFreshDatabaseClient(
 		return result;
 	} catch {
 		throw new LibraryMaintenanceError(
-			"破損DBを保全して新しいデータベースを作成できませんでした。Fuzzyを終了せず、時間をおいて再試行してください。",
+			"現在の設定を保全して新しい設定を作成できませんでした。Fuzzyを終了せず、時間をおいて再試行してください。",
 		);
 	}
 }
