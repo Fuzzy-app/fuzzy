@@ -601,6 +601,8 @@
 	$: maintenancePresentation = presentMaintenanceProgress(maintenanceProgress);
 	$: isRecoveryMode = flowMode === "recovery";
 	$: isReconfiguration = flowMode === "reconfigure";
+	$: isShowingSavedConfiguration =
+		isReconfiguration && draft.lastScannedAt === null;
 	$: activeStepLabels = isReconfiguration
 		? reconfigurationStepLabels
 		: initialStepLabels;
@@ -833,7 +835,11 @@
 							{/if}
 						</div>
 						<div class="folder-meta">
-							<span>最終スキャン: {formatScannedAt(draft.lastScannedAt)}</span>
+							<span>
+								{isShowingSavedConfiguration
+									? "今回の確認: まだ実行していません"
+									: `最終スキャン: ${formatScannedAt(draft.lastScannedAt)}`}
+							</span>
 							<button
 								class:loading={isScanning}
 								class="ghost-button"
@@ -850,7 +856,9 @@
 										{#if isScanning}
 											再スキャン中...
 										{:else}
-											再スキャン
+											{isShowingSavedConfiguration
+												? "保存先を確認"
+												: "再スキャン"}
 										{/if}
 									</span>
 								</span>
@@ -890,11 +898,25 @@
 					<section class="scan-section">
 						<div class="scan-heading">
 							<div>
-								<p class="section-label">保存パターン推定</p>
-								<h2>推定結果</h2>
+								<p class="section-label">
+									{isShowingSavedConfiguration
+										? "保存済み設定"
+										: "保存パターン推定"}
+								</p>
+								<h2>
+									{isShowingSavedConfiguration
+										? "現在のフォルダーの見方"
+										: "推定結果"}
+								</h2>
 							</div>
 							<span class="scan-count">{draft.candidates.length} 件</span>
 						</div>
+
+						{#if isShowingSavedConfiguration}
+							<p class="scan-guidance">
+								現在表示しているのは保存済みの設定です。保存先にある資料から現在の並びを確認するには、「保存先を確認」を押してください。資料が入っていないフォルダーだけでは並びを推定しません。
+							</p>
+						{/if}
 
 						{#if draft.candidates.length === 0}
 							<div class="empty-state">
@@ -914,7 +936,11 @@
 											<div class="pattern-title-row">
 												<h3>{candidate.name}</h3>
 												{#if candidate.recommended}
-													<span class="badge">おすすめ</span>
+													<span class="badge">
+														{isShowingSavedConfiguration
+															? "現在の設定"
+															: "おすすめ"}
+													</span>
 												{/if}
 												{#if candidate.requiresConfirmation}
 													<span class="badge warning">要確認</span>
@@ -926,16 +952,20 @@
 
 										<div class="pattern-side">
 											<div class="score-box">
-												<span
-													>{candidate.matchScore === null
-														? "判定"
-														: "一致度"}</span
-												>
-												<strong
-													>{candidate.matchScore === null
-														? "要確認"
-														: `${candidate.matchScore}%`}</strong
-												>
+												<span>
+													{isShowingSavedConfiguration
+														? "状態"
+														: candidate.matchScore === null
+															? "判定"
+															: "一致度"}
+												</span>
+												<strong>
+													{isShowingSavedConfiguration
+														? "保存済み"
+														: candidate.matchScore === null
+															? "要確認"
+															: `${candidate.matchScore}%`}
+												</strong>
 											</div>
 											{#if candidate.folders.length > 0}
 												<div
@@ -1697,6 +1727,17 @@
 		color: var(--fuzzy-color-primary);
 		font-size: 0.74rem;
 		font-weight: 700;
+	}
+
+	.scan-guidance {
+		margin: 14px 0 0;
+		padding: 12px 14px;
+		border: 1px solid var(--fuzzy-color-border-overlay);
+		border-radius: 8px;
+		background: var(--fuzzy-color-primary-soft);
+		color: var(--fuzzy-color-text-muted);
+		font-size: 0.78rem;
+		line-height: 1.7;
 	}
 
 	.pattern-list,

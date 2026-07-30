@@ -1,6 +1,7 @@
 import {
 	type CourseFolderNameResolution,
 	type FuzzyApiClient,
+	type SaveFileFailure,
 	type SaveSuggestion,
 	canonicalWindowsPath,
 	inferSaveRoot,
@@ -34,6 +35,32 @@ export interface SaveDestinationGroup {
 	relativePath: string;
 	courseId: number | null;
 	files: MoodleFileLink[];
+}
+
+/** 保存失敗の内訳を、利用者が次の操作を選べる文言へ変換する。 */
+export function saveFailureMessage(
+	savedCount: number,
+	failures: readonly SaveFileFailure[],
+): string | null {
+	if (failures.length === 0) return null;
+	const failedCount = failures.length;
+	const codes = new Set(failures.map((failure) => failure.code));
+	const prefix = `${savedCount}件を保存しました。`;
+	if (codes.size !== 1) {
+		return `${prefix}${failedCount}件は取得または保存できませんでした。Moodleのページを再読み込みして再試行し、解決しない場合は保存先を確認してください。`;
+	}
+
+	switch (failures[0]?.code) {
+		case "DOWNLOAD_FAILED":
+			return `${prefix}${failedCount}件をMoodleから取得できませんでした。Moodleのページを再読み込みしてから再試行してください。`;
+		case "ALREADY_EXISTS":
+			return `${prefix}${failedCount}件は保存先に同じ名前の資料があります。保存先を確認してください。`;
+		case "INVALID_CONTENT":
+			return `${prefix}${failedCount}件は資料の内容を安全に確認できませんでした。Moodleのページを再読み込みしてから再試行してください。`;
+		case "IO_ERROR":
+			return `${prefix}${failedCount}件をPCへ書き込めませんでした。保存先を開いて、空き容量やファイルの使用状況を確認してください。`;
+	}
+	return `${prefix}${failedCount}件は取得または保存できませんでした。再試行してください。`;
 }
 
 interface ManualDestination {

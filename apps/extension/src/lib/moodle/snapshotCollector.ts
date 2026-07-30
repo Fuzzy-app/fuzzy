@@ -100,11 +100,16 @@ export async function resolveMissingMimeHints(
 	const origin = options.origin ?? currentOrigin();
 	const candidates = files
 		.map((file, index) => ({ file, index }))
-		.filter(({ file }) => !file.mimeHint && isSameOriginUrl(file.url, origin))
+		.filter(
+			({ file }) =>
+				(!file.mimeHint || MOODLE_RESOURCE_PATTERN.test(file.url)) &&
+				isSameOriginUrl(file.url, origin),
+		)
 		.slice(0, options.maxRequests ?? MAX_MIME_HINT_REQUESTS);
 	if (candidates.length === 0) return files;
 
 	const resolvedFiles = [...files];
+	const unresolvedResourceIndexes = new Set<number>();
 	const fetcher = options.fetcher ?? fetch;
 	const cache = options.cache ?? mimeHintCache;
 	const timeoutMs = options.timeoutMs ?? MOODLE_REQUEST_TIMEOUT_MS;
@@ -123,6 +128,8 @@ export async function resolveMissingMimeHints(
 			);
 			if (metadata) {
 				resolvedFiles[candidate.index] = applyResolvedMetadata(candidate.file, metadata);
+			} else if (MOODLE_RESOURCE_PATTERN.test(candidate.file.url)) {
+				unresolvedResourceIndexes.add(candidate.index);
 			}
 		}
 	}
@@ -133,7 +140,9 @@ export async function resolveMissingMimeHints(
 	);
 	await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
 	return resolvedFiles.filter(
-		(file) => !(MOODLE_RESOURCE_PATTERN.test(file.url) && file.mimeHint === null),
+		(file, index) =>
+			!unresolvedResourceIndexes.has(index) &&
+			!(MOODLE_RESOURCE_PATTERN.test(file.url) && file.mimeHint === null),
 	);
 }
 
@@ -163,8 +172,7 @@ async function fetchMimeHint(
 ): Promise<ResolvedMoodleFileMetadata | null> {
 	const head = await fetchMetadataResponse(url, "HEAD", fetcher, timeoutMs);
 	const headMetadata = head ? metadataFromResponse(head, origin) : null;
-	if (headMetadata?.mimeHint === "html") return null;
-	if (headMetadata) return headMetadata;
+	if (headMetadata && headMetadata.mimeHint !== "html") return headMetadata;
 
 	const get = await fetchMetadataResponse(url, "GET", fetcher, timeoutMs);
 	const getMetadata = get ? metadataFromResponse(get, origin) : null;

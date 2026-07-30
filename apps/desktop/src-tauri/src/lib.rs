@@ -2117,6 +2117,39 @@ mod tests {
 	}
 
 	#[test]
+	fn scan_candidates_detect_year_prefixed_term_and_course_folders() {
+		let directory = test_directory("year-prefixed-term");
+		for relative in [
+			"2026前期/人工知能/ニューラルネットワーク.txt",
+			"2026前期/人工知能/機械学習.txt",
+		] {
+			let path = directory.join(relative);
+			std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+			std::fs::write(path, "sample").unwrap();
+		}
+
+		let candidates =
+			scan_existing_structure_blocking(directory.to_string_lossy().into_owned()).unwrap();
+
+		assert_eq!(candidates.len(), 1);
+		assert_eq!(candidates[0].course_segment_index, Some(1));
+		assert_eq!(
+			candidates[0]
+				.directory_segments
+				.as_ref()
+				.expect("構造化ルールへ変換できる")
+				.iter()
+				.map(|segment| segment.kind.as_str())
+				.collect::<Vec<_>>(),
+			vec!["term", "course"]
+		);
+		assert!(!candidates[0].requires_confirmation);
+		assert!(candidates[0].recommended);
+		assert_eq!(candidates[0].folders, vec!["2026前期/人工知能"]);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
 	fn ambiguous_scan_returns_an_unselected_confirmation_candidate_without_zero_percent() {
 		let directory = test_directory("ambiguous-pattern");
 		for relative in ["資料/共有/A.txt", "配布物/共通/B.txt"] {

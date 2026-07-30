@@ -10,6 +10,7 @@ import {
 	loadFileSuggestions,
 	loadFileSuggestionsWithFailures,
 	rankSuggestions,
+	saveFailureMessage,
 	saveSuggestionStatus,
 } from "../../apps/extension/src/entrypoints/content/savePlan";
 import type {
@@ -18,6 +19,23 @@ import type {
 } from "../../apps/extension/src/lib/moodle/pageSnapshot";
 
 const ROOT = "C:\\Users\\sample\\Documents\\大学";
+
+describe("保存失敗メッセージ", () => {
+	test("Moodleから取得できない場合は再読み込みを案内する", () => {
+		expect(saveFailureMessage(0, [{ fileId: "1", code: "DOWNLOAD_FAILED" }])).toBe(
+			"0件を保存しました。1件をMoodleから取得できませんでした。Moodleのページを再読み込みしてから再試行してください。",
+		);
+	});
+
+	test("同名ファイルと書き込み失敗を区別する", () => {
+		expect(saveFailureMessage(1, [{ fileId: "1", code: "ALREADY_EXISTS" }])).toContain(
+			"同じ名前の資料",
+		);
+		expect(saveFailureMessage(0, [{ fileId: "1", code: "IO_ERROR" }])).toContain(
+			"空き容量やファイルの使用状況",
+		);
+	});
+});
 
 describe("資料別の保存計画", () => {
 	test("全資料について個別に保存先候補を問い合わせる", async () => {

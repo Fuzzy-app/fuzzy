@@ -153,6 +153,11 @@ describe("browser-independent extension installation", () => {
 		expect(pageSource).toContain("変更せず戻る");
 		expect(pageSource).not.toContain("拡張機能の導入へ進む");
 		expect(pageSource).not.toContain("<h1>再セットアップ</h1>");
+		expect(pageSource).toContain("今回の確認: まだ実行していません");
+		expect(pageSource).toContain("保存先にある資料から現在の並びを確認するには");
+		expect(pageSource).toContain("資料が入っていないフォルダーだけでは並びを推定しません");
+		expect(pageSource).toContain('? "現在の設定"');
+		expect(pageSource).toContain('? "保存済み"');
 	});
 
 	test("SQLiteを開けない起動時もGUI復旧でき、missing応答でも保守導線を隠さない", async () => {

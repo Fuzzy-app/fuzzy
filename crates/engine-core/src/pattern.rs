@@ -381,7 +381,10 @@ pub fn parse_academic_year_component(value: &str) -> Option<(i64, String)> {
 		.map(|year| (year, template.to_string()))
 }
 
-/// 学期、学年付き学期、クォーター表記を正規化する。
+/// 学期、年度付き学期、学年付き学期、クォーター表記を正規化する。
+///
+/// `2026前期`のように年度を含むフォルダー名も、分割せず学期全体として扱う。
+/// 年度の正本は別フィールドなので、ここから年度を推測しない。
 pub fn normalize_term_component(value: &str) -> Option<String> {
 	let normalized = value.trim().nfkc().collect::<String>();
 	if matches!(
@@ -402,10 +405,13 @@ pub fn normalize_term_component(value: &str) -> Option<String> {
 		return parse_quarter_number(number).map(|_| normalized);
 	}
 	for suffix in ["前期", "後期", "春学期", "秋学期"] {
-		if let Some(grade) = normalized
-			.strip_suffix(suffix)
-			.and_then(|prefix| prefix.strip_suffix('年'))
-		{
+		if let Some(prefix) = normalized.strip_suffix(suffix) {
+			if parse_academic_year_component(prefix.trim()).is_some() {
+				return Some(normalized);
+			}
+			let Some(grade) = prefix.strip_suffix('年') else {
+				continue;
+			};
 			if grade.len() == 1
 				&& grade
 					.parse::<u8>()

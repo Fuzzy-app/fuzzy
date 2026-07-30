@@ -3,6 +3,7 @@
 // スナップショット収集は ../../lib/moodle/snapshotCollector、
 // native-host接続は background 経由（../../lib/api/backgroundApi）に委譲する。
 import {
+	type SaveFileFailure,
 	type SimilarFileMatch,
 	normalizeRelativeSavePath,
 	relativeSavePath,
@@ -42,6 +43,7 @@ import {
 	createSelectedFilePaths,
 	fileId,
 	loadFileSuggestionsWithFailures,
+	saveFailureMessage,
 	saveRootFromSuggestions,
 	saveSuggestionStatus,
 } from "./savePlan";
@@ -191,7 +193,7 @@ export async function mountSavePanel(): Promise<void> {
 		let savedCount = 0;
 		let extractedCount = 0;
 		let failedDestinationCount = 0;
-		let failedFileCount = 0;
+		const failedFiles: SaveFileFailure[] = [];
 		let failedZipCount = 0;
 		for (const group of groups) {
 			try {
@@ -201,7 +203,7 @@ export async function mountSavePanel(): Promise<void> {
 					courseId: group.courseId,
 				});
 				savedCount += result.savedFileIds.length;
-				failedFileCount += result.failedFiles.length;
+				failedFiles.push(...result.failedFiles);
 				const savedFileIds = new Set(result.savedFileIds);
 				const extraction = await extractSelectedZips({
 					...group,
@@ -224,8 +226,8 @@ export async function mountSavePanel(): Promise<void> {
 		similarWarnings = [];
 		if (failedDestinationCount > 0) {
 			message = `${savedCount}件は保存しましたが、${failedDestinationCount}か所の保存に失敗しました。再試行してください。`;
-		} else if (failedFileCount > 0) {
-			message = `${savedCount}件は保存しましたが、${failedFileCount}件の取得または保存に失敗しました。再試行してください。`;
+		} else if (failedFiles.length > 0) {
+			message = saveFailureMessage(savedCount, failedFiles);
 		} else if (failedZipCount > 0) {
 			message = `${savedCount}件を保存しましたが、ZIP ${failedZipCount}件の展開に失敗しました。`;
 		} else {

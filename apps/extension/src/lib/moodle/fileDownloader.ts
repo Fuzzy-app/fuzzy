@@ -15,6 +15,7 @@ import {
 const DOWNLOAD_CONCURRENCY = 2;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429]);
+const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
 
 export interface MoodleFileDownloadOptions {
 	fetcher?: typeof fetch;
@@ -117,6 +118,8 @@ async function downloadFile(
 	budget: { used: number; maximum: number },
 ): Promise<SaveFilePayload | null> {
 	if (!isSameOrigin(file.url, pageOrigin)) return null;
+	let downloadUrl = file.url;
+	let followedEmbeddedResource = false;
 
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const controller = new AbortController();
@@ -124,7 +127,7 @@ async function downloadFile(
 		let reservedBytes = 0;
 		let keepReservation = false;
 		try {
-			const response = await fetcher(file.url, {
+			const response = await fetcher(downloadUrl, {
 				method: "GET",
 				credentials: "include",
 				redirect: "follow",
@@ -134,7 +137,7 @@ async function downloadFile(
 				if (attempt === 0 && isRetryableStatus(response.status)) continue;
 				return null;
 			}
-			const finalUrl = response.url || file.url;
+			const finalUrl = response.url || downloadUrl;
 			if (!isSameOrigin(finalUrl, pageOrigin)) return null;
 
 			const declaredLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
@@ -146,6 +149,18 @@ async function downloadFile(
 				return true;
 			});
 			if (!bytes) return null;
+			if (looksLikeHtml(bytes)) {
+				const embeddedUrl =
+					!followedEmbeddedResource && MOODLE_RESOURCE_PATTERN.test(file.url)
+						? embeddedPluginFileUrl(bytes, finalUrl, pageOrigin)
+						: null;
+				if (embeddedUrl) {
+					downloadUrl = embeddedUrl;
+					followedEmbeddedResource = true;
+					continue;
+				}
+				return null;
+			}
 
 			const contentType = response.headers.get("content-type");
 			const dispositionName = fileNameFromContentDisposition(
@@ -156,7 +171,7 @@ async function downloadFile(
 				fileExtensionFromName(dispositionName ?? "") ??
 				normalizeFileTypeHint(file.mimeHint) ??
 				fileExtensionFromName(file.title);
-			if (!mimeHint || mimeHint === "html" || looksLikeHtml(bytes)) return null;
+			if (!mimeHint || mimeHint === "html") return null;
 			if (mimeHint === "docx" && !hasZipSignature(bytes)) return null;
 			keepReservation = true;
 
@@ -231,6 +246,28 @@ function isSameOrigin(url: string, origin: string): boolean {
 function looksLikeHtml(bytes: Uint8Array): boolean {
 	const prefix = new TextDecoder().decode(bytes.slice(0, 512)).trimStart().toLowerCase();
 	return prefix.startsWith("<!doctype html") || prefix.startsWith("<html");
+}
+
+/** Moodleの埋め込み表示ページから、同一サイトの資料本体だけを1件解決する。 */
+function embeddedPluginFileUrl(
+	bytes: Uint8Array,
+	baseUrl: string,
+	pageOrigin: string,
+): string | null {
+	const html = new TextDecoder().decode(bytes);
+	for (const match of html.matchAll(
+		/(?:href|src|data)\s*=\s*["']([^"']*\/pluginfile\.php[^"']*)["']/gi,
+	)) {
+		const rawUrl = match[1]?.replaceAll("&amp;", "&");
+		if (!rawUrl) continue;
+		try {
+			const resolved = new URL(rawUrl, baseUrl).href;
+			if (isSameOrigin(resolved, pageOrigin)) return resolved;
+		} catch {
+			// 壊れた候補は無視し、次の埋め込みURLを確認する。
+		}
+	}
+	return null;
 }
 
 function hasZipSignature(bytes: Uint8Array): boolean {
