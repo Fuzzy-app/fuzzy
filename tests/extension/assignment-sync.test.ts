@@ -128,7 +128,7 @@ describe("Moodle課題の実データ同期", () => {
 			"https://moodle.example/course/view.php?id=412",
 			document,
 		);
-		expect(payload?.assignments).toEqual([]);
+		expect(payload).toBeNull();
 	});
 
 	test("個別活動ページは完全snapshotとして送らない", () => {
@@ -255,7 +255,7 @@ describe("Moodle課題の実データ同期", () => {
 			"https://moodle.example/course/view.php?id=412",
 			document,
 		);
-		expect(payload?.assignments).toEqual([]);
+		expect(payload).toBeNull();
 	});
 
 	test("明示offset付きISOを受理し、解釈不能な期限は要確認にする", () => {
@@ -297,5 +297,14 @@ describe("Moodle course identity isolation", () => {
 				"https://moodle2026.wakayama-u.ac.jp/2026/course/view.php?id=412",
 			),
 		).not.toBe("moodle:moodle2025.wakayama-u.ac.jp:2025:412");
+	});
+
+	test("does not create a contextual course id when the academic year is unknown", () => {
+		expect(
+			contextualMoodleCourseId(
+				{ moodleCourseId: "412", academicYear: null } as never,
+				"https://moodle.example/course/view.php?id=412",
+			),
+		).toBeNull();
 	});
 });
