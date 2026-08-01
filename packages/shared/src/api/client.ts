@@ -6,6 +6,7 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroupListItem,
+	ExcludedFolder,
 	ExportDataRequest,
 	ExportDataResult,
 	ExtractZipRequest,
@@ -31,6 +32,7 @@ import type {
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest,
 	UpdateGlobalRuleRequest,
 } from "../types";
 
@@ -69,6 +71,9 @@ export interface FuzzyApiClient {
 	updateGlobalRule(request: UpdateGlobalRuleRequest): Promise<RuleUpdateResult>;
 
 	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult>;
+	clearCourseRuleOverride(courseId: number): Promise<RuleUpdateResult>;
+	getExcludedFolders(courseId?: number): Promise<ExcludedFolder[]>;
+	updateExcludedFolders(request: UpdateExcludedFoldersRequest): Promise<ExcludedFolder[]>;
 
 	updateCourseFolderName(
 		request: UpdateCourseFolderNameRequest,

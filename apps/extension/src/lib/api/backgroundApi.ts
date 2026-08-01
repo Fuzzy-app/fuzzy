@@ -13,6 +13,7 @@ import type {
 	DashboardSummary,
 	DataSyncEvent,
 	DeadlineFilter,
+	ExcludedFolder,
 	ExtractZipRequest,
 	ExtractZipResult,
 	FuzzyApiClient,
@@ -23,6 +24,7 @@ import type {
 	NotificationRuleUpdateResult,
 	RebuildLibraryRequest,
 	ReconcileCourseFilesRequest,
+	RuleUpdateResult,
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
@@ -31,6 +33,7 @@ import type {
 	SyncMoodleAssignmentsRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
+	UpdateExcludedFoldersRequest,
 } from "@fuzzy/shared";
 import { ApiError } from "@fuzzy/shared";
 import { FILE_TRANSFER_LIMITS } from "@fuzzy/shared";
@@ -55,6 +58,9 @@ const BACKGROUND_API_METHODS = [
 	"getAssignmentChanges",
 	"rebuildLibrary",
 	"reconcileCourseFiles",
+	"clearCourseRuleOverride",
+	"getExcludedFolders",
+	"updateExcludedFolders",
 ] as const;
 
 export type BackgroundApiMethod = (typeof BACKGROUND_API_METHODS)[number];
@@ -172,6 +178,20 @@ function isRequestForMethod(method: BackgroundApiMethod, request: unknown): bool
 			);
 		case "reconcileCourseFiles":
 			return isReconcileCourseFilesRequest(request);
+		case "clearCourseRuleOverride":
+			return (
+				isRecord(request) &&
+				isPositiveInteger(request.courseId) &&
+				Object.keys(request).length === 1
+			);
+		case "getExcludedFolders":
+			return (
+				isRecord(request) &&
+				Object.keys(request).every((key) => key === "courseId") &&
+				(request.courseId === undefined || isPositiveInteger(request.courseId))
+			);
+		case "updateExcludedFolders":
+			return isExcludedFoldersRequest(request);
 	}
 }
 
@@ -190,6 +210,18 @@ function isReconcileCourseFilesRequest(value: unknown): boolean {
 				Number(value.course.academicYear) >= 1900 &&
 				Number(value.course.academicYear) <= 9999)) &&
 		isNullableString(value.course.term)
+	);
+}
+
+function isExcludedFoldersRequest(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		Object.keys(value).every((key) => key === "scope" || key === "courseId" || key === "paths") &&
+		(value.scope === "root" || value.scope === "course") &&
+		(value.scope === "root" ? value.courseId === null : isPositiveInteger(value.courseId)) &&
+		Array.isArray(value.paths) &&
+		value.paths.length <= 500 &&
+		value.paths.every((path) => typeof path === "string" && path.length > 0 && path.length <= 512)
 	);
 }
 
@@ -332,6 +364,18 @@ export class BackgroundApiClient implements BackgroundApi {
 		request: UpdateCourseFolderNameRequest,
 	): Promise<UpdateCourseFolderNameResult> {
 		return this.#call("updateCourseFolderName", request);
+	}
+
+	clearCourseRuleOverride(courseId: number): Promise<RuleUpdateResult> {
+		return this.#call("clearCourseRuleOverride", { courseId });
+	}
+
+	getExcludedFolders(courseId?: number): Promise<ExcludedFolder[]> {
+		return this.#call("getExcludedFolders", courseId === undefined ? {} : { courseId });
+	}
+
+	updateExcludedFolders(request: UpdateExcludedFoldersRequest): Promise<ExcludedFolder[]> {
+		return this.#call("updateExcludedFolders", request);
 	}
 
 	checkSimilarFiles(request: CheckSimilarFilesRequest): Promise<SimilarFileMatch[]> {

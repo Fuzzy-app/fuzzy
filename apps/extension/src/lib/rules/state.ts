@@ -1,4 +1,9 @@
-import { ApiError, type DuplicateGroupListItem, type RuleViolationListItem } from "@fuzzy/shared";
+import {
+	ApiError,
+	type DuplicateGroupListItem,
+	type ExcludedFolder,
+	type RuleViolationListItem,
+} from "@fuzzy/shared";
 import { createBackgroundRuleManagementApi } from "./backgroundApi";
 import type {
 	RuleManagementApi,
@@ -6,6 +11,7 @@ import type {
 	RuleSaveTarget,
 	RuleSet,
 	UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest,
 	UpdateGlobalRuleRequest,
 } from "./types";
 
@@ -70,6 +76,20 @@ export class RuleManagementStore {
 		);
 	}
 
+	async clearCourseRuleOverride(courseId: number): Promise<RuleSet> {
+		return this.#save({ scope: "course", courseId }, () =>
+			this.#api.clearCourseRuleOverride(courseId),
+		);
+	}
+
+	getExcludedFolders(courseId?: number): Promise<ExcludedFolder[]> {
+		return this.#api.getExcludedFolders(courseId);
+	}
+
+	updateExcludedFolders(request: UpdateExcludedFoldersRequest): Promise<ExcludedFolder[]> {
+		return this.#api.updateExcludedFolders(request);
+	}
+
 	getRuleViolations(): Promise<RuleViolationListItem[]> {
 		return this.#api.getRuleViolations();
 	}
@@ -130,6 +150,9 @@ function createUnavailableRuleManagementApi(): RuleManagementApi {
 		getRules: unavailable,
 		updateGlobalRule: unavailable,
 		updateCourseRuleOverride: unavailable,
+		clearCourseRuleOverride: unavailable,
+		getExcludedFolders: unavailable,
+		updateExcludedFolders: unavailable,
 		getRuleViolations: unavailable,
 		getDuplicateGroups: unavailable,
 	};

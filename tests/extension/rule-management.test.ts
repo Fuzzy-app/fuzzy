@@ -222,6 +222,9 @@ describe("RuleManagementStore", () => {
 				return result;
 			},
 			updateCourseRuleOverride: (request) => mock.updateCourseRuleOverride(request),
+			clearCourseRuleOverride: (courseId) => mock.clearCourseRuleOverride(courseId),
+			getExcludedFolders: (courseId) => mock.getExcludedFolders(courseId),
+			updateExcludedFolders: (request) => mock.updateExcludedFolders(request),
 			getRuleViolations: () => mock.getRuleViolations(),
 			getDuplicateGroups: () => mock.getDuplicateGroups(),
 		};

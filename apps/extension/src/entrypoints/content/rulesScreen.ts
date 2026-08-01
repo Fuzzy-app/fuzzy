@@ -1,4 +1,10 @@
-import { type CourseDashboardEntry, type RuleSet, removeSectionSegment } from "@fuzzy/shared";
+import {
+	type CourseDashboardEntry,
+	type ExcludedFolder,
+	type ExcludedFolderScope,
+	type RuleSet,
+	removeSectionSegment,
+} from "@fuzzy/shared";
 import { RuleIntegrityController } from "../../lib/integrity/state";
 import type { RuleManagementStore } from "../../lib/rules/state";
 import { buildCourseRulePanel } from "./courseRulePanel";
@@ -9,6 +15,7 @@ import {
 	buildRulesMessage,
 	buildSummaryCard,
 	element,
+	optionElement,
 } from "./rulesScreenElements";
 import {
 	type CourseRuleDraft,
@@ -44,6 +51,7 @@ export function createRuleManagementScreen(
 	let globalDraft = "";
 	let courses: CourseDashboardEntry[] = [];
 	let selectedCourseId: number | null = null;
+	let excludedCourseId: number | null = null;
 	let loadingRules = false;
 	let loadingCourses = false;
 	let rulesLoaded = false;
@@ -52,6 +60,12 @@ export function createRuleManagementScreen(
 	let loadPromise: Promise<void> | null = null;
 	let message: { kind: "success" | "error"; text: string } | null = null;
 	let courseLoadError: string | null = null;
+	let excludedFolders: ExcludedFolder[] = [];
+	let excludedFoldersLoaded = false;
+	let loadingExcludedFolders = false;
+	let savingExcludedFolders = false;
+	let excludedScope: ExcludedFolderScope = "root";
+	let excludedPathDraft = "";
 	let activeView: "rules" | "integrity" = "rules";
 	let mutationRevision = options.store.snapshot.mutationRevision;
 
@@ -87,10 +101,157 @@ export function createRuleManagementScreen(
 		if (!available.some((course) => course.courseId === selectedCourseId)) {
 			selectedCourseId = available[0]?.courseId ?? null;
 		}
+		if (!courses.some((course) => course.courseId === excludedCourseId)) {
+			excludedCourseId = courses[0]?.courseId ?? null;
+		}
+	};
+
+	const excludedPathsForScope = (scope: ExcludedFolderScope): string[] =>
+		excludedFolders.filter((folder) => folder.scope === scope).map((folder) => folder.relativePath);
+
+	const syncExcludedPathDraft = () => {
+		excludedPathDraft = excludedPathsForScope(excludedScope).join("\\n");
+	};
+
+	const loadExcludedFolders = async () => {
+		loadingExcludedFolders = true;
+		render();
+		try {
+			excludedFolders = await options.store.getExcludedFolders(excludedCourseId ?? undefined);
+			excludedFoldersLoaded = true;
+			syncExcludedPathDraft();
+		} catch (error) {
+			message = { kind: "error", text: errorMessage(error) };
+		} finally {
+			loadingExcludedFolders = false;
+			render();
+		}
+	};
+
+	const saveExcludedFolders = async () => {
+		if (excludedScope === "course" && excludedCourseId === null) {
+			message = {
+				kind: "error",
+				text: "授業を選択してから授業別の除外フォルダーを設定してください。",
+			};
+			render();
+			return;
+		}
+		const paths = excludedPathDraft
+			.split(/\\r?\\n/)
+			.map((path) => path.trim())
+			.filter(Boolean);
+		savingExcludedFolders = true;
+		message = null;
+		render();
+		try {
+			excludedFolders = await options.store.updateExcludedFolders({
+				scope: excludedScope,
+				courseId: excludedScope === "course" ? excludedCourseId : null,
+				paths,
+			});
+			excludedFoldersLoaded = true;
+			syncExcludedPathDraft();
+			message = { kind: "success", text: "除外フォルダーを保存しました。" };
+		} catch (error) {
+			message = { kind: "error", text: errorMessage(error) };
+		} finally {
+			savingExcludedFolders = false;
+			render();
+		}
+	};
+
+	const buildExcludedFolderPanel = (): HTMLElement => {
+		const panel = element("section", "fuzzy-rules-panel");
+		const head = element("div", "fuzzy-rules-panel-head");
+		const copy = element("div");
+		copy.append(
+			element("h2", "", "除外フォルダー"),
+			element(
+				"p",
+				"fuzzy-rules-panel-copy",
+				"指定したフォルダーは検索・一覧・ルール判定から除外します。ファイル自体を移動・削除することはありません。",
+			),
+		);
+		head.append(copy);
+		panel.append(head);
+
+		const scopeField = element("label", "fuzzy-rules-field");
+		scopeField.append(element("span", "", "適用範囲"));
+		const scopeSelect = element("select", "fuzzy-rules-select") as HTMLSelectElement;
+		scopeSelect.append(optionElement("root", "全体"), optionElement("course", "選択した授業のみ"));
+		for (const option of Array.from(scopeSelect.options)) {
+			option.selected = option.value === excludedScope;
+		}
+		scopeSelect.disabled = loadingExcludedFolders || savingExcludedFolders;
+		scopeSelect.addEventListener("change", () => {
+			excludedScope = scopeSelect.value as ExcludedFolderScope;
+			excludedFoldersLoaded = false;
+			void loadExcludedFolders();
+		});
+		scopeField.append(scopeSelect);
+
+		if (excludedScope === "course") {
+			const courseField = element("label", "fuzzy-rules-field");
+			courseField.append(element("span", "", "対象の授業"));
+			const courseSelect = element("select", "fuzzy-rules-select") as HTMLSelectElement;
+			for (const course of courses) {
+				const option = optionElement(String(course.courseId), course.courseName);
+				option.selected = course.courseId === excludedCourseId;
+				courseSelect.append(option);
+			}
+			courseSelect.disabled =
+				loadingExcludedFolders || savingExcludedFolders || courses.length === 0;
+			courseSelect.addEventListener("change", () => {
+				excludedCourseId = Number(courseSelect.value);
+				excludedFoldersLoaded = false;
+				void loadExcludedFolders();
+			});
+			panel.append(courseField);
+			courseField.append(courseSelect);
+		}
+
+		const pathField = element("label", "fuzzy-rules-field");
+		pathField.append(element("span", "", "除外する相対フォルダー（1行に1つ）"));
+		const textarea = element("textarea", "fuzzy-rules-textarea") as HTMLTextAreaElement;
+		textarea.value = excludedPathDraft;
+		textarea.placeholder = "例: 一時ファイル\n資料/下書き";
+		textarea.disabled = loadingExcludedFolders || savingExcludedFolders;
+		textarea.addEventListener("input", () => {
+			excludedPathDraft = textarea.value;
+		});
+		pathField.append(textarea);
+		pathField.append(
+			element(
+				"p",
+				"fuzzy-rules-help",
+				"保存先のルートフォルダーから見た相対パスを指定してください。空欄で設定を解除できます。",
+			),
+		);
+
+		const actionRow = element("div", "fuzzy-rules-action-row");
+		const save = element(
+			"button",
+			"fuzzy-rules-save-button",
+			savingExcludedFolders ? "保存中…" : "除外設定を保存",
+		);
+		save.type = "button";
+		save.disabled =
+			loadingExcludedFolders ||
+			savingExcludedFolders ||
+			(excludedScope === "course" && excludedCourseId === null);
+		save.addEventListener("click", () => void saveExcludedFolders());
+		actionRow.append(save);
+		panel.append(scopeField, pathField, actionRow);
+
+		if (!excludedFoldersLoaded && loadingExcludedFolders) {
+			panel.append(element("p", "fuzzy-rules-help", "除外設定を読み込んでいます…"));
+		}
+		return panel;
 	};
 
 	const initialize = async () => {
-		if (rulesLoaded && coursesLoaded) return;
+		if (rulesLoaded && coursesLoaded && excludedFoldersLoaded) return;
 		loadingRules = !rulesLoaded;
 		loadingCourses = !coursesLoaded;
 		message = null;
@@ -119,6 +280,7 @@ export function createRuleManagementScreen(
 		}
 
 		updateSelectedCourse();
+		if (!excludedFoldersLoaded) await loadExcludedFolders();
 		render();
 	};
 
@@ -269,6 +431,26 @@ export function createRuleManagementScreen(
 						? `${course.courseName}をサンプル例外へ追加しました。`
 						: `${course.courseName}を授業ごとの保存設定へ追加しました。`,
 			};
+		} catch (error) {
+			message = { kind: "error", text: errorMessage(error) };
+		} finally {
+			savingTarget = null;
+			render();
+		}
+	};
+
+	const clearCourseOverride = async (courseId: number) => {
+		const draft = overrideDrafts.get(courseId);
+		if (!draft) return;
+		if (!window.confirm(`${draft.courseName}の例外設定を解除し、基本設定に戻しますか？`)) return;
+		savingTarget = courseId;
+		message = null;
+		render();
+		try {
+			const nextRules = await options.store.clearCourseRuleOverride(courseId);
+			resetDrafts(nextRules);
+			updateSelectedCourse();
+			message = { kind: "success", text: `${draft.courseName}を基本設定に戻しました。` };
 		} catch (error) {
 			message = { kind: "error", text: errorMessage(error) };
 		} finally {
@@ -440,7 +622,9 @@ export function createRuleManagementScreen(
 				onClearMessage: clearMessage,
 				onAdd: () => void addCourseOverride(),
 				onSave: (courseId) => void saveCourseOverride(courseId),
+				onClear: (courseId) => void clearCourseOverride(courseId),
 			}),
+			buildExcludedFolderPanel(),
 		);
 	}
 

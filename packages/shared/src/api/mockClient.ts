@@ -29,6 +29,7 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroupListItem,
+	ExcludedFolder,
 	ExportDataRequest,
 	ExportDataResult,
 	ExtractZipRequest,
@@ -54,6 +55,7 @@ import type {
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest,
 	UpdateGlobalRuleRequest,
 } from "../types";
 import { ApiError, type FuzzyApiClient } from "./client";
@@ -80,6 +82,7 @@ export class MockApiClient implements FuzzyApiClient {
 			label: notificationRuleLabel(rule.offsetMinutes),
 		}),
 	);
+	private excludedFolders: ExcludedFolder[] = [];
 	private nextNotificationRuleId =
 		this.notificationRules.reduce((max, rule) => Math.max(max, rule.id), 0) + 1;
 	private rules: RuleSet = cloneRuleSet(sampleRules as RuleSet);
@@ -278,6 +281,66 @@ export class MockApiClient implements FuzzyApiClient {
 			else courseOverrides[existingIndex] = nextOverride;
 			this.rules = { ...this.rules, courseOverrides };
 		});
+	}
+
+	async clearCourseRuleOverride(courseId: number): Promise<RuleUpdateResult> {
+		if (!Number.isInteger(courseId) || courseId <= 0) {
+			throw new ApiError("NOT_FOUND", "対象の授業を選択してください。");
+		}
+		return this.enqueueRuleMutation(() => {
+			if (!this.courses.some((course) => course.id === courseId)) {
+				throw new ApiError("NOT_FOUND", "対象の授業が見つかりません。");
+			}
+			this.rules = {
+				...this.rules,
+				courseOverrides: this.rules.courseOverrides.filter(
+					(override) => override.courseId !== courseId,
+				),
+			};
+		});
+	}
+
+	async getExcludedFolders(courseId?: number): Promise<ExcludedFolder[]> {
+		return delay(
+			this.excludedFolders
+				.filter((folder) => folder.scope === "root" || folder.courseId === courseId)
+				.map((folder) => ({ ...folder })),
+		);
+	}
+
+	async updateExcludedFolders(request: UpdateExcludedFoldersRequest): Promise<ExcludedFolder[]> {
+		const courseId = request.courseId;
+		if (
+			request.scope === "course" &&
+			(courseId === null || !Number.isInteger(courseId) || courseId <= 0)
+		) {
+			throw new ApiError("INVALID_REQUEST", "コースを選択してください。");
+		}
+		if (request.scope === "root" && request.courseId !== null) {
+			throw new ApiError("INVALID_REQUEST", "ルート設定ではコースを指定できません。");
+		}
+		const paths = [
+			...new Set(request.paths.map((path) => path.trim().replaceAll("\\", "/"))),
+		].filter(Boolean);
+		if (
+			paths.some(
+				(path) => path.startsWith("/") || path.includes(":") || path.split("/").includes(".."),
+			)
+		) {
+			throw new ApiError("INVALID_REQUEST", "保存ルートからの相対フォルダーを指定してください。");
+		}
+		const key = (folder: ExcludedFolder) =>
+			folder.scope === request.scope && folder.courseId === courseId;
+		this.excludedFolders = this.excludedFolders.filter((folder) => !key(folder));
+		this.excludedFolders.push(
+			...paths.map((relativePath, index) => ({
+				id: Date.now() + index,
+				scope: request.scope,
+				courseId,
+				relativePath,
+			})),
+		);
+		return this.getExcludedFolders(courseId === null ? undefined : courseId);
 	}
 
 	async updateCourseFolderName(

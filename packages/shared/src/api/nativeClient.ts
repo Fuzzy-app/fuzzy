@@ -8,6 +8,7 @@ import type {
 	DataSyncEvent,
 	DeadlineFilter,
 	DuplicateGroupListItem,
+	ExcludedFolder,
 	ExportDataRequest,
 	ExportDataResult,
 	ExtensionRuntimeObservation,
@@ -36,6 +37,7 @@ import type {
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest,
 	UpdateGlobalRuleRequest,
 } from "../types";
 import type { FuzzyApiClient } from "./client";
@@ -468,6 +470,18 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult> {
 		return this.send("updateCourseRuleOverride", request);
+	}
+
+	clearCourseRuleOverride(courseId: number): Promise<RuleUpdateResult> {
+		return this.send("clearCourseRuleOverride", { courseId });
+	}
+
+	getExcludedFolders(courseId?: number): Promise<ExcludedFolder[]> {
+		return this.send("getExcludedFolders", courseId === undefined ? {} : { courseId });
+	}
+
+	updateExcludedFolders(request: UpdateExcludedFoldersRequest): Promise<ExcludedFolder[]> {
+		return this.send("updateExcludedFolders", request);
 	}
 
 	updateCourseFolderName(

@@ -16,7 +16,7 @@ use engine_core::library::{
 use engine_core::types::{
 	is_supported_moodle_assignment_url, AssignmentChangeRecord, AssignmentRecord,
 	CourseDashboardRecord, CourseRuleOverrideRecord, DashboardRecord, DataSyncEventRecord,
-	DeadlineFilter as EngineDeadlineFilter, DuplicateGroupRecord,
+	DeadlineFilter as EngineDeadlineFilter, DuplicateGroupRecord, ExcludedFolderRecord,
 	MoodleAssignmentSyncInput as EngineMoodleAssignmentSyncInput,
 	NotificationRuleInput as EngineNotificationRuleInput, NotificationRuleRecord, RuleSetRecord,
 	RuleViolationRecord,
@@ -545,6 +545,47 @@ pub struct CourseRuleOverrideInput {
 pub struct UpdateCourseRuleOverrideRequest {
 	pub course_id: i64,
 	pub r#override: CourseRuleOverrideInput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClearCourseRuleOverrideRequest {
+	pub course_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExcludedFolder {
+	pub id: i64,
+	pub scope: String,
+	pub course_id: Option<i64>,
+	pub relative_path: String,
+}
+
+impl From<ExcludedFolderRecord> for ExcludedFolder {
+	fn from(value: ExcludedFolderRecord) -> Self {
+		Self {
+			id: value.id,
+			scope: value.scope,
+			course_id: value.course_id,
+			relative_path: value.relative_path,
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetExcludedFoldersRequest {
+	pub course_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateExcludedFoldersRequest {
+	pub scope: String,
+	pub course_id: Option<i64>,
+	pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
