@@ -67,7 +67,10 @@ impl Database {
 			}
 			group.members.push(member);
 		}
-		Ok(groups.into_values().collect())
+		Ok(groups
+			.into_values()
+			.filter(|group| group.members.len() >= 2)
+			.collect())
 	}
 
 	/// 保存前の照合や再計算に使う、SQLite上の全フィンガープリントを読み込む。
@@ -340,6 +343,21 @@ mod tests {
 			.members
 			.iter()
 			.all(|member| member.similarity == 1.0));
+	}
+
+	#[test]
+	fn does_not_return_a_duplicate_group_with_only_one_active_member() {
+		let database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+		database
+			.conn()
+			.execute(
+				"UPDATE files SET excluded_at = datetime('now') WHERE id = 9",
+				[],
+			)
+			.unwrap();
+
+		assert!(database.duplicate_groups().unwrap().is_empty());
 	}
 
 	#[test]
