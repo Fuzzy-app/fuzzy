@@ -79,6 +79,27 @@ describe("Moodle資料本体の取得", () => {
 		expect(JSON.stringify(result)).not.toContain("cookie");
 	});
 
+	test("生UTF-8として届いた日本語DOCX名を復元し、本文バイトは変更しない", async () => {
+		const docxBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xe8, 0xac, 0x9b]);
+		const rawUtf8AsLatin1 = Array.from(new TextEncoder().encode("講義資料.docx"), (byte) =>
+			String.fromCharCode(byte),
+		).join("");
+		const fetcher = (async () =>
+			new Response(docxBytes, {
+				status: 200,
+				headers: {
+					"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+					"content-disposition": `attachment; filename="${rawUtf8AsLatin1}"`,
+				},
+			})) as unknown as typeof fetch;
+
+		const result = await downloadMoodleFiles(createRequest(), ORIGIN, { fetcher });
+
+		expect(result.failedFiles).toEqual([]);
+		expect(result.request.files[0]?.fileName).toBe("講義資料.docx");
+		expect(result.request.files[0]?.contentBase64).toBe("UEsDBOismw==");
+	});
+
 	test("HTML・壊れたDOCX・外部オリジンを保存payloadへ入れない", async () => {
 		let requestCount = 0;
 		const htmlFetcher = (async () => {

@@ -1,4 +1,4 @@
-import type { MoodleFileMeta } from "@fuzzy/shared";
+import type { Assignment, MoodleFileMeta } from "@fuzzy/shared";
 import {
 	fileExtensionFromName,
 	fileTypeFromMoodleIconUrl,
@@ -26,12 +26,14 @@ export interface MoodleAssignmentHint {
 	sourceText: string;
 	source: "page_text" | "dashboard_widget";
 	submitted: boolean;
-	submissionAvailability: "available" | "unavailable" | "unknown";
+	/** 締切・提出済み状態・submissionModeとは独立した、詳細ページ上の提出可否。 */
+	submissionAvailability: Assignment["submissionAvailability"];
+	/** 利用者操作と詳細ページ取得に使う、正規化済みのMoodle課題URL。 */
 	moodleUrl: string | null;
 }
 
 const SUBMISSION_UNAVAILABLE_PATTERN =
-	/(?:提出(?:を受け付けていません|できません|期間は終了)|受付(?:終了|停止)|期限切れ|利用できません|closed|no longer available|not available)/i;
+	/(?:提出(?:を受け付けていません|できません|期間は終了)|受付(?:終了|停止)|利用できません|closed|no longer available|not available)/i;
 const SUBMISSION_AVAILABLE_PATTERN =
 	/(?:提出(?:を追加|物をアップロード|する)|小テストを受験|回答を開始|add submission|upload submission|attempt quiz now|start attempt)/i;
 
@@ -284,7 +286,7 @@ export function extractAssignmentHints(
 			sourceText: line,
 			source,
 			submitted: false,
-			submissionAvailability: "unknown",
+			submissionAvailability: "unknown" as const,
 			moodleUrl: null,
 		})),
 		(hint) => `${hint.source}:${hint.sourceText}`,
@@ -337,12 +339,19 @@ export function extractStructuredAssignmentHints(
 				source: isDashboardAssignment(link) ? "dashboard_widget" : "page_text",
 				submitted: /(?:提出済み|提出しました|submitted|graded)/i.test(sourceText),
 				submissionAvailability: detectSubmissionAvailability(sourceText),
-				moodleUrl: url,
+				moodleUrl: normalizedAssignmentUrl(url),
 			},
 		];
 	});
 
 	return dedupeBy(hints, (hint) => hint.moodleAssignmentId ?? "");
+}
+
+function normalizedAssignmentUrl(url: string): string | null {
+	const parsed = safeUrl(url);
+	if (!parsed || !/\/mod\/(?:assign|quiz)\/view\.php$/i.test(parsed.pathname)) return null;
+	parsed.hash = "";
+	return parsed.href;
 }
 
 /**
