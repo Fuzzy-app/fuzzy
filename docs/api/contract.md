@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-28
+最終更新: 2026-07-29
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。wire型の正本は用途に応じて`crates/engine-core`または`apps/native-host/src/api_types.rs`のRust DTOとし、`ts-rs`で`packages/shared/src/generated/`へTS型を自動生成する（生成物は手編集しない）。`packages/shared/src/types.ts`は生成型の再exportを基本とし、未移行の暫定TS型だけを直接定義する。絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -270,7 +270,7 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 
 ---
 
-## 2. Tauriコマンド（初期セットアップアプリ ⇄ Rust）
+## 2. Tauriコマンド（セットアップ・保守アプリ ⇄ Rust）
 
 | コマンド                      | 用途                              | 引数 → 戻り値                                         |
 |---------------------------|---------------------------------|--------------------------------------------------|
@@ -278,6 +278,8 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 | `scan_existing_structure` | 選択フォルダの既存構成を再帰スキャンし、近いパターン候補を提示 | `{ path }` → `PatternCandidate[]`                |
 | `save_initial_setup`      | 選んだパターン／ルールを保存し、既存資料を取り込む        | `{ path, pattern, rule, courseOverrides }` → `{ ok, maintenance: LibraryMaintenanceSummary }` |
 | `get_setup_status`        | 初期セットアップ済みかどうか確認                | `()` → `{ done: boolean, savedAt?: string }`     |
+| `get_saved_setup_configuration` | 設定済みの保存先・推定結果・整理ルールをSQLiteから取得 | `()` → `SavedSetupConfiguration \| null` |
+| `save_setup_changes` | 保存済み設定との差分を競合検知付きで保存し、必要な資料情報を更新 | `SaveSetupChangesRequest` → `SaveSetupChangesResponse` |
 | `get_extension_setup_status` | 確認開始後の拡張機能実応答をSQLiteから取得 | `{ since: string }` → `ExtensionSetupStatus` |
 | `get_extension_recovery_status` | セットアップ後の最新応答・互換性・鮮度をSQLiteから取得 | `()` → `ExtensionRecoveryStatus` |
 | `get_application_recovery_status` | 起動時のSQLite正本・検索索引の利用可否を取得 | `()` → `{ database, searchIndex }` |
@@ -289,7 +291,7 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 | `import_backup` | OS選択・確認ダイアログを経てSQLiteバックアップを復元し、索引を再構築 | `()` → `{ cancelled, imported, recoveryCopyPath?, maintenance?, maintenanceError? }` |
 | `create_fresh_database` | 確認後に開けないDBを別名で保全し、新規SQLite正本を作成 | `()` → `{ cancelled, created, recoveryCopyPath?, indexError? }` |
 
-`PatternCandidate`は次の形式を使用する。推定不能時は`matchScore: null`、`courseSegmentIndex: null`、`requiresConfirmation: true`とし、`recommended`にせず利用者の明示選択を待つ。
+`PatternCandidate`は次の形式を使用する。`directorySegments`は推定した階層役割を共有の構造化モデルで返し、画面は`name`等の日本語表示文を解析してルールへ戻さない。候補IDは順位ではなく推定内容から安定生成する。既存資料があるのに推定自体ができない場合は`directorySegments: null`、`matchScore: null`、`courseSegmentIndex: null`、`requiresConfirmation: true`とする。推定結果を構造化モデルへ損失なく変換できない場合も`directorySegments: null`、`requiresConfirmation: true`として自動適用せず、一致度と科目位置は説明用の推定値として保持できる。既存資料がない新しい保存先は推定不能とは扱わず、利用者がルールビルダーで新規作成する。
 
 ```ts
 interface PatternCandidate {
@@ -297,6 +299,7 @@ interface PatternCandidate {
 	name: string;
 	description: string;
 	folders: string[];
+	directorySegments: StructuredRuleSegment[] | null;
 	courseSegmentIndex: number | null;
 	fileNameTemplate: string | null;
 	matchScore: number | null;
@@ -307,7 +310,68 @@ interface PatternCandidate {
 }
 ```
 
-`save_initial_setup`と`rebuild_library`の実行中は、`library-maintenance-progress`イベントで次の値を通知する。`completedCount`は同じフェーズ内で減少せず、成功・警告付き成功・失敗のいずれでも最後に`phase: "completed"`の終端イベントを送る。絶対パス、ファイル名、本文は含めない。
+初期セットアップと再セットアップ、拡張機能の常設ルール管理は、共有の構造化ルールモデルを使用する。`kind`は利用者向けの「年度」「学期」「科目」「課題」「授業回」「固定フォルダー名」へ対応し、`course`をちょうど1件必須とする。`fixed`だけが`value`を持ち、空値、絶対パス、UNCパス、`.`、`..`、パス区切り、Windows禁止文字・予約名、前後空白、内部トークンと解釈される波括弧を拒否する。`format`は「2026年」「2026年度」「第3回」のような既存表記を失わず往復するための内部メタデータであり、画面へ内部トークンを表示するためには使用しない。
+
+```ts
+interface StructuredRuleSegment {
+	kind: "year" | "term" | "course" | "assignment" | "section" | "fixed";
+	value?: string;
+	format?: "yearSuffix" | "academicYearSuffix" | "numbered";
+}
+```
+
+UIはこのモデルから実際のフォルダー名によるプレビューを作り、`{year}`、`{term}`、`{course}`等の保存用トークンを入力欄、ラベル、説明、プレビュー、エラーへ表示しない。`rule.template`への変換はAPI境界に閉じ込め、backendは従来どおり変換後テンプレートを再検証する。推定候補を編集画面へ反映するときも、日本語の表示名を解析せず、推定結果の階層役割を同じ構造化モデルへ変換する。既存テンプレートを構造化モデルへ損失なく変換できない場合は黙って書き換えず、現在値を維持したまま利用者の明示選択を求める。
+
+`get_saved_setup_configuration`と`save_setup_changes`は次の形式を使用する。`revision`は保存済み設定の同一性だけを表すopaque文字列であり、クライアントは内容を解析・生成しない。`courseOverrides`は初期／再セットアップが管理する選択だけを返し、常設ルール管理で利用者が作成した独立したコース別ルールを含めたり上書きしたりしない。
+
+```ts
+interface SetupPatternSelection {
+	id: string;
+	courseSegmentIndex: number | null;
+}
+
+interface SetupRuleSelection {
+	id: string;
+	template: string;
+}
+
+interface SetupCourseOverrideSelection {
+	courseName: string;
+	enabled: boolean;
+}
+
+interface SavedSetupConfiguration {
+	revision: string;
+	savedAt: string;
+	baseFolderPath: string;
+	pattern: SetupPatternSelection;
+	rule: SetupRuleSelection;
+	courseOverrides: SetupCourseOverrideSelection[];
+}
+
+interface SaveSetupChangesRequest {
+	expectedRevision: string;
+	path: string;
+	pattern: SetupPatternSelection;
+	rule: SetupRuleSelection;
+	courseOverrides: SetupCourseOverrideSelection[];
+}
+
+interface SaveSetupChangesResponse {
+	ok: true;
+	rootChanged: boolean;
+	rebasedFileCount: number;
+	maintenance: LibraryMaintenanceSummary;
+}
+```
+
+`get_saved_setup_configuration`は、初期設定がまだ保存されていない場合は`null`を返す。保存済み印があるのに保存ルートやグローバルルール等の必須値が欠ける場合は破損状態としてエラーにし、不完全な値を`null`や設定済み状態へ読み替えない。設定済みの場合は`app_settings`、`global_rule`、初期セットアップ管理のコース別選択を同じSQLiteスナップショットから読み取り、完全な値だけを返す。`revision`は保存日時だけに依存せず、少なくとも保存ルート、推定候補、科目位置、グローバルルール、初期セットアップ管理のコース別選択が変われば異なる値になる。これにより、再セットアップ画面を開いた後に拡張機能側でルールが更新された場合も、古い画面から黙って上書きしない。
+
+`save_setup_changes`は`expectedRevision`を現在の保存済み設定と照合し、一致しない場合は`SETUP_CONFLICT`として何も変更しない。クライアントは最新設定を再取得し、変更内容を利用者へ再確認する。リクエストの保存先、推定候補、ルール、コース別選択は書き込み前にすべて検証する。保存先が変わる場合は、旧保存ルート配下の`files.saved_path`だけを同じ相対パスで新しい保存ルートへ付け替え、対象行を実体未確認・未索引として扱う。保存ルート、推定結果、グローバルルール、初期セットアップ管理のコース別選択、保存日時、SQLite内のパス情報は1つのトランザクションで更新し、途中失敗時はすべて更新前へ戻す。保存済みの実資料を移動・削除・改名せず、新しい保存先へファイルやフォルダーを自動作成しない。
+
+設定トランザクションの確定後に、必要な保存ルートの再走査と検索・整理情報の更新を行う。後処理だけが失敗した場合も設定保存そのものを失敗扱いに戻さず、`maintenance.warnings`と警告付き完了で次の操作を示す。クライアントは保存済み投影との差分がない場合に保存操作を無効化し、無条件な再保存・再走査を開始しない。
+
+`save_initial_setup`、`save_setup_changes`、`rebuild_library`の実行中は、`library-maintenance-progress`イベントで次の値を通知する。`completedCount`は同じフェーズ内で減少せず、成功・警告付き成功・失敗のいずれでも最後に`phase: "completed"`の終端イベントを1回送る。コマンドが設定保存を成功、後処理を警告として返す場合、終端イベントも`completedWithWarnings`とし、途中の内部処理失敗を最終`failed`として残さない。絶対パス、ファイル名、本文は含めない。
 
 ```ts
 interface LibraryMaintenanceProgress {
@@ -319,15 +383,19 @@ interface LibraryMaintenanceProgress {
 }
 ```
 
+クライアントは実行中だけで進捗表示を破棄せず、終端イベントと`maintenance`を同じ表示領域へ残す。`completed`では完了、`completedWithWarnings`では警告件数と次の確認操作、`failed`では同じ確定内容で再試行できる操作を表示する。現行の保存・再構築処理は途中中止に対応しないため、実行中は中止できないことを示し、同じ操作の二重実行を拒否する。コマンド呼び出しが終端イベント前に拒否された場合も、クライアントは同じ領域を失敗状態へ遷移させる。
+
 `pick_base_folder` 等の実体は `crates/engine-core` の `ScanEngine` を呼び出す（`apps/desktop/src-tauri` と `apps/native-host` の両方が同じ `crates/engine-core` に依存する設計。`docs/仕様書.md` 3.3節）。
 
 `save_initial_setup`は、選択フォルダーの実体確認と正規化、ルールテンプレート検証を行った後、`app_settings.base_folder_path`、推定候補ID、推定パターン内の科目セグメント位置、初期コース別候補、`global_rule`、保存日時を1つのSQLiteトランザクションで保存する。続けて保存ルートを走査し、既存資料をSQLiteへ登録して本文検索索引、ルール適合注釈、重複候補を作成する。初期走査と再走査では仮想環境、依存パッケージ、VCS、OS・ツールキャッシュ、構造から判定できるビルド生成物を探索しない。除外フォルダー外のソース・データ・設定・バイナリは拡張子だけで除外せず、本文抽出非対応のバイナリはハッシュ登録までとする。既存ファイルの移動・削除は行わず、取り込み件数と警告は`maintenance`で画面へ返す。設定確定後の走査または初期コース別例外の同期だけが失敗した場合、保存済み設定を失敗扱いにせず`maintenance.warnings`へ追加し、利用者が前の画面へ戻って同じ設定を再保存できるようにする。`get_setup_status`は保存日時だけでなく保存ルートとグローバルルールが揃っている場合に限って`done: true`を返し、localStorageやIndexedDBを完了判定に使わない。
+
+`save_initial_setup`は未設定状態の初回確定専用とし、設定済みの変更には再利用しない。設定済み画面は`get_saved_setup_configuration`で現在値を読み込み、利用者が変更点を確認した後だけ`save_setup_changes`を呼ぶ。初回向けの拡張機能導入確認は再セットアップ完了条件へ含めない。
 
 `search`の`page`は本文が一致したPDF内の1始まりページ番号、`pageCount`は索引作成時に同じPDFページツリーから取得した総ページ数である。backendは`page >= 1`かつ`page <= pageCount`を満たす値だけを返し、整合しない古い索引値は`page: null`へ落とす。拡張機能は総ページ数がある場合に`page / pageCount`を表示し、内部の抽出方式や索引フェーズ名は利用者へ表示しない。
 
 `rebuild_library`は利用者が復旧画面のボタンを押した場合だけ実行し、Native Messagingの`rebuildLibrary`と同じ`LibraryMaintenanceSummary`を返す。保存ルート上で見つからないSQLite行は`files.missing_at`を付けて履歴として保持し、通常のダッシュボード、ルール違反、重複候補、全文検索から除外する。再び同じパスに現れた場合は欠損状態を解除して再索引する。`missingFileCount`は今回の走査後も見つからない登録済み資料の件数であり、利用者の資料ファイルを移動・削除しない。全文索引を明示的に作り直す復旧操作では`rebuildIndex: true`を渡す。走査中はブラウザ側の保存処理と競合しないよう、画面で資料保存の完了とブラウザ終了を案内する。
 
-`change_library_root`は別PCで作成したバックアップなど、保存済みの絶対パスが現在のPCで無効な場合にも使用できる。OSネイティブのフォルダーダイアログと確認画面を使い、既存ルールは変更しない。旧ルート配下のファイル行は同じ相対パスで新ルートへ付け替え、実体未確認・未索引としてから再走査と全文索引再構築を行うが、資料ファイル自体は移動・削除しない。変更後の再構築だけに失敗した場合は`changed: true`と`maintenanceError`を返す。
+`change_library_root`は別PCで作成したバックアップなど、保存済みの絶対パスが現在のPCで無効な場合に、既存ルールを保ったまま保存ルートだけを復旧する専用操作とする。OSネイティブのフォルダーダイアログと確認画面を使い、旧ルート配下のファイル行は同じ相対パスで新ルートへ付け替え、実体未確認・未索引としてから再走査と全文索引再構築を行うが、資料ファイル自体は移動・削除しない。変更後の再構築だけに失敗した場合は`changed: true`と`maintenanceError`を返す。保存先とルール等をまとめて変更する再セットアップではこのコマンドを順番に組み合わせず、`save_setup_changes`の単一トランザクションを使用する。
 
 `export_backup`はOSネイティブの保存ダイアログを使用し、既存ファイル、使用中DBと同じパスへの上書きを拒否する。`import_backup`はOSネイティブの選択ダイアログに続いて、SQLite正本を置き換える旨の確認ダイアログを必ず表示する。バックアップを検証して復元できた後は保存ルートを再走査して全文索引を再構築する。復元自体が成功し再構築だけに失敗した場合は`imported: true`と利用者向け`maintenanceError`を返し、復元失敗と誤表示しない。起動時にSQLiteを開けない場合も同じコマンドを使用でき、開けなかったDBと`-wal`／`-shm`／`-journal`を別名の復旧用フォルダーへ保全してから、検証済みバックアップを同じAppStateへ接続する。この場合だけ保全先を`recoveryCopyPath`で返す。
 
@@ -378,6 +446,7 @@ interface ExtensionRecoveryStatus {
 | `DB_ERROR`           | SQLiteへの読み書きに失敗                            |
 | `IO_ERROR`           | ファイル保存・読み込みに失敗                       |
 | `RULE_CONFLICT`      | ルール定義が矛盾している                         |
+| `SETUP_CONFLICT`     | 読み込み後に保存済み設定が更新され、再読込と再確認が必要          |
 | `MOODLE_UNREACHABLE` | Moodle側の情報取得に失敗（拡張機能側で発生、ホストには関係しない） |
 | `INTERNAL`           | 想定外のエラー                              |
 

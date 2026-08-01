@@ -20,6 +20,28 @@ export type InitialSetupPayload = {
 	courseOverrides: CourseOverride[];
 };
 
+export type SavedSetupConfiguration = {
+	revision: string;
+	savedAt: string;
+	baseFolderPath: string;
+	pattern: {
+		id: string;
+		courseSegmentIndex: number | null;
+	};
+	rule: {
+		id: string;
+		template: string;
+	};
+	courseOverrides: Array<{
+		courseName: string;
+		enabled: true;
+	}>;
+};
+
+export type SetupChangesPayload = InitialSetupPayload & {
+	expectedRevision: string;
+};
+
 export type SetupStatus = {
 	done: boolean;
 	savedAt?: string;

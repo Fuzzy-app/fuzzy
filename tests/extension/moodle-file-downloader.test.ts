@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	downloadMoodleFile,
 	downloadMoodleFiles,
 	transferFileId,
 } from "../../apps/extension/src/lib/moodle/fileDownloader";
@@ -7,6 +8,48 @@ import {
 const ORIGIN = "https://moodle.example";
 
 describe("Moodle資料本体の取得", () => {
+	test("資料ページが埋め込みHTMLを返す場合は同一サイトのPDF本体を取得する", async () => {
+		const requestedUrls: string[] = [];
+		const fileUrl = `${ORIGIN}/mod/resource/view.php?id=42`;
+		const pluginFileUrl = `${ORIGIN}/pluginfile.php/10/mod_resource/content/1/lecture.pdf?forcedownload=1`;
+		const fetcher = (async (input: RequestInfo | URL) => {
+			const url = String(input);
+			requestedUrls.push(url);
+			if (url === fileUrl) {
+				return new Response(
+					`<!doctype html><object data="/pluginfile.php/10/mod_resource/content/1/lecture.pdf?forcedownload=1&amp;x=2"></object>`,
+					{ status: 200, headers: { "content-type": "text/html" } },
+				);
+			}
+			return new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]), {
+				status: 200,
+				headers: {
+					"content-type": "application/pdf",
+					"content-disposition": 'attachment; filename="lecture.pdf"',
+				},
+			});
+		}) as typeof fetch;
+
+		const result = await downloadMoodleFile(
+			{
+				title: "講義資料",
+				url: fileUrl,
+				moodleFileId: "42",
+				sectionTitle: null,
+				mimeHint: "pdf",
+			},
+			ORIGIN,
+			{ fetcher },
+		);
+
+		expect(requestedUrls).toEqual([fileUrl, `${pluginFileUrl}&x=2`]);
+		expect(result).toMatchObject({
+			fileId: "42",
+			fileName: "lecture.pdf",
+			mimeType: "application/pdf",
+		});
+	});
+
 	test("同一オリジンのDOCXを認証付きで取得し、Cookieを含めず内容だけを返す", async () => {
 		const calls: RequestInit[] = [];
 		const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {

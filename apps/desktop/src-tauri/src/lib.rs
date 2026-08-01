@@ -7,12 +7,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use engine_core::index::{resolve_index_path, DefaultIndexEngine, IndexEngine};
 use engine_core::library::{
-	LibraryMaintenance, LibraryMaintenanceProgress, LibraryMaintenanceSummary,
-	LibraryMaintenanceWarning,
+	LibraryMaintenance, LibraryMaintenancePhase, LibraryMaintenanceProgress,
+	LibraryMaintenanceProgressState, LibraryMaintenanceSummary, LibraryMaintenanceWarning,
 };
 use engine_core::scan::{DefaultScanEngine, ScanEngine};
 use engine_core::types::FileEntry;
-use engine_core::{resolve_db_path, Database, ExtensionRecoveryStatus, ExtensionSetupStatus};
+use engine_core::{
+	resolve_db_path, Database, EngineError, ExtensionRecoveryStatus, ExtensionSetupStatus,
+};
 use native_host_installation::NativeHostInstallationStatus;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -34,14 +36,14 @@ struct DatabaseRuntimeState {
 impl DatabaseRuntimeState {
 	fn ready(&self) -> Result<&Database, String> {
 		self.database.as_ref().ok_or_else(|| {
-			"SQLite正本を開けないため、この操作は実行できません。画面からバックアップを復元するか、破損DBを退避して新しく開始してください。"
+			"保存済みの設定を開けないため、この操作は実行できません。画面からバックアップを復元するか、現在の設定を保全して新しく開始してください。"
 				.to_string()
 		})
 	}
 
 	fn ready_mut(&mut self) -> Result<&mut Database, String> {
 		self.database.as_mut().ok_or_else(|| {
-			"SQLite正本を開けないため、この操作は実行できません。画面からバックアップを復元するか、破損DBを退避して新しく開始してください。"
+			"保存済みの設定を開けないため、この操作は実行できません。画面からバックアップを復元するか、現在の設定を保全して新しく開始してください。"
 				.to_string()
 		})
 	}
@@ -56,7 +58,7 @@ struct IndexRuntimeState {
 impl IndexRuntimeState {
 	fn ready_mut(&mut self) -> Result<&mut DefaultIndexEngine, String> {
 		self.engine.as_mut().ok_or_else(|| {
-			"検索索引を開けないため、この操作は実行できません。画面から検索索引を再構築してください。"
+			"資料の検索・整理情報を開けないため、この操作は実行できません。画面から資料情報を作り直してください。"
 				.to_string()
 		})
 	}
@@ -76,14 +78,14 @@ struct ApplicationRecoveryStatus {
 	search_index: RecoveryComponentStatus,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PatternSelection {
 	id: String,
 	course_segment_index: Option<usize>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuleSelection {
 	id: String,
@@ -99,11 +101,22 @@ struct CourseOverrideSelection {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct StructuredRuleSegment {
+	kind: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	value: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	format: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PatternCandidate {
 	id: String,
 	name: String,
 	description: String,
 	folders: Vec<String>,
+	directory_segments: Option<Vec<StructuredRuleSegment>>,
 	course_segment_index: Option<usize>,
 	file_name_template: Option<String>,
 	match_score: Option<u8>,
@@ -124,6 +137,26 @@ struct SetupStatus {
 #[derive(Debug, Clone, Serialize)]
 struct InitialSetupResponse {
 	ok: bool,
+	maintenance: LibraryMaintenanceSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedSetupConfiguration {
+	revision: String,
+	saved_at: String,
+	base_folder_path: String,
+	pattern: PatternSelection,
+	rule: RuleSelection,
+	course_overrides: Vec<CourseOverrideSelection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupChangesResponse {
+	ok: bool,
+	root_changed: bool,
+	rebased_file_count: usize,
 	maintenance: LibraryMaintenanceSummary,
 }
 
@@ -234,6 +267,7 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 					"年度・学期・科目の役割を一意に判定できないため、科目を自動登録しません。"
 						.to_string(),
 				folders: representative_folders(&snapshot.entries),
+				directory_segments: None,
 				course_segment_index: None,
 				file_name_template: None,
 				match_score: None,
@@ -250,6 +284,7 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 			name: "新しい保存先".to_string(),
 			description: "既存の並びに依存せず、選択した初期ルールで整理を始めます。".to_string(),
 			folders,
+			directory_segments: None,
 			course_segment_index: None,
 			file_name_template: None,
 			match_score: Some(100),
@@ -260,12 +295,18 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 		}]);
 	}
 
-	Ok(guesses
+	let mut candidates = guesses
 		.into_iter()
-		.enumerate()
-		.map(|(index, guess)| {
+		.map(|guess| {
 			let template = guess.directory_template;
 			let file_name_template = guess.file_name_template;
+			let id = stable_pattern_candidate_id(
+				&template,
+				file_name_template.as_deref(),
+				guess.course_segment_index,
+			);
+			let directory_segments = structured_directory_segments(&template);
+			let requires_confirmation = directory_segments.is_none();
 			let file_name_description = file_name_template
 				.as_deref()
 				.map(display_file_name_pattern)
@@ -276,7 +317,7 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 				name.push_str(file_name_description);
 			}
 			PatternCandidate {
-				id: format!("estimated-{}", index + 1),
+				id,
 				name,
 				description: format!(
 					"既存ファイルから推定した構成です。ファイル名: {file_name_description}"
@@ -286,6 +327,7 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 					.into_iter()
 					.map(|path| path.to_string_lossy().replace('\\', "/"))
 					.collect(),
+				directory_segments,
 				course_segment_index: Some(guess.course_segment_index),
 				file_name_template,
 				match_score: Some((guess.confidence.clamp(0.0, 1.0) * 100.0).round() as u8),
@@ -296,11 +338,18 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 					guess.matched_count,
 					snapshot.warnings.len()
 				),
-				recommended: index == 0,
-				requires_confirmation: false,
+				recommended: false,
+				requires_confirmation,
 			}
 		})
-		.collect())
+		.collect::<Vec<_>>();
+	if let Some(candidate) = candidates
+		.iter_mut()
+		.find(|candidate| !candidate.requires_confirmation)
+	{
+		candidate.recommended = true;
+	}
+	Ok(candidates)
 }
 
 #[tauri::command]
@@ -314,14 +363,18 @@ async fn save_initial_setup(
 	run_blocking_command(move || {
 		let state = app.state::<AppState>();
 		let mut progress = |event| emit_library_maintenance_progress(&app, event);
-		save_initial_setup_blocking(
+		let result = save_initial_setup_blocking(
 			path,
 			pattern,
 			rule,
 			course_overrides,
 			state.inner(),
 			&mut progress,
-		)
+		);
+		if result.is_err() {
+			emit_setup_failure(&mut progress);
+		}
+		result
 	})
 	.await
 }
@@ -334,25 +387,8 @@ fn save_initial_setup_blocking(
 	state: &AppState,
 	progress: &mut dyn FnMut(LibraryMaintenanceProgress),
 ) -> Result<InitialSetupResponse, String> {
-	if course_overrides.len() > 32
-		|| course_overrides
-			.iter()
-			.any(|item| item.course_name.trim().is_empty() || item.course_name.len() > 256)
-	{
-		return Err("コース別候補の内容が不正です。".to_string());
-	}
-	let enabled_overrides = course_overrides
-		.into_iter()
-		.filter(|item| item.enabled)
-		.collect::<Vec<_>>();
-	let initial_override_course_names = enabled_overrides
-		.iter()
-		.map(|item| item.course_name.trim().to_string())
-		.collect::<Vec<_>>();
-	let overrides_json = serde_json::to_string(&enabled_overrides).map_err(|error| {
-		eprintln!("初期セットアップのコース別候補を変換できません: {error}");
-		"初期設定を保存できませんでした。".to_string()
-	})?;
+	let (initial_override_course_names, overrides_json) =
+		prepare_course_overrides(course_overrides)?;
 	let mut database_state = state.database.lock().map_err(|_| {
 		eprintln!("初期セットアップ保存時にSQLiteの状態ロックが破損しています");
 		"初期設定を保存できませんでした。Fuzzyを再起動してください。".to_string()
@@ -371,14 +407,66 @@ fn save_initial_setup_blocking(
 			eprintln!("初期セットアップのSQLite保存に失敗しました: {error}");
 			"初期設定を保存できませんでした。保存先とルールを確認してください。".to_string()
 		})?;
-	let mut maintenance = match state.index_engine.lock() {
+	let mut maintenance = reconcile_after_setup_save(database, state, false, progress);
+	synchronize_setup_course_overrides(database, &initial_override_course_names, &mut maintenance);
+	emit_setup_completion(progress, &maintenance);
+	Ok(InitialSetupResponse {
+		ok: true,
+		maintenance,
+	})
+}
+
+fn prepare_course_overrides(
+	course_overrides: Vec<CourseOverrideSelection>,
+) -> Result<(Vec<String>, String), String> {
+	if course_overrides.len() > 32
+		|| course_overrides
+			.iter()
+			.any(|item| item.course_name.trim().is_empty() || item.course_name.len() > 256)
+	{
+		return Err("コース別候補の内容が不正です。".to_string());
+	}
+	let mut seen_course_names = BTreeSet::new();
+	let mut enabled_overrides = Vec::new();
+	for item in course_overrides.into_iter().filter(|item| item.enabled) {
+		let course_name = item.course_name.trim().to_string();
+		if seen_course_names.insert(course_name.clone()) {
+			enabled_overrides.push(CourseOverrideSelection {
+				course_name,
+				enabled: true,
+			});
+		}
+	}
+	let initial_override_course_names = enabled_overrides
+		.iter()
+		.map(|item| item.course_name.clone())
+		.collect::<Vec<_>>();
+	let overrides_json = serde_json::to_string(&enabled_overrides).map_err(|error| {
+		eprintln!("初期セットアップのコース別候補を変換できません: {error}");
+		"初期設定を保存できませんでした。".to_string()
+	})?;
+	Ok((initial_override_course_names, overrides_json))
+}
+
+fn reconcile_after_setup_save(
+	database: &mut Database,
+	state: &AppState,
+	rebuild_index: bool,
+	progress: &mut dyn FnMut(LibraryMaintenanceProgress),
+) -> LibraryMaintenanceSummary {
+	let mut forward_running_progress = |event: LibraryMaintenanceProgress| {
+		if event.phase != LibraryMaintenancePhase::Completed {
+			progress(event);
+		}
+	};
+	match state.index_engine.lock() {
 		Ok(mut index_state) => {
 			let maintenance_result = match index_state.ready_mut() {
 				Ok(index_engine) => LibraryMaintenance::reconcile_with_progress(
 					database,
 					index_engine,
-					false,
-					progress,
+					rebuild_index,
+					&mut forward_running_progress,
 				),
 				Err(error) => Err(engine_core::EngineError::Index { message: error }),
 			};
@@ -394,7 +482,7 @@ fn save_initial_setup_blocking(
 						warnings: vec![LibraryMaintenanceWarning {
 							path: ".".to_string(),
 							message:
-								"初期設定は保存しましたが、既存資料を取り込めませんでした。セットアップ完了後、保存先を確認して再スキャンしてください。"
+								"設定は保存しましたが、資料の情報を準備できませんでした。保存先を確認し、もう一度実行してください。"
 									.to_string(),
 						}],
 						..Default::default()
@@ -408,28 +496,57 @@ fn save_initial_setup_blocking(
 				warnings: vec![LibraryMaintenanceWarning {
 					path: ".".to_string(),
 					message:
-						"初期設定は保存しましたが、検索索引の状態を更新できませんでした。Fuzzyを再起動してください。"
+						"設定は保存しましたが、資料の検索・整理情報を準備できませんでした。Fuzzyを再起動し、もう一度実行してください。"
 							.to_string(),
 				}],
 				..Default::default()
 			}
 		}
-	};
-	if let Err(error) =
-		database.synchronize_initial_course_overrides(&initial_override_course_names)
+	}
+}
+
+fn emit_setup_completion(
+	progress: &mut dyn FnMut(LibraryMaintenanceProgress),
+	maintenance: &LibraryMaintenanceSummary,
+) {
+	progress(LibraryMaintenanceProgress {
+		phase: LibraryMaintenancePhase::Completed,
+		state: if maintenance.warnings.is_empty() {
+			LibraryMaintenanceProgressState::Completed
+		} else {
+			LibraryMaintenanceProgressState::CompletedWithWarnings
+		},
+		completed_count: maintenance.scanned_file_count,
+		total_count: Some(maintenance.scanned_file_count),
+		warning_count: maintenance.warnings.len(),
+	});
+}
+
+fn emit_setup_failure(progress: &mut dyn FnMut(LibraryMaintenanceProgress)) {
+	progress(LibraryMaintenanceProgress {
+		phase: LibraryMaintenancePhase::Completed,
+		state: LibraryMaintenanceProgressState::Failed,
+		completed_count: 0,
+		total_count: None,
+		warning_count: 0,
+	});
+}
+
+fn synchronize_setup_course_overrides(
+	database: &mut Database,
+	initial_override_course_names: &[String],
+	maintenance: &mut LibraryMaintenanceSummary,
+) {
+	if let Err(error) = database.synchronize_initial_course_overrides(initial_override_course_names)
 	{
 		eprintln!("初期セットアップのコース別例外をSQLiteへ保存できませんでした: {error}");
 		maintenance.warnings.push(LibraryMaintenanceWarning {
 			path: ".".to_string(),
 			message:
-				"初期設定は保存しましたが、コース別例外を反映できませんでした。前の画面へ戻って保存を再試行してください。"
+				"設定は保存しましたが、授業ごとの設定を反映できませんでした。前の画面へ戻り、もう一度保存してください。"
 					.to_string(),
 		});
 	}
-	Ok(InitialSetupResponse {
-		ok: true,
-		maintenance,
-	})
 }
 
 #[tauri::command]
@@ -455,6 +572,146 @@ fn get_setup_status_blocking(state: &AppState) -> Result<SetupStatus, String> {
 		done: saved_at.is_some(),
 		saved_at,
 	})
+}
+
+#[tauri::command]
+async fn get_saved_setup_configuration(
+	app: AppHandle,
+) -> Result<Option<SavedSetupConfiguration>, String> {
+	run_blocking_command(move || {
+		let state = app.state::<AppState>();
+		get_saved_setup_configuration_blocking(state.inner())
+	})
+	.await
+}
+
+fn get_saved_setup_configuration_blocking(
+	state: &AppState,
+) -> Result<Option<SavedSetupConfiguration>, String> {
+	let database_state = state.database.lock().map_err(|_| {
+		eprintln!("保存済みセットアップ取得時にSQLiteの状態ロックが破損しています");
+		"保存済みの設定を読み込めませんでした。Fuzzyを再起動してください。".to_string()
+	})?;
+	let database = database_state.ready()?;
+	let Some(record) = database.saved_setup_configuration().map_err(|error| {
+		eprintln!("保存済みセットアップをSQLiteから取得できませんでした: {error}");
+		"保存済みの設定を読み込めませんでした。".to_string()
+	})?
+	else {
+		return Ok(None);
+	};
+	let stored_overrides =
+		serde_json::from_str::<Vec<CourseOverrideSelection>>(&record.course_overrides_json)
+			.map_err(|error| {
+				eprintln!("保存済みセットアップの授業別候補を読み取れませんでした: {error}");
+				"保存済みの授業別設定を読み込めませんでした。".to_string()
+			})?;
+	let (selected_course_names, _) = prepare_course_overrides(stored_overrides)?;
+	let course_overrides = selected_course_names
+		.into_iter()
+		.map(|course_name| CourseOverrideSelection {
+			course_name,
+			enabled: true,
+		})
+		.collect();
+
+	Ok(Some(SavedSetupConfiguration {
+		revision: record.revision,
+		saved_at: record.saved_at,
+		base_folder_path: record.base_folder_path.to_string_lossy().into_owned(),
+		pattern: PatternSelection {
+			id: record.scan_pattern_id,
+			course_segment_index: record.course_segment_index,
+		},
+		rule: RuleSelection {
+			id: record.rule_key,
+			template: record.rule_template,
+		},
+		course_overrides,
+	}))
+}
+
+#[tauri::command]
+async fn save_setup_changes(
+	expected_revision: String,
+	path: String,
+	pattern: PatternSelection,
+	rule: RuleSelection,
+	course_overrides: Vec<CourseOverrideSelection>,
+	app: AppHandle,
+) -> Result<SetupChangesResponse, String> {
+	run_blocking_command(move || {
+		let state = app.state::<AppState>();
+		let mut progress = |event| emit_library_maintenance_progress(&app, event);
+		let result = save_setup_changes_blocking(
+			expected_revision,
+			path,
+			pattern,
+			rule,
+			course_overrides,
+			state.inner(),
+			&mut progress,
+		);
+		if result.is_err() {
+			emit_setup_failure(&mut progress);
+		}
+		result
+	})
+	.await
+}
+
+fn save_setup_changes_blocking(
+	expected_revision: String,
+	path: String,
+	pattern: PatternSelection,
+	rule: RuleSelection,
+	course_overrides: Vec<CourseOverrideSelection>,
+	state: &AppState,
+	progress: &mut dyn FnMut(LibraryMaintenanceProgress),
+) -> Result<SetupChangesResponse, String> {
+	let (initial_override_course_names, overrides_json) =
+		prepare_course_overrides(course_overrides)?;
+	let mut database_state = state.database.lock().map_err(|_| {
+		eprintln!("再セットアップ保存時にSQLiteの状態ロックが破損しています");
+		"変更内容を保存できませんでした。Fuzzyを再起動してください。".to_string()
+	})?;
+	let database = database_state.ready_mut()?;
+	let update = database
+		.update_setup_configuration(
+			&expected_revision,
+			Path::new(&path),
+			&rule.id,
+			&rule.template,
+			&pattern.id,
+			pattern.course_segment_index,
+			&overrides_json,
+		)
+		.map_err(|error| {
+			eprintln!("再セットアップ内容をSQLiteへ保存できませんでした: {error}");
+			setup_save_error_code(&error).to_string()
+		})?;
+	let mut maintenance =
+		reconcile_after_setup_save(database, state, update.root_changed, progress);
+	synchronize_setup_course_overrides(database, &initial_override_course_names, &mut maintenance);
+	emit_setup_completion(progress, &maintenance);
+
+	Ok(SetupChangesResponse {
+		ok: true,
+		root_changed: update.root_changed,
+		rebased_file_count: update.rebased_file_count,
+		maintenance,
+	})
+}
+
+fn setup_save_error_code(error: &EngineError) -> &'static str {
+	match error {
+		EngineError::SetupConflict { .. } => "SETUP_CONFLICT",
+		EngineError::RuleConflict { .. } => "RULE_CONFLICT",
+		EngineError::InvalidPath { .. } | EngineError::Io(_) | EngineError::PathIo { .. } => {
+			"INVALID_PATH"
+		}
+		_ => "SETUP_SAVE_FAILED",
+	}
 }
 
 #[tauri::command]
@@ -529,7 +786,7 @@ fn get_application_recovery_status_blocking(
 	})?;
 	let index_state = state.index_engine.lock().map_err(|_| {
 		eprintln!("アプリ復旧状態取得時に全文索引の状態ロックが破損しています");
-		"検索索引の状態を確認できませんでした。Fuzzyを再起動してください。".to_string()
+		"資料情報の状態を確認できませんでした。Fuzzyを再起動してください。".to_string()
 	})?;
 	let index_metadata_exists = index_state
 		.path
@@ -541,16 +798,16 @@ fn get_application_recovery_status_blocking(
 	let database = if database_state.database.is_some() {
 		RecoveryComponentStatus {
 			state: "ready",
-			message: "SQLite正本を利用できます。".to_string(),
+			message: "保存済みの設定を利用できます。".to_string(),
 		}
 	} else {
 		RecoveryComponentStatus {
 			state: "recoveryRequired",
 			message: if database_state.path.is_some() {
-				"SQLite正本を開けませんでした。バックアップから復元するか、破損DBを別名で保全して新しく開始してください。"
+				"保存済みの設定を開けませんでした。バックアップから復元するか、現在の設定を別の場所へ保全して新しく開始してください。"
 					.to_string()
 			} else {
-				"SQLite正本の保存先を決定できませんでした。Windowsのアプリデータ保存先を確認してください。"
+				"設定の保存場所を確認できませんでした。Windowsのアプリデータ保存先を確認してください。"
 					.to_string()
 			},
 		}
@@ -559,24 +816,24 @@ fn get_application_recovery_status_blocking(
 		RecoveryComponentStatus {
 			state: "recoveryRequired",
 			message:
-				"検索索引を開けませんでした。SQLite正本と資料は保持したまま索引を再生成できます。"
+				"資料の検索・整理情報を開けませんでした。保存済みの設定と資料は保持したまま作り直せます。"
 					.to_string(),
 		}
 	} else if index_state.needs_rebuild || database_needs_index_rebuild {
 		RecoveryComponentStatus {
 			state: "needsRebuild",
 			message: if database_needs_index_rebuild {
-				"SQLite正本に未反映の資料があります。SQLite正本から検索索引を再構築してください。"
+				"検索・整理情報へ未反映の資料があります。保存済みの設定と資料から情報を作り直してください。"
 					.to_string()
 			} else {
-				"検索索引の保存領域は復旧済みです。SQLite正本から索引を再構築してください。"
+				"検索・整理情報の保存領域は復旧済みです。保存済みの設定と資料から情報を作り直してください。"
 					.to_string()
 			},
 		}
 	} else {
 		RecoveryComponentStatus {
 			state: "ready",
-			message: "検索索引を利用できます。".to_string(),
+			message: "資料の検索・整理情報を利用できます。".to_string(),
 		}
 	};
 	Ok(ApplicationRecoveryStatus {
@@ -603,7 +860,7 @@ fn get_native_host_installation_status_blocking(
 		.native_host_installation
 		.lock()
 		.map(|status| status.clone())
-		.map_err(|_| "Native Messagingホストの状態を確認できませんでした。".to_string())
+		.map_err(|_| "拡張機能との接続状態を確認できませんでした。".to_string())
 }
 
 #[tauri::command]
@@ -624,7 +881,7 @@ fn repair_native_host_installation_blocking(
 	let mut current = state
 		.native_host_installation
 		.lock()
-		.map_err(|_| "Native Messagingホストの修復状態を保存できませんでした。".to_string())?;
+		.map_err(|_| "拡張機能との接続を修復できませんでした。".to_string())?;
 	*current = status.clone();
 	Ok(status)
 }
@@ -654,7 +911,7 @@ fn rebuild_library_blocking(
 	let database = database_state.ready_mut()?;
 	let mut index_state = state.index_engine.lock().map_err(|_| {
 		eprintln!("ライブラリ再構築時に全文索引の状態ロックが破損しています");
-		"検索索引を再構築できませんでした。Fuzzyを再起動してください。".to_string()
+		"資料情報を作り直せませんでした。Fuzzyを再起動してください。".to_string()
 	})?;
 	if index_state.engine.is_none() {
 		if let Some(quarantine_path) = repair_index_storage(&mut index_state)? {
@@ -668,7 +925,7 @@ fn rebuild_library_blocking(
 		.initial_setup_saved_at()
 		.map_err(|error| {
 			eprintln!("検索索引復旧時に初期設定状態を確認できませんでした: {error}");
-			"検索索引を再構築できませんでした。".to_string()
+			"資料情報を作り直せませんでした。".to_string()
 		})?
 		.is_none()
 	{
@@ -723,7 +980,7 @@ fn change_library_root_blocking(
 	let confirmed = app
 		.dialog()
 		.message(
-			"保存先の設定だけを選択したフォルダーへ変更します。既存ルールは保持し、資料ファイルは移動・削除しません。続けて再スキャンと検索索引の再構築を行います。続行しますか？",
+			"保存先の設定だけを選択したフォルダーへ変更します。既存ルールは保持し、資料ファイルは移動・削除しません。続けて資料の検索・整理情報を作り直します。続行しますか？",
 		)
 		.title("保存先を変更")
 		.kind(MessageDialogKind::Warning)
@@ -782,7 +1039,7 @@ fn change_library_root_blocking(
 				rebased_file_count,
 				maintenance: None,
 				maintenance_error: Some(
-					"保存先の変更は完了しましたが、再スキャンと検索索引の再構築に失敗しました。ブラウザを閉じ、選択したフォルダーを確認して再構築を実行してください。"
+					"保存先の変更は完了しましたが、資料情報を作り直せませんでした。ブラウザを閉じ、選択したフォルダーを確認して「資料情報を作り直す」を実行してください。"
 						.to_string(),
 				),
 			})
@@ -806,7 +1063,7 @@ fn export_backup_blocking(
 	let selected = app
 		.dialog()
 		.file()
-		.add_filter("Fuzzy SQLiteバックアップ", &["sqlite3", "db"])
+		.add_filter("Fuzzy バックアップ", &["sqlite3", "db"])
 		.set_file_name("Fuzzy-backup.sqlite3")
 		.blocking_save_file();
 	let Some(selected) = selected else {
@@ -851,7 +1108,7 @@ fn import_backup_blocking(
 	let selected = app
 		.dialog()
 		.file()
-		.add_filter("Fuzzy SQLiteバックアップ", &["sqlite3", "db"])
+		.add_filter("Fuzzy バックアップ", &["sqlite3", "db"])
 		.blocking_pick_file();
 	let Some(selected) = selected else {
 		return Ok(cancelled_backup_import());
@@ -860,7 +1117,7 @@ fn import_backup_blocking(
 	let confirmed = app
 		.dialog()
 		.message(
-			"現在のFuzzyデータベースを選択したバックアップで置き換えます。保存済みの資料ファイルは移動・削除しません。続行しますか？",
+			"現在のFuzzyの設定と履歴を、選択したバックアップの内容で置き換えます。保存済みの資料ファイルは移動・削除しません。続行しますか？",
 		)
 		.title("バックアップから復元")
 		.kind(MessageDialogKind::Warning)
@@ -886,7 +1143,7 @@ fn import_backup_blocking(
 					"SQLiteバックアップ {} の検証または復元に失敗しました: {error}",
 					source.display()
 				);
-				"バックアップから復元できませんでした。Fuzzyが書き出したSQLiteファイルか確認してください。"
+				"バックアップから復元できませんでした。Fuzzyが書き出したバックアップか確認してください。"
 					.to_string()
 			})?;
 		None
@@ -909,7 +1166,7 @@ fn import_backup_blocking(
 					.map(|path| path.to_string_lossy().into_owned()),
 				maintenance: None,
 				maintenance_error: Some(
-					"バックアップの復元は完了しましたが、検索索引の状態を更新できませんでした。Fuzzyを再起動してください。"
+					"バックアップの復元は完了しましたが、資料情報を更新できませんでした。Fuzzyを再起動してください。"
 						.to_string(),
 				),
 			});
@@ -925,7 +1182,7 @@ fn import_backup_blocking(
 				.map(|path| path.to_string_lossy().into_owned()),
 			maintenance: None,
 			maintenance_error: Some(
-				"バックアップの復元は完了しましたが、検索索引を準備できませんでした。「検索索引を再構築」を実行してください。"
+				"バックアップの復元は完了しましたが、資料情報を準備できませんでした。「資料情報を作り直す」を実行してください。"
 					.to_string(),
 			),
 		});
@@ -975,7 +1232,7 @@ fn import_backup_blocking(
 					.map(|path| path.to_string_lossy().into_owned()),
 				maintenance: None,
 				maintenance_error: Some(
-					"バックアップの復元は完了しましたが、検索索引へ接続できませんでした。検索索引を再構築してください。"
+					"バックアップの復元は完了しましたが、資料情報を利用できませんでした。「資料情報を作り直す」を実行してください。"
 						.to_string(),
 				),
 			});
@@ -1005,7 +1262,7 @@ fn import_backup_blocking(
 					.map(|path| path.to_string_lossy().into_owned()),
 				maintenance: None,
 				maintenance_error: Some(
-					"バックアップの復元は完了しましたが、保存先の再スキャンと検索索引の再構築に失敗しました。保存先を確認し、「保存先を再スキャンして検索索引を再構築」を実行してください。"
+					"バックアップの復元は完了しましたが、資料情報を作り直せませんでした。保存先を確認し、「資料情報を作り直す」を実行してください。"
 						.to_string(),
 				),
 			})
@@ -1029,9 +1286,9 @@ fn create_fresh_database_blocking(
 	let confirmed = app
 		.dialog()
 		.message(
-			"開けないSQLite正本を別名の復旧用フォルダーへ保全し、新しいFuzzyデータベースを作成します。設定と履歴は初期状態になりますが、保存済みの資料ファイルは移動・削除しません。バックアップがない場合だけ実行してください。",
+			"開けない設定と履歴を別の復旧用フォルダーへ保全し、新しい設定を作成します。設定と履歴は初期状態になりますが、保存済みの資料ファイルは移動・削除しません。バックアップがない場合だけ実行してください。",
 		)
-		.title("破損DBを保全して新しく開始")
+		.title("現在の設定を保全して新しく開始")
 		.kind(MessageDialogKind::Warning)
 		.buttons(MessageDialogButtons::OkCancelCustom(
 			"保全して新しく開始".to_string(),
@@ -1049,11 +1306,11 @@ fn create_fresh_database_blocking(
 
 	let mut database_state = state.database.lock().map_err(|_| {
 		eprintln!("新規SQLite作成時に状態ロックが破損しています");
-		"新しいデータベースを作成できませんでした。Fuzzyを再起動してください。".to_string()
+		"新しい設定を作成できませんでした。Fuzzyを再起動してください。".to_string()
 	})?;
 	if database_state.database.is_some() {
 		return Err(
-			"SQLite正本は正常に利用できるため、新規作成は実行しません。必要な場合は先にバックアップを書き出してください。"
+			"現在の設定は正常に利用できるため、新規作成は実行しません。必要な場合は先にバックアップを書き出してください。"
 				.to_string(),
 		);
 	}
@@ -1070,7 +1327,7 @@ fn create_fresh_database_blocking(
 					recovery_copy_path.to_string_lossy().into_owned(),
 				),
 				index_error: Some(
-					"新しいデータベースは作成しましたが、検索索引を初期化できませんでした。Fuzzyを再起動してください。"
+					"新しい設定は作成しましたが、資料情報を準備できませんでした。Fuzzyを再起動してください。"
 						.to_string(),
 				),
 			});
@@ -1080,7 +1337,8 @@ fn create_fresh_database_blocking(
 		.err()
 		.map(|error| {
 			eprintln!("新規SQLite作成後に検索索引を初期化できませんでした: {error}");
-			"検索索引を初期化できませんでした。画面から検索索引を再構築してください。".to_string()
+			"資料情報を準備できませんでした。画面から「資料情報を作り直す」を実行してください。"
+				.to_string()
 		});
 	if index_error.is_none() {
 		index_state.needs_rebuild = false;
@@ -1189,7 +1447,7 @@ fn recover_unavailable_database_from_backup(
 			);
 			rollback_database_recovery_attempt(&path, &mut quarantine)?;
 			Err(
-				"バックアップから復元できませんでした。Fuzzyが書き出したSQLiteファイルか確認してください。元のDBは変更前の場所へ戻しました。"
+				"バックアップから復元できませんでした。Fuzzyが書き出したバックアップか確認してください。元の設定は変更前の状態へ戻しました。"
 					.to_string(),
 			)
 		}
@@ -1214,7 +1472,7 @@ fn create_fresh_database_from_unavailable(
 			);
 			rollback_database_recovery_attempt(&path, &mut quarantine)?;
 			Err(
-				"新しいデータベースを作成できませんでした。元のDBは変更前の場所へ戻しました。"
+				"新しい設定を作成できませんでした。元の設定は変更前の状態へ戻しました。"
 					.to_string(),
 			)
 		}
@@ -1226,7 +1484,7 @@ fn unavailable_database_path(state: &mut DatabaseRuntimeState) -> Result<PathBuf
 		Some(path) => path,
 		None => resolve_db_path().map_err(|error| {
 			eprintln!("SQLite復旧時にDBパスを決定できませんでした: {error}");
-			"SQLite正本の保存先を決定できませんでした。Windowsのアプリデータ保存先を確認してください。"
+			"設定の保存場所を確認できませんでした。Windowsのアプリデータ保存先を確認してください。"
 				.to_string()
 		})?,
 	};
@@ -1240,7 +1498,7 @@ fn quarantine_database_files(
 ) -> Result<DatabaseFileQuarantine, String> {
 	if !database_path.exists() {
 		return Err(
-			"退避対象のSQLiteファイルが見つかりません。保存先のアクセス権を確認してください。"
+			"保全する設定が見つかりません。アプリデータ保存先のアクセス権を確認してください。"
 				.to_string(),
 		);
 	}
@@ -1250,7 +1508,7 @@ fn quarantine_database_files(
 			"SQLite退避用フォルダー {} を作成できませんでした: {error}",
 			directory.display()
 		);
-		"破損DBを保全するフォルダーを作成できませんでした。".to_string()
+		"現在の設定を保全するフォルダーを作成できませんでした。".to_string()
 	})?;
 
 	let mut candidates = vec![
@@ -1265,7 +1523,7 @@ fn quarantine_database_files(
 		let Some(file_name) = original.file_name() else {
 			rollback_moved_files(&moved_files);
 			let _ = std::fs::remove_dir(&directory);
-			return Err("SQLite退避対象の名前を読み取れませんでした。".to_string());
+			return Err("保全する設定の名前を読み取れませんでした。".to_string());
 		};
 		let quarantined = directory.join(file_name);
 		if let Err(error) = std::fs::rename(&original, &quarantined) {
@@ -1277,7 +1535,7 @@ fn quarantine_database_files(
 			rollback_moved_files(&moved_files);
 			let _ = std::fs::remove_dir(&directory);
 			return Err(
-				"破損DBを安全に保全できませんでした。ブラウザを閉じて再試行してください。"
+				"現在の設定を安全に保全できませんでした。ブラウザを閉じて再試行してください。"
 					.to_string(),
 			);
 		}
@@ -1305,7 +1563,7 @@ fn rollback_database_recovery_attempt(
 			Err(error) => {
 				eprintln!("失敗した復旧試行のSQLiteを退避できませんでした: {error}");
 				return Err(
-					"復旧に失敗し、元のDBを自動で戻せませんでした。Fuzzyを終了し、復旧用フォルダーを保全してください。"
+					"復旧に失敗し、元の設定を自動で戻せませんでした。Fuzzyを終了し、復旧用フォルダーを保全してください。"
 						.to_string(),
 				);
 			}
@@ -1316,7 +1574,7 @@ fn rollback_database_recovery_attempt(
 			"SQLite復旧失敗後に元のDB {} を戻せませんでした: {error}",
 			original_quarantine.original_path.display()
 		);
-		"復旧に失敗し、元のDBを自動で戻せませんでした。復旧用フォルダーは削除せず保全されています。"
+		"復旧に失敗し、元の設定を自動で戻せませんでした。復旧用フォルダーは削除せず保全されています。"
 			.to_string()
 	})
 }
@@ -1356,7 +1614,7 @@ fn repair_index_storage(state: &mut IndexRuntimeState) -> Result<Option<PathBuf>
 		Some(path) => path,
 		None => resolve_index_path().map_err(|error| {
 			eprintln!("検索索引復旧時に保存先を決定できませんでした: {error}");
-			"検索索引の保存先を決定できませんでした。".to_string()
+			"資料情報の保存場所を確認できませんでした。".to_string()
 		})?,
 	};
 	state.path = Some(path.clone());
@@ -1393,7 +1651,7 @@ fn repair_index_storage(state: &mut IndexRuntimeState) -> Result<Option<PathBuf>
 			state.engine = None;
 			state.needs_rebuild = true;
 			Err(
-				"検索索引を再生成できませんでした。SQLite正本と資料ファイルは変更していません。"
+				"資料情報を作り直せませんでした。保存済みの設定と資料ファイルは変更していません。"
 					.to_string(),
 			)
 		}
@@ -1411,7 +1669,8 @@ fn quarantine_path_entry(path: &Path, label: &str) -> Result<Option<PathQuaranti
 			path.display(),
 			quarantined_path.display()
 		);
-		"検索索引を安全に退避できませんでした。ブラウザを閉じて再試行してください。".to_string()
+		"以前の資料情報を安全に保全できませんでした。ブラウザを閉じて再試行してください。"
+			.to_string()
 	})?;
 	Ok(Some(PathQuarantine {
 		original_path: path.to_path_buf(),
@@ -1460,6 +1719,60 @@ fn representative_folders(entries: &[FileEntry]) -> Vec<String> {
 		.into_iter()
 		.take(8)
 		.collect()
+}
+
+fn structured_directory_segments(template: &str) -> Option<Vec<StructuredRuleSegment>> {
+	let segments = template
+		.split(['/', '\\'])
+		.map(|segment| {
+			let (kind, value, format) = match segment {
+				"{year}" => ("year", None, None),
+				"{year}年" => ("year", None, Some("yearSuffix".to_string())),
+				"{year}年度" => ("year", None, Some("academicYearSuffix".to_string())),
+				"{term}" => ("term", None, None),
+				"{course}" => ("course", None, None),
+				"{assignment}" => ("assignment", None, None),
+				"{section}" => ("section", None, None),
+				"第{section}回" => ("section", None, Some("numbered".to_string())),
+				fixed if !fixed.is_empty() && !fixed.contains(['{', '}']) => {
+					("fixed", Some(fixed.to_string()), None)
+				}
+				_ => return None,
+			};
+			Some(StructuredRuleSegment {
+				kind: kind.to_string(),
+				value,
+				format,
+			})
+		})
+		.collect::<Option<Vec<_>>>()?;
+	(segments
+		.iter()
+		.filter(|segment| segment.kind == "course")
+		.count()
+		== 1)
+		.then_some(segments)
+}
+
+fn stable_pattern_candidate_id(
+	directory_template: &str,
+	file_name_template: Option<&str>,
+	course_segment_index: usize,
+) -> String {
+	const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+	const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+	let mut hash = FNV_OFFSET_BASIS;
+	for byte in directory_template
+		.bytes()
+		.chain([0])
+		.chain(file_name_template.unwrap_or_default().bytes())
+		.chain([0])
+		.chain(course_segment_index.to_string().bytes())
+	{
+		hash ^= u64::from(byte);
+		hash = hash.wrapping_mul(FNV_PRIME);
+	}
+	format!("estimated-{hash:016x}")
 }
 
 fn display_pattern_name(template: &str) -> String {
@@ -1620,6 +1933,8 @@ pub fn run() {
 			scan_existing_structure,
 			save_initial_setup,
 			get_setup_status,
+			get_saved_setup_configuration,
+			save_setup_changes,
 			get_extension_setup_status,
 			get_extension_recovery_status,
 			get_application_recovery_status,
@@ -1640,14 +1955,20 @@ mod tests {
 	use std::path::PathBuf;
 	use std::time::{SystemTime, UNIX_EPOCH};
 
+	use engine_core::library::{
+		LibraryMaintenancePhase, LibraryMaintenanceProgressState, LibraryMaintenanceSummary,
+		LibraryMaintenanceWarning,
+	};
 	use engine_core::types::SavedFileRegistration;
-	use engine_core::Database;
+	use engine_core::{Database, EngineError};
 
 	use super::{
 		create_fresh_database_from_unavailable, database_needs_index_rebuild, display_pattern_name,
-		index_storage_metadata_exists, quarantine_database_files,
-		recover_unavailable_database_from_backup, repair_index_storage, run_blocking_command,
-		scan_existing_structure_blocking, DatabaseRuntimeState, IndexRuntimeState,
+		emit_setup_completion, index_storage_metadata_exists, prepare_course_overrides,
+		quarantine_database_files, recover_unavailable_database_from_backup, repair_index_storage,
+		run_blocking_command, scan_existing_structure_blocking, setup_save_error_code,
+		stable_pattern_candidate_id, structured_directory_segments, CourseOverrideSelection,
+		DatabaseRuntimeState, IndexRuntimeState,
 	};
 
 	fn test_directory(name: &str) -> PathBuf {
@@ -1670,6 +1991,97 @@ mod tests {
 	}
 
 	#[test]
+	fn estimated_patterns_expose_structured_roles_with_stable_ids() {
+		let segments =
+			structured_directory_segments("{year}年度/{term}/{course}/第{section}回").unwrap();
+		assert_eq!(
+			segments
+				.iter()
+				.map(|segment| segment.kind.as_str())
+				.collect::<Vec<_>>(),
+			vec!["year", "term", "course", "section"]
+		);
+		assert_eq!(segments[0].format.as_deref(), Some("academicYearSuffix"));
+		assert_eq!(segments[3].format.as_deref(), Some("numbered"));
+
+		let first = stable_pattern_candidate_id("{year}/{course}", Some("{section}_{filename}"), 1);
+		let same = stable_pattern_candidate_id("{year}/{course}", Some("{section}_{filename}"), 1);
+		let changed = stable_pattern_candidate_id("{term}/{course}", None, 1);
+		assert_eq!(first, same);
+		assert_ne!(first, changed);
+	}
+
+	#[test]
+	fn setup_course_overrides_are_trimmed_and_deduplicated() {
+		let (course_names, json) = prepare_course_overrides(vec![
+			CourseOverrideSelection {
+				course_name: " データベース ".to_string(),
+				enabled: true,
+			},
+			CourseOverrideSelection {
+				course_name: "データベース".to_string(),
+				enabled: true,
+			},
+			CourseOverrideSelection {
+				course_name: "画像処理".to_string(),
+				enabled: false,
+			},
+		])
+		.unwrap();
+
+		assert_eq!(course_names, vec!["データベース"]);
+		assert_eq!(json, r#"[{"courseName":"データベース","enabled":true}]"#);
+	}
+
+	#[test]
+	fn setup_save_errors_keep_conflicts_separate_from_path_failures() {
+		assert_eq!(
+			setup_save_error_code(&EngineError::SetupConflict {
+				reason: "stale".to_string(),
+			}),
+			"SETUP_CONFLICT"
+		);
+		assert_eq!(
+			setup_save_error_code(&EngineError::RuleConflict {
+				reason: "rule".to_string(),
+			}),
+			"RULE_CONFLICT"
+		);
+		assert_eq!(
+			setup_save_error_code(&EngineError::InvalidPath {
+				path: "hidden".to_string(),
+				reason: "missing".to_string(),
+			}),
+			"INVALID_PATH"
+		);
+	}
+
+	#[test]
+	fn setup_completion_reports_the_final_warning_state_once() {
+		let maintenance = LibraryMaintenanceSummary {
+			scanned_file_count: 3,
+			warnings: vec![LibraryMaintenanceWarning {
+				path: ".".to_string(),
+				message: "一部の資料を確認できませんでした。".to_string(),
+			}],
+			..Default::default()
+		};
+		let mut events = Vec::new();
+
+		emit_setup_completion(&mut |event| events.push(event), &maintenance);
+
+		assert_eq!(events.len(), 1);
+		assert_eq!(events[0].phase, LibraryMaintenancePhase::Completed);
+		assert_eq!(
+			events[0].state,
+			LibraryMaintenanceProgressState::CompletedWithWarnings
+		);
+		assert_eq!(events[0].completed_count, 3);
+		assert_eq!(events[0].total_count, Some(3));
+		assert_eq!(events[0].warning_count, 1);
+	}
+
+	#[test]
 	fn scan_candidates_keep_deep_roles_file_rules_and_candidate_examples() {
 		let directory = test_directory("deep-pattern");
 		let first = directory.join("2026年度/1年前期/画像処理/第3回/資料.txt");
@@ -1687,11 +2099,53 @@ mod tests {
 		assert_eq!(candidates[0].match_score, Some(100));
 		assert_eq!(candidates[0].evaluated_count, 2);
 		assert_eq!(candidates[0].file_name_template, None);
+		assert_eq!(
+			candidates[0]
+				.directory_segments
+				.as_ref()
+				.and_then(|segments| segments.first())
+				.and_then(|segment| segment.format.as_deref()),
+			Some("academicYearSuffix")
+		);
 		assert!(candidates[0]
 			.folders
 			.iter()
 			.all(|folder| folder.contains("画像処理")));
 		assert!(!candidates[0].requires_confirmation);
+		assert!(candidates[0].recommended);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn scan_candidates_detect_year_prefixed_term_and_course_folders() {
+		let directory = test_directory("year-prefixed-term");
+		for relative in [
+			"2026前期/人工知能/ニューラルネットワーク.txt",
+			"2026前期/人工知能/機械学習.txt",
+		] {
+			let path = directory.join(relative);
+			std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+			std::fs::write(path, "sample").unwrap();
+		}
+
+		let candidates =
+			scan_existing_structure_blocking(directory.to_string_lossy().into_owned()).unwrap();
+
+		assert_eq!(candidates.len(), 1);
+		assert_eq!(candidates[0].course_segment_index, Some(1));
+		assert_eq!(
+			candidates[0]
+				.directory_segments
+				.as_ref()
+				.expect("構造化ルールへ変換できる")
+				.iter()
+				.map(|segment| segment.kind.as_str())
+				.collect::<Vec<_>>(),
+			vec!["term", "course"]
+		);
+		assert!(!candidates[0].requires_confirmation);
+		assert!(candidates[0].recommended);
+		assert_eq!(candidates[0].folders, vec!["2026前期/人工知能"]);
 		std::fs::remove_dir_all(directory).unwrap();
 	}
 
@@ -1798,7 +2252,7 @@ mod tests {
 
 		let error = recover_unavailable_database_from_backup(&mut state, &backup_path).unwrap_err();
 
-		assert!(error.contains("元のDBは変更前の場所へ戻しました"));
+		assert!(error.contains("元の設定は変更前の状態へ戻しました"));
 		assert!(state.database.is_none());
 		assert_eq!(
 			std::fs::read(&target_path).unwrap(),

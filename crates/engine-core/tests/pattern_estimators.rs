@@ -1,8 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use engine_core::pattern::{
-	built_in_estimator, EvidenceWeightedPatternEstimator, FolderOnlyPatternEstimator,
-	FrequencyPatternEstimator, PatternEstimator, PatternEstimatorKind,
+	built_in_estimator, classify_relative_path, EvidenceWeightedPatternEstimator,
+	FolderOnlyPatternEstimator, FrequencyPatternEstimator, PatternEstimator, PatternEstimatorKind,
 };
 use engine_core::scan::{ConfigurableScanEngine, ScanEngine};
 use engine_core::types::{FileEntry, SavePatternGuess};
@@ -255,6 +255,49 @@ fn recognizes_quarters_and_grade_terms_without_treating_them_as_courses() {
 		assert_eq!(guesses[0].directory_template, expected_template);
 		assert_eq!(guesses[0].course_segment_index, expected_course_index);
 	}
+}
+
+#[test]
+fn recognizes_calendar_year_prefixed_terms_without_hiding_the_course() {
+	let entries = [
+		entry("2026前期/人工知能/ニューラルネットワーク.pdf"),
+		entry("2026前期/人工知能/機械学習.pdf"),
+	];
+
+	for kind in PatternEstimatorKind::ALL {
+		let guesses = built_in_estimator(kind)
+			.estimate(&entries)
+			.expect("年度付き学期の下にある科目を推定できる");
+		assert_eq!(guesses.len(), 1, "方式: {}", kind.key());
+		assert_eq!(guesses[0].directory_template, "{term}/{course}");
+		assert_eq!(guesses[0].course_segment_index, 1);
+		assert_eq!(
+			guesses[0].representative_paths,
+			vec![PathBuf::from("2026前期/人工知能")]
+		);
+	}
+}
+
+#[test]
+fn recognizes_year_prefixed_term_folders_without_deriving_the_academic_year() {
+	let classification = classify_relative_path(Path::new("2026前期/人工知能/講義資料.pdf"))
+		.expect("年度を含む学期フォルダーを分類できる");
+
+	assert_eq!(classification.directory_template, "{term}/{course}");
+	assert_eq!(classification.course_segment_index, 1);
+	assert_eq!(classification.academic_year, None);
+	assert_eq!(classification.term.as_deref(), Some("2026前期"));
+
+	let guesses = FrequencyPatternEstimator
+		.estimate(&[
+			entry("2026前期/人工知能/講義資料.pdf"),
+			entry("2026前期/人工知能/演習課題.pdf"),
+		])
+		.expect("年度を含む学期フォルダーから保存ルールを推定できる");
+	assert_eq!(guesses.len(), 1);
+	assert_eq!(guesses[0].directory_template, "{term}/{course}");
+	assert_eq!(guesses[0].course_segment_index, 1);
+	assert_eq!(guesses[0].matched_count, 2);
 }
 
 #[test]

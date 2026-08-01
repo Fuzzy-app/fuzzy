@@ -278,7 +278,7 @@ export async function getExtensionSetupStatusClient(
 	} catch {
 		throw new ExtensionInstallError(
 			"STATUS_UNAVAILABLE",
-			"SQLiteから拡張機能の応答情報を読み込めませんでした。Fuzzyを再起動してから再試行してください。",
+			"拡張機能の状態を読み込めませんでした。Fuzzyを再起動してから再試行してください。",
 		);
 	}
 }
@@ -305,7 +305,8 @@ async function invokeNativeHostInstallationCommand(
 	if (!statusRuntime) {
 		return {
 			ready: false,
-			message: "ブラウザプレビューではNative Messagingホストを登録しません。",
+			message:
+				"このプレビューでは拡張機能との接続を準備しません。Fuzzyのデスクトップアプリで確認してください。",
 		};
 	}
 	try {
@@ -316,7 +317,7 @@ async function invokeNativeHostInstallationCommand(
 	} catch {
 		throw new ExtensionInstallError(
 			"STATUS_UNAVAILABLE",
-			"Native Messagingホストの状態を確認できませんでした。Fuzzyを再起動してください。",
+			"拡張機能との接続状態を確認できませんでした。Fuzzyを再起動してから再試行してください。",
 		);
 	}
 }

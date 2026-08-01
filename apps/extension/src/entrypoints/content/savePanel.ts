@@ -3,6 +3,7 @@
 // スナップショット収集は ../../lib/moodle/snapshotCollector、
 // native-host接続は background 経由（../../lib/api/backgroundApi）に委譲する。
 import {
+	type SaveFileFailure,
 	type SimilarFileMatch,
 	normalizeRelativeSavePath,
 	relativeSavePath,
@@ -35,16 +36,21 @@ import {
 import {
 	type FileSuggestions,
 	type SaveDestinationGroup,
+	type SaveSuggestionStatus,
 	type SelectedFilePaths,
 	buildSaveDestinationGroups,
 	commonGroupSuggestions,
 	courseFolderFromSuggestions,
 	createSelectedFilePaths,
 	fileId,
-	loadFileSuggestions,
+	loadFileSuggestionsWithFailures,
+	saveFailureMessage,
 	saveRootFromSuggestions,
+	saveSuggestionStatus,
 } from "./savePlan";
 import { createBrandIcon } from "./shellElements";
+import { SHELL_NAV_BUTTON_ID, SHELL_PAGE_ID } from "./shellIds";
+import { userFacingErrorMessage } from "./userFacingError";
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
@@ -101,6 +107,7 @@ export async function mountSavePanel(): Promise<void> {
 	let saving = false;
 	let isPanelOpen = false;
 	let message: string | null = null;
+	let suggestionStatus: SaveSuggestionStatus | null = null;
 	let messageTone: PanelMessageTone = "info";
 	const collapsedFileGroups = new Set<string>();
 	const savePanelOpenState = createSavePanelOpenStateWriter(browser.storage.local);
@@ -122,11 +129,18 @@ export async function mountSavePanel(): Promise<void> {
 			snapshot = fullSnapshot;
 			lastSavePath = storedPath;
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadFileSuggestions(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
+			suggestionStatus = saveSuggestionStatus(
+				snapshot.files.length,
+				suggestions,
+				suggestionResult.failedFileIds.length,
+			);
 			message = null;
 		} catch (error) {
+			suggestionStatus = null;
 			message = toErrorMessage(error, "保存先候補の取得に失敗しました");
 			messageTone = "error";
 		} finally {
@@ -138,18 +152,26 @@ export async function mountSavePanel(): Promise<void> {
 	async function reloadSnapshotAndSuggestions() {
 		loading = true;
 		resetConfirmState();
+		suggestionStatus = null;
 		message = "Moodleページ内の資料を再読み込みしています。";
 		messageTone = "progress";
 		render();
 		try {
 			snapshot = await collectMoodlePageSnapshotWithNestedFolders();
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			suggestions = await loadFileSuggestions(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
 			manualRelativePath = "";
+			suggestionStatus = saveSuggestionStatus(
+				snapshot.files.length,
+				suggestions,
+				suggestionResult.failedFileIds.length,
+			);
 			message = null;
 		} catch (error) {
+			suggestionStatus = null;
 			message = toErrorMessage(error, "Moodleページ内の資料取得に失敗しました");
 			messageTone = "error";
 		} finally {
@@ -181,7 +203,7 @@ export async function mountSavePanel(): Promise<void> {
 		let savedCount = 0;
 		let extractedCount = 0;
 		let failedDestinationCount = 0;
-		let failedFileCount = 0;
+		const failedFiles: SaveFileFailure[] = [];
 		let failedZipCount = 0;
 		for (const group of groups) {
 			try {
@@ -191,7 +213,7 @@ export async function mountSavePanel(): Promise<void> {
 					courseId: group.courseId,
 				});
 				savedCount += result.savedFileIds.length;
-				failedFileCount += result.failedFiles.length;
+				failedFiles.push(...result.failedFiles);
 				const savedFileIds = new Set(result.savedFileIds);
 				const extraction = await extractSelectedZips({
 					...group,
@@ -215,8 +237,8 @@ export async function mountSavePanel(): Promise<void> {
 		if (failedDestinationCount > 0) {
 			message = `${savedCount}件は保存しましたが、${failedDestinationCount}か所の保存に失敗しました。再試行してください。`;
 			messageTone = "warning";
-		} else if (failedFileCount > 0) {
-			message = `${savedCount}件は保存しましたが、${failedFileCount}件の取得または保存に失敗しました。再試行してください。`;
+		} else if (failedFiles.length > 0) {
+			message = saveFailureMessage(savedCount, failedFiles);
 			messageTone = "warning";
 		} else if (failedZipCount > 0) {
 			message = `${savedCount}件を保存しましたが、ZIP ${failedZipCount}件の展開に失敗しました。`;
@@ -314,7 +336,10 @@ export async function mountSavePanel(): Promise<void> {
 		courseFolderError = null;
 		render();
 		try {
-			await api.updateCourseFolderName({ courseId: courseFolder.courseId, folderName });
+			await api.updateCourseFolderName({
+				courseId: courseFolder.courseId,
+				folderName,
+			});
 		} catch (error) {
 			courseFolderError = courseFolderNameUpdateError(error);
 			courseFolderSaving = false;
@@ -323,15 +348,23 @@ export async function mountSavePanel(): Promise<void> {
 		}
 
 		try {
-			suggestions = await loadFileSuggestions(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
-			message =
-				folderName === null
+			suggestionStatus = saveSuggestionStatus(
+				snapshot.files.length,
+				suggestions,
+				suggestionResult.failedFileIds.length,
+			);
+			message = suggestionStatus
+				? null
+				: folderName === null
 					? "コース保存名を自動提案へ戻しました。"
 					: "コース保存名を更新し、保存先候補を再取得しました。";
 			messageTone = "success";
 		} catch {
+			suggestionStatus = null;
 			message =
 				"コース保存名は更新済みですが、保存先候補を再取得できませんでした。再読み込みしてください。";
 			messageTone = "warning";
@@ -362,6 +395,7 @@ export async function mountSavePanel(): Promise<void> {
 		scroll.className = "fuzzy-panel-scroll";
 		scroll.append(renderHeader());
 		if (message) scroll.append(renderNote());
+		if (suggestionStatus) scroll.append(renderSuggestionStatus());
 		// 初回・再読込中は古い一覧や「資料なし」を同時に見せず、現在の状態を一意にする。
 		if (loading) {
 			panel.append(scroll);
@@ -453,6 +487,39 @@ export async function mountSavePanel(): Promise<void> {
 		note.setAttribute("role", tone === "error" ? "alert" : "status");
 		note.textContent = message ?? "";
 		return note;
+	}
+
+	function renderSuggestionStatus() {
+		const note = document.createElement("section");
+		note.className =
+			suggestionStatus?.kind === "no-files" ? "fuzzy-note" : "fuzzy-note fuzzy-note-warning";
+		note.setAttribute("role", "status");
+		note.append(document.createTextNode(suggestionStatus?.message ?? ""));
+
+		const actions = document.createElement("div");
+		actions.className = "fuzzy-confirm-buttons";
+		const retry = document.createElement("button");
+		retry.type = "button";
+		retry.textContent = "資料一覧を再読み込み";
+		retry.addEventListener("click", () => void reloadSnapshotAndSuggestions());
+		actions.append(retry);
+
+		if (suggestionStatus?.reviewRules) {
+			const reviewRules = document.createElement("button");
+			reviewRules.type = "button";
+			reviewRules.textContent = "保存・整理設定を開く";
+			reviewRules.addEventListener("click", openRuleSettings);
+			actions.append(reviewRules);
+		}
+		note.append(actions);
+		return note;
+	}
+
+	function openRuleSettings() {
+		setPanelOpen(false);
+		const navButton = document.getElementById(SHELL_NAV_BUTTON_ID);
+		if (navButton?.getAttribute("aria-pressed") !== "true") navButton?.click();
+		document.querySelector<HTMLButtonElement>(`#${SHELL_PAGE_ID} [data-screen="rules"]`)?.click();
 	}
 
 	function renderFileList(files: MoodleFileLink[]) {
@@ -926,7 +993,9 @@ async function saveLastSavePath(path: string): Promise<void> {
 }
 
 function toErrorMessage(error: unknown, fallback: string): string {
-	return error instanceof Error ? `${fallback}: ${error.message}` : `${fallback}。`;
+	return userFacingErrorMessage(error, `${fallback}。`, {
+		prefixFallback: true,
+	});
 }
 
 function renderPathBreadcrumb(relativePath: string): string {

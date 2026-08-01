@@ -90,6 +90,65 @@ describe("未判定MIMEのHEAD補完", () => {
 		});
 	});
 
+	test("PDFアイコンで種類が判明済みでもMoodle資料ページを実体URLへ解決する", async () => {
+		const finalUrl = `${ORIGIN}/pluginfile.php/42/mod_resource/content/1/lecture.pdf`;
+		const fetcher = (async () => {
+			const response = new Response(null, {
+				status: 200,
+				headers: {
+					"content-type": "application/pdf",
+					"content-disposition": 'attachment; filename="lecture.pdf"',
+				},
+			});
+			Object.defineProperty(response, "url", { value: finalUrl });
+			return response;
+		}) as unknown as typeof fetch;
+		const file = { ...createFile(1), mimeHint: "pdf" };
+
+		const result = await resolveMissingMimeHints([file], {
+			fetcher,
+			origin: ORIGIN,
+			cache: new Map(),
+		});
+
+		expect(result).toEqual([
+			{
+				...file,
+				title: "lecture.pdf",
+				url: finalUrl,
+			},
+		]);
+	});
+
+	test("HEADがHTMLでもGETでPDFへ遷移する資料は保存候補に残す", async () => {
+		const methods: string[] = [];
+		const finalUrl = `${ORIGIN}/pluginfile.php/42/mod_resource/content/1/lecture.pdf`;
+		const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			methods.push(init?.method ?? "GET");
+			if (init?.method === "HEAD") {
+				return new Response(null, {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				});
+			}
+			const response = new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+				status: 200,
+				headers: { "content-type": "application/pdf" },
+			});
+			Object.defineProperty(response, "url", { value: finalUrl });
+			return response;
+		}) as typeof fetch;
+
+		const result = await resolveMissingMimeHints([{ ...createFile(1), mimeHint: "pdf" }], {
+			fetcher,
+			origin: ORIGIN,
+			cache: new Map(),
+		});
+
+		expect(methods).toEqual(["HEAD", "GET"]);
+		expect(result[0]).toMatchObject({ url: finalUrl, mimeHint: "pdf" });
+	});
+
 	test("HTML応答は資料候補から除外する", async () => {
 		const fetcher = (async () =>
 			new Response("<!doctype html><title>login</title>", {

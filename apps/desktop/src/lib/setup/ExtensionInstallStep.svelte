@@ -11,6 +11,7 @@
 		repairNativeHostInstallationClient,
 	} from "./extension-install";
 	import type { NativeHostInstallationStatus } from "./extension-install";
+	import { userFacingOperationError } from "./application-state";
 	import type { LibraryMaintenanceSummary } from "./library-maintenance";
 
 	export let onBack: () => void = () => undefined;
@@ -54,12 +55,13 @@
 				message:
 					error instanceof Error
 						? error.message
-						: "Native Messagingホストの状態を確認できませんでした。",
+						: "拡張機能との接続状態を確認できませんでした。Fuzzyを再起動してから再試行してください。",
 			};
 		}
 	}
 
 	async function handleRepairNativeHost(): Promise<void> {
+		if (isRepairingNativeHost || isOpening) return;
 		isRepairingNativeHost = true;
 		errorMessage = null;
 		successMessage = null;
@@ -67,15 +69,16 @@
 			nativeHostStatus = await repairNativeHostInstallationClient();
 			if (nativeHostStatus.ready) {
 				successMessage =
-					"Native Messagingホストを自動修復しました。拡張機能の導入を続けてください。";
+					"拡張機能との接続を自動修復しました。拡張機能の導入を続けてください。";
 			} else {
-				errorMessage = nativeHostStatus.message;
+				errorMessage =
+					"拡張機能との接続を自動修復できませんでした。Fuzzyを再起動してから再試行してください。";
 			}
 		} catch (error) {
-			errorMessage =
-				error instanceof Error
-					? error.message
-					: "Native Messagingホストを自動修復できませんでした。";
+			errorMessage = userFacingOperationError(
+				error,
+				"拡張機能との接続を自動修復できませんでした。Fuzzyを再起動してから再試行してください。",
+			);
 		} finally {
 			isRepairingNativeHost = false;
 		}
@@ -119,6 +122,7 @@
 	}
 
 	async function handleOpenDestination(): Promise<void> {
+		if (isOpening || isRepairingNativeHost) return;
 		isOpening = true;
 		errorMessage = null;
 		successMessage = null;
@@ -128,7 +132,7 @@
 				await openExtensionInstallDestinationClient(selectedChannel);
 			if (result.mocked) {
 				successMessage =
-					"ブラウザプレビューでは外部アプリを開きません。Tauriアプリで導入操作を確認してください。";
+					"このプレビューでは導入先を開きません。Fuzzyのデスクトップアプリで導入操作を確認してください。";
 			} else if (result.destination.kind === "bundled") {
 				successMessage =
 					"同梱された拡張機能フォルダーを表示しました。読み込み後、拡張機能からの応答を自動確認します。";
@@ -158,7 +162,7 @@
 				Fuzzyは拡張機能を前提とするため、拡張機能から実際の応答を確認すると初期セットアップが完了します。ブラウザの種類を選ぶ必要はありません。
 			</p>
 		</div>
-		<span class="local-badge">ローカル完結</span>
+		<span class="local-badge">あなたのPC上で確認</span>
 	</header>
 
 	<section class="safety-card" aria-labelledby="safety-heading">
@@ -166,8 +170,7 @@
 		<div>
 			<h2 id="safety-heading">導入操作はブラウザ上で行います</h2>
 			<p>
-				Fuzzyは導入先を表示し、応答を確認するだけです。拡張機能の追加は、表示される権限を確認してユーザー自身で行います。確認通信はNative
-				MessagingとローカルSQLiteだけで完結します。
+				Fuzzyは導入先を表示し、応答を確認するだけです。拡張機能の追加は、表示される権限を確認してユーザー自身で行います。この確認では授業資料や設定を外部へ送信しません。
 			</p>
 		</div>
 	</section>
@@ -185,14 +188,14 @@
 				<p>
 					{maintenanceSummary.scannedFileCount}件を確認し、新規
 					{maintenanceSummary.registeredFileCount}件、更新
-					{maintenanceSummary.updatedFileCount}件、索引化
+					{maintenanceSummary.updatedFileCount}件、検索準備
 					{maintenanceSummary.indexedFileCount}件、見つからない資料
 					{maintenanceSummary.missingFileCount}件を処理しました。保存済み資料の移動・削除は行っていません。
 				</p>
 				{#if maintenanceSummary.warnings.length > 0}
 					<p class="scan-warning">
 						確認が必要な項目が{maintenanceSummary.warnings
-							.length}件あります。セットアップ完了後、Fuzzyを再起動すると保守画面から再スキャンできます。
+							.length}件あります。セットアップ完了後、Fuzzyを再起動すると確認画面から資料情報を作り直せます。
 					</p>
 				{/if}
 			</div>
@@ -207,7 +210,7 @@
 				{#if selectedChannel === "store"}
 					公式配布ページを既定のブラウザで開きます。
 				{:else}
-					拡張機能はFuzzyアプリに同梱済みです。利用者によるビルドやコマンド操作は必要ありません。
+					拡張機能はFuzzyアプリに同梱済みです。画面の案内に沿って導入できます。
 				{/if}
 			</p>
 		</div>
@@ -217,16 +220,15 @@
 	</section>
 
 	{#if nativeHostStatus && !nativeHostStatus.ready}
-		<section
-			class="host-error-card"
-			aria-labelledby="native-host-error-heading"
-		>
+		<section class="host-error-card" aria-labelledby="connection-error-heading">
 			<div>
 				<p class="section-label">自動セットアップを確認してください</p>
-				<h2 id="native-host-error-heading">
-					Native Messagingホストを準備できませんでした
+				<h2 id="connection-error-heading">
+					拡張機能との接続を準備できませんでした
 				</h2>
-				<p>{nativeHostStatus.message}</p>
+				<p>
+					「接続を自動修復」を押してください。解決しない場合はFuzzyを再起動して、もう一度お試しください。
+				</p>
 			</div>
 			<button
 				class="refresh-button"
@@ -234,7 +236,7 @@
 				on:click={handleRepairNativeHost}
 				disabled={isRepairingNativeHost}
 			>
-				{isRepairingNativeHost ? "自動修復中..." : "自動修復を再実行"}
+				{isRepairingNativeHost ? "接続を修復中..." : "接続を自動修復"}
 			</button>
 		</section>
 	{/if}
@@ -343,9 +345,8 @@
 				<p class="section-label">応答確認済み</p>
 				<h2>拡張機能の導入を確認しました</h2>
 				<p>
-					バージョン {setupStatus.observation.extensionVersion}（通信仕様
-					{setupStatus.observation.protocolVersion}）から
-					{formatDate(setupStatus.observation.lastSeenAt)} に応答がありました。 初期セットアップは完了です。
+					拡張機能バージョン {setupStatus.observation.extensionVersion}から
+					{formatDate(setupStatus.observation.lastSeenAt)} に応答がありました。初期セットアップは完了です。
 				</p>
 			</div>
 		{:else if isIncompatible && setupStatus.observation}
@@ -354,9 +355,8 @@
 				<p class="section-label">更新が必要です</p>
 				<h2>現在の拡張機能はこのアプリに対応していません</h2>
 				<p>
-					バージョン {setupStatus.observation.extensionVersion}（通信仕様
-					{setupStatus.observation
-						.protocolVersion}）から応答がありましたが、拡張機能バージョンまたは通信仕様に互換性がありません。最新版を導入してください。
+					確認した拡張機能はバージョン {setupStatus.observation
+						.extensionVersion}です。上の導入手順から最新版を導入し、Moodleを開いて再確認してください。
 				</p>
 			</div>
 		{:else}
@@ -365,7 +365,7 @@
 				<p class="section-label">自動確認中</p>
 				<h2>拡張機能からの応答を待っています</h2>
 				<p>
-					拡張機能を導入した後、Moodleを開いてください。native-hostが応答をSQLiteへ保存すると、この画面は自動的に完了へ切り替わります。
+					拡張機能を導入した後、Moodleを開いてください。Fuzzyが接続を確認すると、この画面は自動的に完了へ切り替わります。
 				</p>
 				<button
 					class="refresh-button"
@@ -662,7 +662,7 @@
 	}
 
 	button:focus-visible {
-		outline: 3px solid var(--fuzzy-color-primary-overlay);
+		outline: 3px solid var(--fuzzy-focus-ring);
 		outline-offset: 2px;
 	}
 

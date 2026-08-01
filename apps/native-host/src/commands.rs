@@ -893,6 +893,7 @@ fn engine_error_response(id: String, error: EngineError) -> Response {
 		EngineError::NotFound { .. } => "NOT_FOUND",
 		EngineError::Database { .. } => "DB_ERROR",
 		EngineError::RuleConflict { .. } => "RULE_CONFLICT",
+		EngineError::SetupConflict { .. } => "SETUP_CONFLICT",
 		EngineError::Io(_) | EngineError::PathIo { .. } => "IO_ERROR",
 		_ => "INTERNAL",
 	};
