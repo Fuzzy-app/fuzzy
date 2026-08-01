@@ -20,6 +20,35 @@ impl Database {
 		transaction.commit().map_err(db_err)
 	}
 
+	pub(super) fn is_path_excluded(
+		&self,
+		saved_path: &Path,
+		course_id: Option<i64>,
+	) -> EngineResult<bool> {
+		let Ok(base_folder) = self.base_folder_path() else {
+			return Ok(false);
+		};
+		let root = normalize_absolute(&base_folder);
+		let saved = normalize_absolute(saved_path);
+		let Some(relative) = saved
+			.strip_prefix(&root)
+			.and_then(|path| path.strip_prefix('/'))
+			.filter(|path| !path.is_empty())
+		else {
+			return Ok(false);
+		};
+
+		self.conn
+			.query_row(
+				"SELECT EXISTS(SELECT 1 FROM excluded_folders e
+				 WHERE (e.scope = 'root' OR (e.scope = 'course' AND e.course_id = ?2))
+				 AND (?1 = lower(e.relative_path) OR ?1 LIKE lower(e.relative_path) || '/%'))",
+				params![relative, course_id],
+				|row| row.get::<_, bool>(0),
+			)
+			.map_err(db_err)
+	}
+
 	pub fn list_excluded_folders(
 		&self,
 		course_id: Option<i64>,
