@@ -149,7 +149,13 @@ export function extractMoodleCourseId(root: Document | Element = document): stri
 /** 年度はMoodle文脈から独立して読み取り、term文字列の派生値として扱わない。 */
 export function extractAcademicYear(root: Document | Element = document): number | null {
 	const structured = root.querySelector("[data-academic-year]")?.getAttribute("data-academic-year");
-	const candidates = [structured, ...extractBreadcrumbs(root), extractCourseName(root)];
+	const candidates = [
+		structured,
+		...extractBreadcrumbs(root),
+		textOf(root.querySelector(".page-header-headings h1")),
+		textOf(root.querySelector("h1")),
+		extractCourseName(root),
+	];
 	for (const candidate of candidates) {
 		const year = Number.parseInt(
 			candidate?.match(/(?:^|\D)((?:19|20)\d{2})(?:\D|$)/)?.[1] ?? "",
