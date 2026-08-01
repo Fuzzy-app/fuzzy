@@ -127,6 +127,7 @@ export function mountFuzzyShell(): void {
 
 	const applyShellFrame = () => {
 		if (!page) return;
+		shellTopOffset = getShellTopOffset(navHost);
 		page.style.top = `${shellTopOffset}px`;
 		page.style.height = `calc(100vh - ${shellTopOffset}px)`;
 	};
@@ -352,8 +353,9 @@ export function mountFuzzyShell(): void {
 		if (isOpen) return;
 		isOpen = true;
 		renderEntryState();
-		document.body.classList.add("fuzzy-shell-open");
+		// Measure Moodle's header before the shell's compacting rules hide page content.
 		shellTopOffset = getShellTopOffset(navHost);
+		document.body.classList.add("fuzzy-shell-open");
 		moveMainContentToStash();
 		document.body.append(buildPage());
 		applyShellFrame();
