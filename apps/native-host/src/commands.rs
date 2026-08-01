@@ -53,6 +53,7 @@ pub fn dispatch_with_services(
 		"reconcileCourseFiles" => reconcile_course_files(database, index_engine, request),
 		"saveFiles" => save_files(database, index_engine, file_transfers, request),
 		"extractZip" => extract_zip(database, index_engine, request),
+		"updateExcludedFolders" => update_excluded_folders(database, index_engine, request),
 		_ => dispatch_with_file_transfers(database, file_transfers, request),
 	}
 }
@@ -88,7 +89,6 @@ fn dispatch_with_file_transfers(
 		"updateCourseRuleOverride" => update_course_rule_override(database, request),
 		"clearCourseRuleOverride" => clear_course_rule_override(database, request),
 		"getExcludedFolders" => get_excluded_folders(database, request),
-		"updateExcludedFolders" => update_excluded_folders(database, request),
 		"getRuleViolations" => get_rule_violations(database, request),
 		"getDuplicateGroups" => get_duplicate_groups(database, request),
 		"getNotificationRules" => get_notification_rules(database, request),
@@ -799,26 +799,36 @@ fn get_excluded_folders(database: &Database, request: Request) -> Response {
 	)
 }
 
-fn update_excluded_folders(database: &mut Database, request: Request) -> Response {
+fn update_excluded_folders(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	request: Request,
+) -> Response {
 	let payload = match parse_payload::<UpdateExcludedFoldersRequest>(&request) {
 		Ok(payload) => payload,
 		Err(response) => return response,
 	};
+	let result = (|| {
+		let folders = database.update_excluded_folders(
+			&payload.scope,
+			payload.course_id,
+			&payload.paths,
+			&DefaultRuleEngine,
+		)?;
+		if database.base_folder_path().is_ok() {
+			LibraryMaintenance::reconcile(database, index_engine, false)?;
+		}
+		refresh_saved_file_derivatives(database, "除外フォルダー変更");
+		Ok(folders)
+	})();
 	respond(
 		request.id,
-		database
-			.update_excluded_folders(
-				&payload.scope,
-				payload.course_id,
-				&payload.paths,
-				&DefaultRuleEngine,
-			)
-			.map(|folders| {
-				folders
-					.into_iter()
-					.map(ExcludedFolder::from)
-					.collect::<Vec<_>>()
-			}),
+		result.map(|folders| {
+			folders
+				.into_iter()
+				.map(ExcludedFolder::from)
+				.collect::<Vec<_>>()
+		}),
 	)
 }
 
@@ -1456,6 +1466,80 @@ mod tests {
 		);
 		assert!(!invalid.ok);
 		assert_eq!(invalid.error.unwrap().code, "INVALID_REQUEST");
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn changing_excluded_folders_reconciles_files_before_unexcluding_them() {
+		let root = unique_temp_dir();
+		let course = root.join("Data Science");
+		std::fs::create_dir_all(&course).unwrap();
+		let file = course.join("notes.txt");
+		std::fs::write(&file, "before").unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let rebuilt = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"rebuildLibrary",
+				serde_json::json!({ "rebuildIndex": true }),
+			),
+		);
+		assert!(rebuilt.ok, "{:?}", rebuilt.error);
+		let file_id = database.registered_library_files().unwrap()[0].file_id;
+
+		let excluded = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"updateExcludedFolders",
+				serde_json::json!({
+					"scope": "root",
+					"courseId": null,
+					"paths": ["Data Science"]
+				}),
+			),
+		);
+		assert!(excluded.ok, "{:?}", excluded.error);
+
+		std::fs::write(&file, "after changed").unwrap();
+		let unexcluded = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"updateExcludedFolders",
+				serde_json::json!({
+					"scope": "root",
+					"courseId": null,
+					"paths": []
+				}),
+			),
+		);
+		assert!(unexcluded.ok, "{:?}", unexcluded.error);
+		assert!(
+			index
+				.indexed_file_ids
+				.iter()
+				.filter(|indexed_id| **indexed_id == file_id)
+				.count() >= 2
+		);
+
 		std::fs::remove_dir_all(root).unwrap();
 	}
 
