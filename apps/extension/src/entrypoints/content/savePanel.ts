@@ -24,6 +24,7 @@ import {
 	initialCourseFolderName,
 } from "./courseFolderNameEditor";
 import { createCollapseHandleIcon } from "./savePanelHandle";
+import { groupSavePanelFiles } from "./savePanelHierarchy";
 import { createSavePanelOpenStateWriter, loadSavePanelOpenState } from "./savePanelState";
 import {
 	SAVE_HANDLE_ID,
@@ -43,6 +44,7 @@ import {
 	loadFileSuggestions,
 	saveRootFromSuggestions,
 } from "./savePlan";
+import { createBrandIcon } from "./shellElements";
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
@@ -53,6 +55,8 @@ interface SimilarWarning {
 	file: MoodleFileLink;
 	match: SimilarFileMatch;
 }
+
+type PanelMessageTone = "progress" | "success" | "warning" | "error" | "info";
 
 export async function mountSavePanel(): Promise<void> {
 	document.getElementById(SAVE_PANEL_ID)?.remove();
@@ -97,6 +101,8 @@ export async function mountSavePanel(): Promise<void> {
 	let saving = false;
 	let isPanelOpen = false;
 	let message: string | null = null;
+	let messageTone: PanelMessageTone = "info";
+	const collapsedFileGroups = new Set<string>();
 	const savePanelOpenState = createSavePanelOpenStateWriter(browser.storage.local);
 
 	injectPanelStyle();
@@ -122,6 +128,7 @@ export async function mountSavePanel(): Promise<void> {
 			message = null;
 		} catch (error) {
 			message = toErrorMessage(error, "保存先候補の取得に失敗しました");
+			messageTone = "error";
 		} finally {
 			loading = false;
 			render();
@@ -132,6 +139,7 @@ export async function mountSavePanel(): Promise<void> {
 		loading = true;
 		resetConfirmState();
 		message = "Moodleページ内の資料を再読み込みしています。";
+		messageTone = "progress";
 		render();
 		try {
 			snapshot = await collectMoodlePageSnapshotWithNestedFolders();
@@ -143,6 +151,7 @@ export async function mountSavePanel(): Promise<void> {
 			message = null;
 		} catch (error) {
 			message = toErrorMessage(error, "Moodleページ内の資料取得に失敗しました");
+			messageTone = "error";
 		} finally {
 			loading = false;
 			render();
@@ -167,6 +176,7 @@ export async function mountSavePanel(): Promise<void> {
 		saving = true;
 		awaitingConfirm = false;
 		message = "保存処理を実行しています。";
+		messageTone = "progress";
 		render();
 		let savedCount = 0;
 		let extractedCount = 0;
@@ -204,15 +214,19 @@ export async function mountSavePanel(): Promise<void> {
 		similarWarnings = [];
 		if (failedDestinationCount > 0) {
 			message = `${savedCount}件は保存しましたが、${failedDestinationCount}か所の保存に失敗しました。再試行してください。`;
+			messageTone = "warning";
 		} else if (failedFileCount > 0) {
 			message = `${savedCount}件は保存しましたが、${failedFileCount}件の取得または保存に失敗しました。再試行してください。`;
+			messageTone = "warning";
 		} else if (failedZipCount > 0) {
 			message = `${savedCount}件を保存しましたが、ZIP ${failedZipCount}件の展開に失敗しました。`;
+			messageTone = "warning";
 		} else {
 			message =
 				extractedCount > 0
 					? `${savedCount}件を${groups.length}か所に保存し、ZIPから${extractedCount}件を展開しました。`
 					: `${savedCount}件の資料を${groups.length}か所に保存しました。`;
+			messageTone = "success";
 		}
 		saving = false;
 		render();
@@ -225,6 +239,7 @@ export async function mountSavePanel(): Promise<void> {
 	async function ensureSimilarChecked(files: MoodleFileLink[]): Promise<boolean> {
 		checkingSimilar = true;
 		message = "保存済み資料と照合しています。";
+		messageTone = "progress";
 		render();
 		try {
 			similarWarnings = await collectSimilarWarnings(files);
@@ -315,9 +330,11 @@ export async function mountSavePanel(): Promise<void> {
 				folderName === null
 					? "コース保存名を自動提案へ戻しました。"
 					: "コース保存名を更新し、保存先候補を再取得しました。";
+			messageTone = "success";
 		} catch {
 			message =
 				"コース保存名は更新済みですが、保存先候補を再取得できませんでした。再読み込みしてください。";
+			messageTone = "warning";
 		} finally {
 			courseFolderSaving = false;
 			render();
@@ -345,6 +362,21 @@ export async function mountSavePanel(): Promise<void> {
 		scroll.className = "fuzzy-panel-scroll";
 		scroll.append(renderHeader());
 		if (message) scroll.append(renderNote());
+		// 初回・再読込中は古い一覧や「資料なし」を同時に見せず、現在の状態を一意にする。
+		if (loading) {
+			panel.append(scroll);
+			return;
+		}
+		// 初回取得に失敗した場合も空一覧とは区別する。再試行はヘッダーの更新ボタンから行える。
+		if (
+			message &&
+			messageTone === "error" &&
+			snapshot.files.length === 0 &&
+			suggestions.size === 0
+		) {
+			panel.append(scroll);
+			return;
+		}
 		const selectedFiles = snapshot.files.filter((file) => selectedFileIds.has(fileId(file)));
 		const zipFiles = selectedFiles.filter(isZipFile);
 		scroll.append(renderFileList(snapshot.files));
@@ -372,44 +404,53 @@ export async function mountSavePanel(): Promise<void> {
 	function renderHeader() {
 		const header = document.createElement("div");
 		header.className = "fuzzy-panel-header";
-		const copy = document.createElement("div");
-		const brand = document.createElement("p");
-		const icon = document.createElement("img");
-		icon.className = "fuzzy-logo";
-		icon.src = browser.runtime.getURL("/icon/fuzzy.svg");
-		icon.alt = "";
-		icon.setAttribute("aria-hidden", "true");
-		const name = document.createElement("strong");
-		name.textContent = "Fuzzy";
-		const modePill = document.createElement("span");
-		modePill.className = api.mode === "mock" ? "fuzzy-pill fuzzy-pill-mock" : "fuzzy-pill";
-		modePill.textContent = api.mode === "mock" ? "サンプル" : "ブラウザ拡張";
-		brand.append(icon, name, modePill);
-		const context = document.createElement("small");
-		context.textContent = `ダウンロードを検出・コース「${snapshot.courseName ?? "未取得"}」`;
-		copy.append(brand, context);
+		const identity = document.createElement("div");
+		const title = document.createElement("p");
+		const brandName = document.createElement("strong");
+		brandName.textContent = "Fuzzy";
+		title.append(createBrandIcon("fuzzy-save-brand-icon"), brandName);
+		if (api.mode === "mock") {
+			const samplePill = document.createElement("span");
+			samplePill.className = "fuzzy-pill fuzzy-pill-mock";
+			samplePill.textContent = "サンプル";
+			title.append(samplePill);
+		}
+		const subtitle = document.createElement("small");
+		subtitle.textContent = snapshot.courseName
+			? `「${snapshot.courseName}」の資料を保存`
+			: "コース情報を確認しています";
+		identity.append(title, subtitle);
 
 		const tools = document.createElement("div");
 		tools.className = "fuzzy-panel-tools";
-		const refresh = document.createElement("button");
-		refresh.type = "button";
-		refresh.textContent = "↻";
-		refresh.setAttribute("aria-label", "Fuzzyの資料一覧を更新");
-		refresh.addEventListener("click", () => void reloadSnapshotAndSuggestions());
-		const collapse = document.createElement("button");
-		collapse.type = "button";
-		collapse.textContent = "×";
-		collapse.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
-		collapse.addEventListener("click", () => setPanelOpen(false));
-		tools.append(refresh, collapse);
-		header.append(copy, tools);
+		const refreshButton = document.createElement("button");
+		refreshButton.type = "button";
+		refreshButton.textContent = "↻";
+		refreshButton.setAttribute("aria-label", "Fuzzyの資料一覧を更新");
+		refreshButton.addEventListener("click", () => void reloadSnapshotAndSuggestions());
+		const closeButton = document.createElement("button");
+		closeButton.type = "button";
+		closeButton.textContent = "×";
+		closeButton.setAttribute("aria-label", "Fuzzyの一括保存パネルを閉じる");
+		closeButton.addEventListener("click", () => setPanelOpen(false));
+		tools.append(refreshButton, closeButton);
+		header.append(identity, tools);
 		return header;
 	}
 
 	function renderNote() {
 		const note = document.createElement("p");
-		const busy = loading || saving || checkingSimilar || courseFolderSaving;
-		note.className = busy ? "fuzzy-note" : "fuzzy-note fuzzy-note-result";
+		const tone =
+			loading || saving || checkingSimilar || courseFolderSaving ? "progress" : messageTone;
+		note.className =
+			tone === "success"
+				? "fuzzy-note fuzzy-note-result"
+				: tone === "warning"
+					? "fuzzy-note fuzzy-note-warning"
+					: tone === "error"
+						? "fuzzy-note fuzzy-note-error"
+						: "fuzzy-note";
+		note.setAttribute("role", tone === "error" ? "alert" : "status");
 		note.textContent = message ?? "";
 		return note;
 	}
@@ -417,34 +458,48 @@ export async function mountSavePanel(): Promise<void> {
 	function renderFileList(files: MoodleFileLink[]) {
 		const section = document.createElement("section");
 		section.className = "fuzzy-section";
-		const list = files
-			.map((file) => {
-				const type = fileTypeInfo(file);
-				const title = displayFileTitle(file, type.label);
+		const groups = groupSavePanelFiles(files);
+		const list = groups
+			.map(({ key, label, files: groupedFiles }) => {
+				const collapsed = collapsedFileGroups.has(key);
+				const rows = groupedFiles.map(renderFileRow).join("");
 				return `
-					<label class="fuzzy-file-row">
-						<input type="checkbox" data-file-id="${escapeHtml(fileId(file))}" ${
-							selectedFileIds.has(fileId(file)) ? "checked" : ""
-						} />
-						<span class="fuzzy-file-type" data-kind="${type.kind}">${escapeHtml(type.label)}</span>
-						<span class="fuzzy-file-details">
-							<strong>${escapeHtml(title)}</strong>
-							<small>${escapeHtml(file.sectionTitle ?? "セクション未取得")}</small>
-						</span>
-					</label>
+					<section class="fuzzy-file-group">
+						<button
+							type="button"
+							class="fuzzy-file-group-toggle"
+							data-file-group="${escapeHtml(key)}"
+							aria-expanded="${String(!collapsed)}"
+						>
+							<span class="fuzzy-file-group-arrow" aria-hidden="true">›</span>
+							<strong class="fuzzy-file-group-title">${escapeHtml(label)}</strong>
+							<span class="fuzzy-file-group-count">${groupedFiles.length}件</span>
+						</button>
+						<div class="fuzzy-file-group-body" ${collapsed ? "hidden" : ""}>${rows}</div>
+					</section>
 				`;
 			})
 			.join("");
 		section.innerHTML = `
 			<div class="fuzzy-section-heading">
-				<h3>保存できるファイル（このページ）</h3>
+				<h3>${escapeHtml(snapshot.courseName ?? "このページ")}の資料</h3>
+				<span>${files.length}件</span>
 			</div>
 			<div class="fuzzy-file-list">${
 				files.length > 0
 					? list
-					: "<p class='fuzzy-empty'>このページでは資料リンクが見つかりませんでした。</p>"
+					: "<p class='fuzzy-empty'>資料を取得できませんでした。Moodleのコースページを開いて、上の更新ボタンからもう一度お試しください。</p>"
 			}</div>
 		`;
+		for (const button of section.querySelectorAll<HTMLButtonElement>("[data-file-group]")) {
+			button.addEventListener("click", () => {
+				const key = button.dataset.fileGroup;
+				if (!key) return;
+				if (collapsedFileGroups.has(key)) collapsedFileGroups.delete(key);
+				else collapsedFileGroups.add(key);
+				render();
+			});
+		}
 		for (const input of section.querySelectorAll<HTMLInputElement>(
 			"input[type='checkbox'][data-file-id]",
 		)) {
@@ -656,6 +711,7 @@ export async function mountSavePanel(): Promise<void> {
 			?.addEventListener("click", () => {
 				resetConfirmState();
 				message = "保存を中止しました。";
+				messageTone = "info";
 				render();
 			});
 		section
@@ -720,6 +776,7 @@ export async function mountSavePanel(): Promise<void> {
 		initialized = true;
 		loading = true;
 		message = "Moodleページ内の資料を読み込んでいます。";
+		messageTone = "progress";
 		render();
 		void initialize();
 	}
@@ -728,6 +785,23 @@ export async function mountSavePanel(): Promise<void> {
 		resetConfirmState(); // 選択が変われば前回の類似判定は無効化し、再チェックさせる
 		message = null;
 		render();
+	}
+
+	function renderFileRow(file: MoodleFileLink): string {
+		const type = fileTypeInfo(file);
+		const title = displayFileTitle(file, type.label);
+		return `
+			<label class="fuzzy-file-row">
+				<input type="checkbox" data-file-id="${escapeHtml(fileId(file))}" ${
+					selectedFileIds.has(fileId(file)) ? "checked" : ""
+				} />
+				<span class="fuzzy-file-type" data-kind="${type.kind}">${escapeHtml(type.label)}</span>
+				<span class="fuzzy-file-details">
+					<strong>${escapeHtml(title)}</strong>
+					<small>${escapeHtml(file.sectionTitle ?? "所属を確認できません")}</small>
+				</span>
+			</label>
+		`;
 	}
 
 	function toggleAllFiles(files: MoodleFileLink[]) {

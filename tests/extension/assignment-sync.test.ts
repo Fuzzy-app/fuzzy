@@ -273,5 +273,6 @@ describe("Moodle課題の実データ同期", () => {
 		expect(detectSubmissionAvailability("提出物をアップロードする")).toBe("available");
 		expect(detectSubmissionAvailability("この課題は提出を受け付けていません")).toBe("unavailable");
 		expect(detectSubmissionAvailability("提出期限: 2026年7月30日")).toBe("unknown");
+		expect(detectSubmissionAvailability("提出期限は過ぎています")).toBe("unknown");
 	});
 });
