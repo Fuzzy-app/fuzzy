@@ -135,6 +135,12 @@ impl Database {
 				|row| row.get::<_, bool>(0),
 			)
 			.map_err(db_err)?;
+		if !require_existing_setup && setup_exists {
+			return Err(EngineError::InvalidInput {
+				field: "setup".to_string(),
+				reason: "初期セットアップは設定済みの状態では実行できません".to_string(),
+			});
+		}
 		if require_existing_setup && !setup_exists {
 			return Err(EngineError::InvalidInput {
 				field: "setup".to_string(),
@@ -869,6 +875,40 @@ mod tests {
 			saved.course_overrides_json,
 			r#"[{"courseName":"情報アーキテクチャ"}]"#
 		);
+	}
+
+	#[test]
+	fn initial_setup_cannot_overwrite_an_existing_configuration() {
+		let directory = TestDirectory::new();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&directory.path,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let before = database.saved_setup_configuration().unwrap().unwrap();
+
+		let result = database.save_initial_setup(
+			&directory.path,
+			"year-course-assignment",
+			"{year}/{course}/{assignment}",
+			"estimated-2",
+			Some(1),
+			r#"[{"courseName":"データベース"}]"#,
+		);
+
+		assert!(matches!(result, Err(EngineError::InvalidInput { field, .. }) if field == "setup"));
+		let after = database.saved_setup_configuration().unwrap().unwrap();
+		assert_eq!(after.revision, before.revision);
+		assert_eq!(after.rule_template, before.rule_template);
+		assert_eq!(after.scan_pattern_id, before.scan_pattern_id);
+		assert_eq!(after.course_segment_index, before.course_segment_index);
+		assert_eq!(after.course_overrides_json, before.course_overrides_json);
 	}
 
 	#[test]
