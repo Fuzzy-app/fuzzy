@@ -13,7 +13,8 @@ export function contextualMoodleCourseId(
 	try {
 		const hostname = new URL(pageUrl).hostname.toLowerCase();
 		if (!hostname) return null;
-		const year = snapshot.academicYear ?? "unknown";
+		if (snapshot.academicYear === null) return null;
+		const year = snapshot.academicYear;
 		const contextualId = `moodle:${hostname}:${year}:${rawId}`;
 		return contextualId.length <= 128 ? contextualId : null;
 	} catch {
