@@ -1395,6 +1395,7 @@ dependencies = [
  "ts-rs",
  "unicode-normalization",
  "unicode-segmentation",
+ "url",
  "zip",
 ]
 

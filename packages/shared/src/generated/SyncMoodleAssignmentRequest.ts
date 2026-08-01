@@ -9,6 +9,6 @@ export type SyncMoodleAssignmentRequest = {
   dueAtStatus: string;
   submissionMode: string;
   submitted: boolean;
-  detailUrl: string | null;
   submissionAvailability: SubmissionAvailability;
+  moodleUrl: string | null;
 };

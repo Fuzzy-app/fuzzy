@@ -143,8 +143,8 @@ fn load_deadlines(
 				a.due_at_status,
 				a.submission_mode,
 				a.submitted,
-				a.detail_url,
-				a.submission_availability
+				a.submission_availability,
+				a.moodle_url
 			 FROM assignments a
 			 JOIN courses c ON c.id = a.course_id
 			 WHERE a.removed_at IS NULL
@@ -179,8 +179,8 @@ fn load_deadlines(
 					due_at_status: row.get(6)?,
 					submission_mode: row.get(7)?,
 					submitted,
-					detail_url: row.get(9)?,
-					submission_availability: row.get(10)?,
+					submission_availability: row.get(9)?,
+					moodle_url: row.get(10)?,
 				})
 			},
 		)

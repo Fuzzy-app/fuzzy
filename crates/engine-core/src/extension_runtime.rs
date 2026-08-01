@@ -10,7 +10,7 @@ use ts_rs::TS;
 use crate::{EngineError, EngineResult};
 
 /// 現在のNative Messaging契約バージョン。
-pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 4;
+pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 6;
 /// 正常状態として扱う拡張機能の最低バージョン。
 pub const MINIMUM_COMPATIBLE_EXTENSION_VERSION: &str = "0.1.0";
 /// 最終応答を「最近」とみなす期間（24時間）。

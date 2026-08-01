@@ -61,8 +61,10 @@ CREATE TABLE files (
 	section_no       INTEGER,
 	moodle_file_id   TEXT,
 	original_name    TEXT NOT NULL,
-	saved_path       TEXT NOT NULL UNIQUE,
+	saved_path       TEXT NOT NULL COLLATE NOCASE UNIQUE,
 	size_bytes       INTEGER NOT NULL,
+	-- 増分再走査で内容読取を省略するためのファイルシステム観測値（UNIXエポックからのns）
+	scan_modified_at_ns INTEGER,
 	mime_type        TEXT,
 	-- BLAKE3は b3:<64桁の小文字16進数> 形式。既存のseed値はデモ用の省略表記
 	hash_blake3      TEXT NOT NULL,
@@ -103,8 +105,8 @@ CREATE TABLE assignments (
 	due_at_status    TEXT NOT NULL DEFAULT 'normal' CHECK (due_at_status IN ('normal', 'needs_review')),
 	submission_mode  TEXT NOT NULL DEFAULT 'unknown' CHECK (submission_mode IN ('moodle_auto', 'manual', 'notify_only', 'unknown')),
 	submitted        INTEGER NOT NULL DEFAULT 0,
-	detail_url       TEXT,
 	submission_availability TEXT NOT NULL DEFAULT 'unknown' CHECK (submission_availability IN ('available', 'unavailable', 'unknown')),
+	moodle_url       TEXT,
 	related_file_id  INTEGER REFERENCES files(id) ON DELETE SET NULL,
 	removed_at       TEXT,
 	created_at       TEXT NOT NULL DEFAULT (datetime('now')),
@@ -146,7 +148,7 @@ CREATE TABLE assignment_changes (
 	id            INTEGER PRIMARY KEY AUTOINCREMENT,
 	sync_event_id INTEGER NOT NULL REFERENCES sync_events(id) ON DELETE CASCADE,
 	assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-	field         TEXT NOT NULL CHECK (field IN ('due_at', 'title', 'submission_mode', 'due_at_status', 'submitted', 'detail_url', 'submission_availability', 'removed_at')),
+	field         TEXT NOT NULL CHECK (field IN ('due_at', 'title', 'submission_mode', 'due_at_status', 'submitted', 'submission_availability', 'moodle_url', 'removed_at')),
 	old_value     TEXT,
 	new_value     TEXT,
 	detected_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -154,4 +156,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 1;

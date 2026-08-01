@@ -13,10 +13,13 @@ describe("Fuzzy GitHub Pages site", () => {
 		}
 
 		expect(html).toContain("Fuzzy for Windows");
+		expect(html).toContain('src="./icon/fuzzy.svg"');
+		expect(html).toContain("資料の整理状況");
+		expect(html).not.toContain("./assets/fuzzy.svg");
 		expect(html).toContain("現在は開発・レビュー段階のため");
 		expect(html).toContain("開発中の拡張機能はTauriアプリへ同梱しています");
 		expect(html).toContain("正式公開後は、Windowsアプリの配布ページと公式ブラウザストア");
-		expect(html).toContain("学習状況をひと目で確認");
+		expect(html).toContain("資料の整理状況");
 		expect(html).not.toContain("おかえりなさい");
 	});
 
@@ -28,7 +31,7 @@ describe("Fuzzy GitHub Pages site", () => {
 		expect(document.querySelectorAll('a[href*="/releases/latest/download/"]')).toHaveLength(0);
 		expect(
 			document.querySelectorAll(
-				'a[href="https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.1"]',
+				'a[href="https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.2"]',
 			),
 		).toHaveLength(2);
 		expect(disabledDownloads).toHaveLength(4);

@@ -1,7 +1,6 @@
 // Rust DTOが存在するAPI型はts-rs生成物を使用する。
 // packages/shared/src/generated/ は `bun run generate:types` で再生成し、手編集しない。
 import type { CourseFolderNameResolution } from "./generated/CourseFolderNameResolution";
-import type { SubmissionAvailability } from "./generated/SubmissionAvailability";
 
 export type { CourseFolderNameResolution } from "./generated/CourseFolderNameResolution";
 export type { CourseFolderNameWarning } from "./generated/CourseFolderNameWarning";
@@ -23,11 +22,11 @@ export type { ImportDataResult } from "./generated/ImportDataResult";
 export type { LibraryMaintenanceSummary } from "./generated/LibraryMaintenanceSummary";
 export type { LibraryMaintenanceWarning } from "./generated/LibraryMaintenanceWarning";
 export type { PingResult } from "./generated/PingResult";
+export type { ReconcileCourseFilesRequest } from "./generated/ReconcileCourseFilesRequest";
 export type { RebuildLibraryRequest } from "./generated/RebuildLibraryRequest";
 export type { RuleViolationListItem } from "./generated/RuleViolationListItem";
 export type { SearchRequest } from "./generated/SearchRequest";
 export type { SearchResult } from "./generated/SearchResult";
-export type { SubmissionAvailability } from "./generated/SubmissionAvailability";
 export type { SyncMoodleAssignmentRequest } from "./generated/SyncMoodleAssignmentRequest";
 export type { SyncMoodleAssignmentsRequest } from "./generated/SyncMoodleAssignmentsRequest";
 export type { SyncMoodleCourseRequest } from "./generated/SyncMoodleCourseRequest";
@@ -60,6 +59,36 @@ export interface SaveSuggestion {
 	similarMatches?: SimilarFileMatch[];
 	/** 保存先に使用したコースフォルダ名と、確認が必要な警告。 */
 	courseFolder: CourseFolderNameResolution;
+}
+
+/** 初期走査で推定した、利用者確認前の保存構造候補。 */
+export interface InitialScanPatternCandidate {
+	id: string;
+	name: string;
+	description: string;
+	/** この候補を実際に支持した相対フォルダーパスの代表例。 */
+	folders: string[];
+	/** 保存ルート直下から数えた科目セグメント位置。未分類ではnull。 */
+	courseSegmentIndex: number | null;
+	/** 比較評価用のファイル名規則。DBの保存ルールには自動保存しない。 */
+	fileNameTemplate: string | null;
+	/** 評価可能な母集団に対する一致度。推定不能ではnull。 */
+	matchScore: number | null;
+	/** この候補を評価できたファイル数。 */
+	evaluatedCount: number;
+	reason: string;
+	recommended: boolean;
+	/** 自動選択せず、利用者が明示的に選ぶ必要がある候補か。 */
+	requiresConfirmation: boolean;
+}
+
+/** Tauriの`library-maintenance-progress`イベント。絶対パスや本文を含めない。 */
+export interface LibraryMaintenanceProgress {
+	phase: "scanning" | "registering" | "indexing" | "finalizing" | "completed";
+	state: "running" | "completed" | "completedWithWarnings" | "failed";
+	completedCount: number;
+	totalCount: number | null;
+	warningCount: number;
 }
 
 export interface MoodleCourseContext {
@@ -150,10 +179,9 @@ export interface Assignment {
 	dueAtStatus: DueAtStatus;
 	submissionMode: SubmissionMode;
 	submitted: boolean;
-	/** Moodleの認証済み課題詳細ページ。取得不能・対象外ではnull。 */
-	detailUrl: string | null;
-	/** 締切や提出済み状態とは独立した、現在の提出開始操作の可否。 */
-	submissionAvailability: SubmissionAvailability;
+	submissionAvailability: "available" | "unavailable" | "unknown";
+	/** 利用者が明示操作で開くMoodle課題詳細URL。 */
+	moodleUrl: string | null;
 }
 
 export interface CourseDashboardEntry {
@@ -234,8 +262,8 @@ export type AssignmentChangeField =
 	| "submissionMode"
 	| "dueAtStatus"
 	| "submitted"
-	| "detailUrl"
 	| "submissionAvailability"
+	| "moodleUrl"
 	| "removedAt";
 
 /** 同期のたびに検出された課題1件・1フィールド分の変更点。変更点表示に使う */
@@ -250,4 +278,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 4 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 6 as const;

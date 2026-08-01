@@ -148,8 +148,8 @@ export function ensureRulesScreenStyle(): void {
 		}
 
 		.fuzzy-rules-kind-badge.is-no-section {
-			background: #fff0c2;
-			color: #8a6410;
+			background: var(--fuzzy-color-warning-soft);
+			color: var(--fuzzy-color-warning);
 		}
 
 		.fuzzy-rules-preset-grid {
@@ -208,7 +208,7 @@ export function ensureRulesScreenStyle(): void {
 		.fuzzy-rules-textarea {
 			width: 100%;
 			min-width: 0;
-			border: 1px solid #dfe2f2;
+			border: 1px solid var(--fuzzy-color-border);
 			border-radius: 11px;
 			padding: 10px 12px;
 			background: var(--fuzzy-color-surface);
@@ -268,7 +268,7 @@ export function ensureRulesScreenStyle(): void {
 		}
 
 		.fuzzy-rules-preview-value {
-			color: #303653;
+			color: var(--fuzzy-color-text);
 			font-size: var(--fuzzy-font-size-small);
 			font-weight: 900;
 			line-height: 1.6;
@@ -351,7 +351,7 @@ export function ensureRulesScreenStyle(): void {
 			border-radius: 14px;
 			padding: 16px;
 			background: var(--fuzzy-color-surface);
-			box-shadow: inset 0 0 0 1px #e5e8f5;
+			box-shadow: inset 0 0 0 1px var(--fuzzy-color-border-soft);
 		}
 
 		.fuzzy-rules-override-head {
@@ -390,7 +390,7 @@ export function ensureRulesScreenStyle(): void {
 			border-radius: 11px;
 			padding: 11px 12px;
 			background: var(--fuzzy-color-background);
-			color: #303653;
+			color: var(--fuzzy-color-text);
 			font-size: var(--fuzzy-font-size-small);
 			font-weight: 800;
 			line-height: 1.55;

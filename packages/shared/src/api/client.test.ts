@@ -31,6 +31,7 @@ describe("MockApiClient（サンプルデータ）", () => {
 		const result = await client.search("正規化");
 		expect(result.length).toBe(2);
 		expect(result[0]?.page).toBe(12);
+		expect(result[0]?.pageCount).toBe(24);
 	});
 
 	test("suggestSavePath: Moodleのコース・ファイル情報から保存先候補を返す", async () => {

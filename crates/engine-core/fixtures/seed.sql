@@ -42,16 +42,13 @@ INSERT INTO duplicate_members (group_id, file_id, similarity) VALUES
 	(1, 3, 1.0),
 	(1, 9, 1.0);
 
-INSERT INTO assignments (
-	id, course_id, title, source, due_at, due_at_status, submission_mode, submitted,
-	detail_url, submission_availability, related_file_id
-) VALUES
-	(1, 2, '正規化レポート提出', 'moodle_dashboard', '2026-07-04T23:59:00', 'normal', 'moodle_auto', 0, 'https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701', 'available', 3),
-	(2, 1, '第9回 演習課題', 'file_content', '2026-07-03T17:00:00', 'normal', 'manual', 0, NULL, 'unknown', 2),
-	(3, 4, '中間プレゼン資料の提出', 'moodle_text', '2026-07-02T12:00:00', 'normal', 'moodle_auto', 1, 'https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=703', 'unavailable', 6),
-	(4, 3, '離散数学 小テスト範囲確認', 'moodle_dashboard', '2026-06-29T23:59:00', 'normal', 'notify_only', 0, NULL, 'unknown', NULL),
-	(5, 5, '認知科学概論 期末レポート', 'moodle_dashboard', '2027-05-10T23:59:00', 'needs_review', 'moodle_auto', 0, 'https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=705', 'unknown', NULL),
-	(6, 6, '英語IIB 単語テスト', 'moodle_dashboard', '2026-06-20T23:59:00', 'normal', 'notify_only', 0, NULL, 'unknown', NULL);
+INSERT INTO assignments (id, course_id, title, source, due_at, due_at_status, submission_mode, submitted, related_file_id) VALUES
+	(1, 2, '正規化レポート提出', 'moodle_dashboard', '2026-07-04T23:59:00', 'normal', 'moodle_auto', 0, 3),
+	(2, 1, '第9回 演習課題', 'file_content', '2026-07-03T17:00:00', 'normal', 'manual', 0, 2),
+	(3, 4, '中間プレゼン資料の提出', 'moodle_text', '2026-07-02T12:00:00', 'normal', 'moodle_auto', 1, 6),
+	(4, 3, '離散数学 小テスト範囲確認', 'moodle_dashboard', '2026-06-29T23:59:00', 'normal', 'notify_only', 0, NULL),
+	(5, 5, '認知科学概論 期末レポート', 'moodle_dashboard', '2027-05-10T23:59:00', 'needs_review', 'moodle_auto', 0, NULL),
+	(6, 6, '英語IIB 単語テスト', 'moodle_dashboard', '2026-06-20T23:59:00', 'normal', 'notify_only', 0, NULL);
 -- assignment 5 は学期の範囲から大きく外れた締切（前年度設定ミスの想定）→ needs_review
 -- assignment 6 は締切超過（期限切れのまとめ画面の対象）
 

@@ -1,11 +1,18 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import fuzzyIconUrl from "../../../extension/public/icon/fuzzy.svg?url";
+	import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 	import {
 		RULE_PRESETS,
 		createRulePreviewValues,
 		previewRulePattern,
 	} from "@fuzzy/shared";
+	import type {
+		ExtensionRecoveryStatus,
+		LibraryMaintenanceProgress,
+	} from "@fuzzy/shared";
 	import { getExtensionRecoveryStatusClient } from "$lib/setup/extension-recovery";
+	import { isTauriRuntime } from "$lib/setup/extension-install";
 	import {
 		getSetupStatusClient,
 		pickBaseFolderClient,
@@ -16,7 +23,6 @@
 	import ExtensionInstallStep from "$lib/setup/ExtensionInstallStep.svelte";
 	import ExtensionRecoveryPanel from "$lib/setup/ExtensionRecoveryPanel.svelte";
 	import StartupRecoveryPanel from "$lib/setup/StartupRecoveryPanel.svelte";
-	import type { ExtensionRecoveryStatus } from "@fuzzy/shared";
 	import type {
 		InitialRuleOption,
 		SetupDraft,
@@ -68,6 +74,7 @@
 	let isPickingFolder = false;
 	let isScanning = false;
 	let isSaving = false;
+	let maintenanceProgress: LibraryMaintenanceProgress | null = null;
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
 	let extensionRecoveryStatus: ExtensionRecoveryStatus | null = null;
@@ -215,9 +222,7 @@
 		try {
 			const candidates = await scanExistingStructureClient(path);
 			const selectedCandidate =
-				candidates.find((candidate) => candidate.recommended) ??
-				candidates[0] ??
-				null;
+				candidates.find((candidate) => candidate.recommended) ?? null;
 
 			draft = {
 				...draft,
@@ -270,10 +275,20 @@
 		}
 
 		isSaving = true;
+		maintenanceProgress = null;
 		errorMessage = null;
 		successMessage = null;
+		let unlistenProgress: UnlistenFn | null = null;
 
 		try {
+			if (isTauriRuntime()) {
+				unlistenProgress = await listen<LibraryMaintenanceProgress>(
+					"library-maintenance-progress",
+					({ payload }) => {
+						maintenanceProgress = payload;
+					},
+				);
+			}
 			const saved = await saveInitialSetupClient({
 				path: draft.baseFolderPath,
 				pattern: selectedCandidate,
@@ -290,8 +305,36 @@
 		} catch {
 			errorMessage = "初期セットアップの保存に失敗しました。";
 		} finally {
+			unlistenProgress?.();
 			isSaving = false;
 		}
+	}
+
+	function maintenancePhaseLabel(
+		progress: LibraryMaintenanceProgress | null,
+	): string {
+		if (progress?.phase === "completed") {
+			return progress.state === "failed"
+				? "既存資料を確認できませんでした"
+				: "既存資料の確認が完了しました";
+		}
+		return "既存資料を確認しています";
+	}
+
+	function maintenanceProgressPercent(
+		progress: LibraryMaintenanceProgress | null,
+	): number | null {
+		if (
+			!progress ||
+			progress.totalCount === null ||
+			progress.totalCount === 0
+		) {
+			return null;
+		}
+		return Math.min(
+			100,
+			Math.round((progress.completedCount / progress.totalCount) * 100),
+		);
 	}
 
 	$: selectedCandidate =
@@ -332,7 +375,7 @@
 <main class="window">
 	<header class="titlebar">
 		<div class="brand">
-			<div class="brand-mark">F</div>
+			<img class="brand-mark" src={fuzzyIconUrl} alt="" aria-hidden="true" />
 			<div class="brand-copy">
 				<strong>Fuzzy</strong>
 				<span>{isRecoveryMode ? "拡張機能の確認" : "初期セットアップ"}</span>
@@ -349,8 +392,8 @@
 		<section class="startup-check-panel" aria-live="polite">
 			<div class="startup-spinner" aria-hidden="true"></div>
 			<div>
-				<p class="eyebrow">ローカルデータを確認中</p>
-				<h1>SQLite正本と検索索引を確認しています</h1>
+				<p class="eyebrow">このPCのデータを確認中</p>
+				<h1>資料の検索・整理情報を確認しています</h1>
 				<p>保存済みの資料ファイルは変更しません。</p>
 			</div>
 		</section>
@@ -528,6 +571,9 @@
 												{#if candidate.recommended}
 													<span class="badge">おすすめ</span>
 												{/if}
+												{#if candidate.requiresConfirmation}
+													<span class="badge warning">要確認</span>
+												{/if}
 											</div>
 											<p>{candidate.description}</p>
 											<p class="reason">{candidate.reason}</p>
@@ -535,8 +581,16 @@
 
 										<div class="pattern-side">
 											<div class="score-box">
-												<span>一致度</span>
-												<strong>{candidate.matchScore}%</strong>
+												<span
+													>{candidate.matchScore === null
+														? "判定"
+														: "一致度"}</span
+												>
+												<strong
+													>{candidate.matchScore === null
+														? "要確認"
+														: `${candidate.matchScore}%`}</strong
+												>
 											</div>
 											<div
 												class="example-box"
@@ -641,7 +695,12 @@
 									<strong>候補順位:</strong>
 									{selectedCandidateRank} / {draft.candidates.length}
 								</p>
-								<p><strong>一致度:</strong> {selectedCandidate.matchScore}%</p>
+								<p>
+									<strong>一致度:</strong>
+									{selectedCandidate.matchScore === null
+										? "要確認"
+										: `${selectedCandidate.matchScore}%`}
+								</p>
 							{/if}
 							<p>
 								<strong>初期ルール:</strong>
@@ -657,6 +716,47 @@
 							</p>
 						</div>
 					</section>
+
+					{#if isSaving}
+						<section class="maintenance-progress-card" aria-live="polite">
+							<div class="maintenance-progress-heading">
+								<div>
+									<p class="section-label">初期設定を保存中</p>
+									<strong>{maintenancePhaseLabel(maintenanceProgress)}</strong>
+								</div>
+								{#if maintenanceProgress?.totalCount !== null && maintenanceProgress}
+									<span>
+										{maintenanceProgress.completedCount.toLocaleString()} /
+										{maintenanceProgress.totalCount.toLocaleString()} 件
+									</span>
+								{:else}
+									<span>確認中</span>
+								{/if}
+							</div>
+							<div
+								class:indeterminate={maintenanceProgressPercent(
+									maintenanceProgress,
+								) === null}
+								class="maintenance-progress-track"
+								role="progressbar"
+								aria-label="既存資料の取り込み進捗"
+								aria-valuemin="0"
+								aria-valuemax="100"
+								aria-valuenow={maintenanceProgressPercent(
+									maintenanceProgress,
+								) ?? undefined}
+							>
+								<span
+									style:width={`${
+										maintenanceProgressPercent(maintenanceProgress) ?? 30
+									}%`}
+								></span>
+							</div>
+							<p>
+								資料ファイルは移動・削除しません。この画面を開いたままお待ちください。
+							</p>
+						</section>
+					{/if}
 
 					<div class="action-row">
 						{#if setupStatus.done}
@@ -730,14 +830,22 @@
 		margin: 0;
 		font-family: "BIZ UDPGothic", "Yu Gothic UI", "Segoe UI", sans-serif;
 		background:
-			linear-gradient(180deg, #9d8bff 0 4px, transparent 4px),
+			linear-gradient(
+				180deg,
+				var(--fuzzy-color-primary) 0 4px,
+				transparent 4px
+			),
 			radial-gradient(
 				circle at top,
-				rgba(134, 118, 239, 0.22),
+				var(--fuzzy-color-primary-overlay),
 				transparent 26%
 			),
-			linear-gradient(180deg, #f6f7fb 0%, #eceef7 100%);
-		color: #27283a;
+			linear-gradient(
+				180deg,
+				var(--fuzzy-color-surface-muted) 0%,
+				var(--fuzzy-color-surface-muted) 100%
+			);
+		color: var(--fuzzy-color-text-strong);
 	}
 
 	.startup-check-panel {
@@ -748,10 +856,10 @@
 		align-items: center;
 		gap: 18px;
 		box-sizing: border-box;
-		border: 1px solid rgba(203, 207, 226, 0.82);
+		border: 1px solid var(--fuzzy-color-border-overlay);
 		border-radius: 12px;
-		background: rgba(255, 255, 255, 0.96);
-		box-shadow: 0 28px 52px rgba(96, 105, 151, 0.16);
+		background: var(--fuzzy-color-surface-glass);
+		box-shadow: 0 28px 52px var(--fuzzy-color-primary-overlay);
 	}
 
 	.startup-check-panel h1 {
@@ -761,7 +869,7 @@
 
 	.startup-check-panel p {
 		margin: 0;
-		color: #727894;
+		color: var(--fuzzy-color-text-muted);
 		font-size: 0.8rem;
 	}
 
@@ -769,7 +877,7 @@
 		width: 24px;
 		height: 24px;
 		flex: 0 0 auto;
-		border: 3px solid rgba(109, 92, 246, 0.2);
+		border: 3px solid var(--fuzzy-color-primary-overlay);
 		border-top-color: var(--fuzzy-color-primary);
 		border-radius: 999px;
 		animation: spin 0.8s linear infinite;
@@ -788,8 +896,8 @@
 		align-items: center;
 		justify-content: space-between;
 		border-radius: 14px 14px 0 0;
-		background: rgba(255, 255, 255, 0.92);
-		border: 1px solid rgba(130, 140, 190, 0.12);
+		background: var(--fuzzy-color-surface-glass);
+		border: 1px solid var(--fuzzy-color-border-overlay);
 		border-bottom: none;
 	}
 
@@ -806,6 +914,70 @@
 		display: flex;
 	}
 
+	.maintenance-progress-card {
+		margin-top: 18px;
+		padding: 16px;
+		border: 1px solid var(--fuzzy-color-primary-overlay);
+		border-radius: 10px;
+		background: var(--fuzzy-color-surface-glass);
+	}
+
+	.maintenance-progress-heading {
+		display: flex;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: 16px;
+	}
+
+	.maintenance-progress-heading strong {
+		display: block;
+		margin-top: 4px;
+		color: var(--fuzzy-color-primary);
+	}
+
+	.maintenance-progress-heading > span,
+	.maintenance-progress-card > p {
+		color: var(--fuzzy-color-text-muted);
+		font-size: 0.74rem;
+	}
+
+	.maintenance-progress-card > p {
+		margin: 10px 0 0;
+	}
+
+	.maintenance-progress-track {
+		height: 8px;
+		margin-top: 12px;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--fuzzy-color-primary-overlay);
+	}
+
+	.maintenance-progress-track span {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: linear-gradient(
+			90deg,
+			var(--fuzzy-color-primary),
+			var(--fuzzy-color-primary)
+		);
+		transition: width 180ms ease;
+	}
+
+	.maintenance-progress-track.indeterminate span {
+		animation: maintenance-progress 1.2s ease-in-out infinite alternate;
+	}
+
+	@keyframes maintenance-progress {
+		from {
+			transform: translateX(-100%);
+		}
+		to {
+			transform: translateX(333%);
+		}
+	}
+
 	.brand {
 		align-items: center;
 		gap: 10px;
@@ -814,25 +986,20 @@
 	.brand-mark {
 		width: 18px;
 		height: 18px;
-		display: grid;
-		place-items: center;
 		border-radius: 6px;
-		background: linear-gradient(180deg, #8d7bff 0%, #6b5bf6 100%);
-		color: #fff;
-		font-size: 0.72rem;
-		font-weight: 700;
-		box-shadow: 0 5px 14px rgba(109, 92, 246, 0.35);
+		object-fit: cover;
+		box-shadow: var(--fuzzy-shadow-card);
 	}
 
 	.brand-copy {
 		align-items: baseline;
 		gap: 8px;
 		font-size: 0.76rem;
-		color: #8c90ab;
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.brand-copy strong {
-		color: #4a4f74;
+		color: var(--fuzzy-color-text);
 		font-size: 0.82rem;
 	}
 
@@ -844,7 +1011,7 @@
 		width: 10px;
 		height: 10px;
 		border-radius: 999px;
-		background: #d7dbeb;
+		background: var(--fuzzy-color-border);
 	}
 
 	.workspace {
@@ -853,26 +1020,26 @@
 		grid-template-columns: 248px minmax(0, 1fr);
 		border-radius: 0 0 20px 20px;
 		overflow: hidden;
-		background: rgba(255, 255, 255, 0.64);
-		border: 1px solid rgba(130, 140, 190, 0.12);
-		box-shadow: 0 26px 54px rgba(104, 112, 167, 0.12);
+		background: var(--fuzzy-color-surface-glass);
+		border: 1px solid var(--fuzzy-color-border-overlay);
+		box-shadow: 0 26px 54px var(--fuzzy-color-primary-overlay);
 	}
 
 	.sidebar {
 		padding: 26px 18px;
 		background: linear-gradient(
 			180deg,
-			rgba(247, 248, 252, 0.96),
-			rgba(240, 241, 247, 0.96)
+			var(--fuzzy-color-surface-glass),
+			var(--fuzzy-color-surface-glass)
 		);
-		border-right: 1px solid rgba(130, 140, 190, 0.12);
+		border-right: 1px solid var(--fuzzy-color-border-overlay);
 	}
 
 	.sidebar-label {
 		margin: 0 0 24px;
 		font-size: 0.74rem;
 		line-height: 1.6;
-		color: #8b8fa6;
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.side-list {
@@ -889,13 +1056,13 @@
 		gap: 10px;
 		padding: 10px 12px;
 		border-radius: 8px;
-		color: #777d98;
+		color: var(--fuzzy-color-text-muted);
 		font-size: 0.88rem;
 	}
 
 	.side-list li.active {
-		background: rgba(124, 104, 246, 0.08);
-		color: #5a4be0;
+		background: var(--fuzzy-color-primary-overlay);
+		color: var(--fuzzy-color-primary);
 		font-weight: 700;
 	}
 
@@ -905,7 +1072,7 @@
 		display: grid;
 		place-items: center;
 		border-radius: 999px;
-		background: rgba(124, 104, 246, 0.1);
+		background: var(--fuzzy-color-primary-overlay);
 		font-size: 0.74rem;
 	}
 
@@ -914,13 +1081,13 @@
 		background:
 			radial-gradient(
 				circle at top,
-				rgba(255, 255, 255, 0.88),
+				var(--fuzzy-color-surface-glass),
 				transparent 55%
 			),
 			linear-gradient(
 				180deg,
-				rgba(244, 246, 252, 0.95),
-				rgba(236, 238, 246, 0.95)
+				var(--fuzzy-color-surface-glass),
+				var(--fuzzy-color-surface-glass)
 			);
 	}
 
@@ -928,7 +1095,7 @@
 		justify-content: flex-end;
 		gap: 18px;
 		font-size: 0.74rem;
-		color: #7f84a0;
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.progress-item {
@@ -944,18 +1111,18 @@
 		border-radius: 999px;
 		font-size: 0.7rem;
 		font-weight: 700;
-		background: #d8dced;
-		color: #7f84a0;
+		background: var(--fuzzy-color-border);
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.progress-dot.done,
 	.progress-dot.current {
 		background: var(--fuzzy-color-primary);
-		color: #fff;
+		color: var(--fuzzy-color-surface);
 	}
 
 	.progress-dot.current {
-		box-shadow: 0 0 0 4px rgba(109, 92, 246, 0.14);
+		box-shadow: 0 0 0 4px var(--fuzzy-color-primary-overlay);
 	}
 
 	.panel {
@@ -963,8 +1130,8 @@
 		margin: 22px auto 0;
 		padding: 26px 28px 24px;
 		border-radius: 12px;
-		background: rgba(255, 255, 255, 0.94);
-		box-shadow: 0 28px 52px rgba(96, 105, 151, 0.16);
+		background: var(--fuzzy-color-surface-glass);
+		box-shadow: 0 28px 52px var(--fuzzy-color-primary-overlay);
 	}
 
 	.panel-header,
@@ -981,7 +1148,7 @@
 		margin: 0 0 12px;
 		padding: 4px 10px;
 		border-radius: 999px;
-		background: rgba(122, 107, 246, 0.1);
+		background: var(--fuzzy-color-primary-overlay);
 		color: var(--fuzzy-color-primary);
 		font-size: 0.7rem;
 		font-weight: 700;
@@ -1010,14 +1177,14 @@
 		margin-bottom: 0;
 		font-size: 0.82rem;
 		line-height: 1.7;
-		color: #8085a0;
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.section-label {
 		margin-bottom: 6px;
 		font-size: 0.72rem;
 		font-weight: 700;
-		color: #7d83a2;
+		color: var(--fuzzy-color-text-muted);
 		text-transform: uppercase;
 	}
 
@@ -1033,13 +1200,17 @@
 		margin-top: 20px;
 		padding: 18px 20px;
 		align-items: center;
-		background: linear-gradient(180deg, #f8f9ff 0%, #f1f3fc 100%);
-		border: 1px solid rgba(203, 207, 226, 0.76);
+		background: linear-gradient(
+			180deg,
+			var(--fuzzy-color-surface-muted) 0%,
+			var(--fuzzy-color-surface-muted) 100%
+		);
+		border: 1px solid var(--fuzzy-color-border-overlay);
 	}
 
 	.folder-card strong {
 		font-size: 0.98rem;
-		color: #3f4566;
+		color: var(--fuzzy-color-text);
 		word-break: break-all;
 	}
 
@@ -1049,7 +1220,7 @@
 		align-items: flex-end;
 		gap: 10px;
 		font-size: 0.76rem;
-		color: #7b809d;
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.scan-section,
@@ -1067,8 +1238,8 @@
 	.scan-count {
 		padding: 6px 10px;
 		border-radius: 999px;
-		background: rgba(124, 104, 246, 0.08);
-		color: #6c5cf2;
+		background: var(--fuzzy-color-primary-overlay);
+		color: var(--fuzzy-color-primary);
 		font-size: 0.74rem;
 		font-weight: 700;
 	}
@@ -1091,8 +1262,8 @@
 		padding: 18px;
 		text-align: left;
 		border-radius: 8px;
-		border: 1px solid rgba(203, 207, 226, 0.76);
-		background: #fff;
+		border: 1px solid var(--fuzzy-color-border-overlay);
+		background: var(--fuzzy-color-surface);
 		cursor: pointer;
 		transition:
 			border-color 0.18s ease,
@@ -1108,8 +1279,8 @@
 
 	.pattern-card.selected,
 	.rule-card.selected {
-		border-color: #7c68f6;
-		box-shadow: 0 0 0 3px rgba(124, 104, 246, 0.12);
+		border-color: var(--fuzzy-color-primary);
+		box-shadow: 0 0 0 3px var(--fuzzy-color-primary-overlay);
 		transform: translateY(-1px);
 	}
 
@@ -1130,12 +1301,12 @@
 		margin-bottom: 0;
 		font-size: 0.78rem;
 		line-height: 1.65;
-		color: #747b99;
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.reason {
 		margin-top: 10px;
-		color: #575f84;
+		color: var(--fuzzy-color-text);
 		font-weight: 700;
 	}
 
@@ -1151,8 +1322,12 @@
 	}
 
 	.score-box {
-		background: linear-gradient(180deg, #f6f0ff 0%, #ece8ff 100%);
-		color: #6457d6;
+		background: linear-gradient(
+			180deg,
+			var(--fuzzy-color-primary-soft) 0%,
+			var(--fuzzy-color-primary-soft) 100%
+		);
+		color: var(--fuzzy-color-primary);
 	}
 
 	.score-box span {
@@ -1169,22 +1344,22 @@
 	.badge {
 		padding: 3px 8px;
 		border-radius: 999px;
-		background: #fff4d9;
-		color: #9c6c00;
+		background: var(--fuzzy-color-warning-soft);
+		color: var(--fuzzy-color-warning);
 		font-size: 0.67rem;
 		font-weight: 700;
 	}
 
 	.example-box {
 		background: var(--fuzzy-color-background);
-		color: #666d8f;
+		color: var(--fuzzy-color-text-muted);
 		font-size: 0.72rem;
 	}
 
 	.example-box p {
 		margin-bottom: 8px;
 		font-weight: 700;
-		color: #555d82;
+		color: var(--fuzzy-color-text);
 	}
 
 	.example-box ul,
@@ -1200,13 +1375,13 @@
 		padding: 8px 10px;
 		border-radius: 6px;
 		background: var(--fuzzy-color-background);
-		color: #3f4566;
+		color: var(--fuzzy-color-text);
 		font-size: 0.75rem;
 		white-space: normal;
 	}
 
 	.rule-card ul {
-		color: #666d8f;
+		color: var(--fuzzy-color-text-muted);
 		font-size: 0.72rem;
 	}
 
@@ -1216,10 +1391,10 @@
 		align-items: flex-start;
 		gap: 10px;
 		border-radius: 8px;
-		background: #f8f9ff;
-		border: 1px solid rgba(203, 207, 226, 0.76);
+		background: var(--fuzzy-color-surface-muted);
+		border: 1px solid var(--fuzzy-color-border-overlay);
 		font-size: 0.8rem;
-		color: #43576a;
+		color: var(--fuzzy-color-text);
 	}
 
 	.override-section > div:not(.override-explanation):not(.override-list) {
@@ -1233,7 +1408,7 @@
 	.override-row small {
 		display: block;
 		margin-top: 3px;
-		color: #7b809d;
+		color: var(--fuzzy-color-text-muted);
 		line-height: 1.5;
 	}
 
@@ -1242,7 +1417,7 @@
 		margin: 8px 0 0;
 		font-size: 0.78rem;
 		line-height: 1.7;
-		color: #7b809d;
+		color: var(--fuzzy-color-text-muted);
 	}
 
 	.selection-summary {
@@ -1252,14 +1427,18 @@
 	.summary-card {
 		margin-top: 14px;
 		padding: 16px 18px;
-		background: linear-gradient(180deg, #fff8dd 0%, #ffefb5 100%);
-		color: #6f5600;
+		background: linear-gradient(
+			180deg,
+			var(--fuzzy-color-warning-soft) 0%,
+			var(--fuzzy-color-warning-soft) 100%
+		);
+		color: var(--fuzzy-color-warning);
 		font-size: 0.8rem;
 		line-height: 1.7;
 	}
 
 	.summary-card strong {
-		color: #5b4600;
+		color: var(--fuzzy-color-warning);
 	}
 
 	.empty-state,
@@ -1271,22 +1450,22 @@
 	}
 
 	.empty-state {
-		background: rgba(244, 245, 251, 0.82);
-		border: 1px dashed rgba(179, 184, 210, 0.8);
-		color: #7d83a2;
+		background: var(--fuzzy-color-surface-glass);
+		border: 1px dashed var(--fuzzy-color-border-overlay);
+		color: var(--fuzzy-color-text-muted);
 		text-align: center;
 	}
 
 	.error-banner {
-		background: #fff2f0;
-		border: 1px solid #f2c5bd;
-		color: #ab3e2d;
+		background: var(--fuzzy-color-danger-soft);
+		border: 1px solid var(--fuzzy-color-danger);
+		color: var(--fuzzy-color-danger);
 	}
 
 	.success-banner {
-		background: #edf8f1;
-		border: 1px solid #b9e2c7;
-		color: #2e6b43;
+		background: var(--fuzzy-color-success-soft);
+		border: 1px solid var(--fuzzy-color-success);
+		color: var(--fuzzy-color-success);
 	}
 
 	.success-banner span {
@@ -1316,14 +1495,14 @@
 
 	.ghost-button {
 		padding: 8px 10px;
-		background: rgba(255, 255, 255, 0.78);
-		color: #6256ca;
+		background: var(--fuzzy-color-surface-glass);
+		color: var(--fuzzy-color-primary);
 		font-size: 0.74rem;
 		font-weight: 700;
 	}
 
 	.ghost-button.loading {
-		background: rgba(109, 92, 246, 0.1);
+		background: var(--fuzzy-color-primary-overlay);
 	}
 
 	.ghost-button-label {
@@ -1335,18 +1514,22 @@
 	.spinner {
 		width: 12px;
 		height: 12px;
-		border: 2px solid rgba(98, 86, 202, 0.22);
-		border-top-color: #6256ca;
+		border: 2px solid var(--fuzzy-color-primary-overlay);
+		border-top-color: var(--fuzzy-color-primary);
 		border-radius: 999px;
 		animation: spin 0.8s linear infinite;
 	}
 
 	.primary-button {
 		padding: 13px 16px;
-		background: linear-gradient(180deg, #7f6cff 0%, #6958f5 100%);
-		color: #fff;
+		background: linear-gradient(
+			180deg,
+			var(--fuzzy-color-primary) 0%,
+			var(--fuzzy-color-primary) 100%
+		);
+		color: var(--fuzzy-color-surface);
 		font-weight: 700;
-		box-shadow: 0 14px 28px rgba(109, 92, 246, 0.28);
+		box-shadow: 0 14px 28px var(--fuzzy-color-primary-overlay);
 	}
 
 	@keyframes spin {
@@ -1362,7 +1545,7 @@
 
 		.sidebar {
 			border-right: none;
-			border-bottom: 1px solid rgba(130, 140, 190, 0.12);
+			border-bottom: 1px solid var(--fuzzy-color-border-overlay);
 		}
 
 		.progress {

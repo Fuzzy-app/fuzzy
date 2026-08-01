@@ -6,6 +6,7 @@ import {
 	FUZZY_SCREENS,
 	POPUP_NAVIGATION_GUIDE,
 	buildSyncResultNotificationMessage,
+	shouldNotifySyncResult,
 } from "../../apps/extension/src/lib/ui/screenCopy";
 
 describe("Fuzzy画面の案内文言", () => {
@@ -23,7 +24,9 @@ describe("Fuzzy画面の案内文言", () => {
 		expect(buildSyncResultNotificationMessage(3)).toBe(
 			`変更が3件あります。「${FUZZY_SCREENS.deadlines.navigationLabel}」画面で確認できます。`,
 		);
-		expect(buildSyncResultNotificationMessage(0)).toBe("変更はありません。");
+		expect(shouldNotifySyncResult(3)).toBe(true);
+		expect(shouldNotifySyncResult(0)).toBe(false);
+		expect(() => buildSyncResultNotificationMessage(0)).toThrow(RangeError);
 	});
 
 	test("締切日の要確認状態を取得失敗に限定しない", () => {

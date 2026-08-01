@@ -8,7 +8,7 @@ Moodle の授業資料を自動整理し、課題・締切を一元化する学�
 
 現在は公開審査前です。ローカルテスト成果物は`dist/Fuzzy-<version>-windows/`へ生成され、通常の確認には最上位の`Fuzzy-Setup.exe`を使います。`QA-確認用/`は開発・審査専用です。正式公開には、Windowsコード署名とブラウザストアの公開URL・拡張機能IDの設定が別途必要です。
 
-別PCでの動作確認には、未署名の[Fuzzy v0.1.0-qa.1 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.1)を使用します。これは正式版ではありません。参加方法と注意事項は[QAプレリリースの試し方](docs/公開ガイド/QAプレリリース.md)を参照してください。
+別PCでの動作確認には、未署名の[Fuzzy v0.1.0-qa.2 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.2)を使用します。これは正式版ではありません。参加方法と注意事項は[QAプレリリースの試し方](docs/公開ガイド/QAプレリリース.md)を参照してください。
 
 公開責任者、ストア申請担当、Windows配布担当、QA担当、一般利用者向けの手順は、役割別の[`docs/公開ガイド/`](docs/公開ガイド/README.md)を参照してください。
 
@@ -26,6 +26,7 @@ packages/
 docs/
 ├── 仕様書.md          機能要件・アーキテクチャ・データ設計
 ├── 開発判断.md        Issue優先度・継続時の合意事項
+├── UIデザインシステム.md 共通theme token・配色意図・画面状態の実装規約
 ├── セットアップ.md     開発環境構築手順（Bun / Rust / Tauri 前提パッケージ）
 ├── データベース設計.md  SQLiteスキーマ
 └── api/contract.md   Native Messaging / Tauriコマンド契約
@@ -76,6 +77,7 @@ docs/
 - 改行コードは **LF**（`.gitattributes` で正規化。Windows 混在でも安全）
 - コミット前に `bun run build` を実行して整形・型エラーを解消する
 - 生成物 `packages/shared/src/generated/` は **手で編集しない**（ts-rs が Rust から生成）
+- UI変更では [`docs/UIデザインシステム.md`](docs/UIデザインシステム.md) と共通theme tokenを使用し、アプリ固有コードへ色リテラルを追加しない
 
 ## 担当（機能＝担当）
 

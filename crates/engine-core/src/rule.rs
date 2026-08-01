@@ -43,6 +43,9 @@ pub trait RuleEngine {
 		context: &RuleContext,
 		rules: &RuleSet,
 	) -> EngineResult<String>;
+
+	/// ルールに基づく、保存ルート以下のコースフォルダー相対パスを返す。
+	fn suggest_course_root(&self, context: &RuleContext, rules: &RuleSet) -> EngineResult<String>;
 }
 
 /// ファイルシステムを変更しない既定のルールエンジン。
@@ -90,6 +93,14 @@ impl RuleEngine for DefaultRuleEngine {
 		let pattern = pattern_for_context(rule.pattern, &context)?;
 		let expected = ExpectedRelativePath::new(&pattern, &context)?;
 		expected.render_complete()
+	}
+
+	fn suggest_course_root(&self, context: &RuleContext, rules: &RuleSet) -> EngineResult<String> {
+		validate_rule_set(rules)?;
+		let rule = effective_rule(rules, context.course_id);
+		let effective_pattern = pattern_for_context(rule.pattern, context)?;
+		let pattern = course_root_pattern(&effective_pattern)?;
+		ExpectedRelativePath::new(&pattern, context)?.render_complete()
 	}
 }
 

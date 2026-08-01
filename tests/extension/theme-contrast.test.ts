@@ -5,9 +5,11 @@ const themeCss = await Bun.file(
 ).text();
 
 function cssColor(variableName: string): string {
-	const match = themeCss.match(new RegExp(`${variableName}:\\s*(#[0-9a-fA-F]{6});`));
-	if (!match?.[1]) throw new Error(`${variableName}に16進数の色が定義されていません`);
-	return match[1];
+	const match = themeCss.match(
+		new RegExp(`${variableName}:\\s*(#[0-9a-fA-F]{6}|var\\((--fuzzy-[a-z-]+)\\));`),
+	);
+	if (!match?.[1]) throw new Error(`${variableName}に色が定義されていません`);
+	return match[2] ? cssColor(match[2]) : match[1];
 }
 
 function relativeLuminance(hex: string): number {
@@ -30,6 +32,14 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe("共通テーマのコントラスト", () => {
+	test("公式アイコンの多色をブランドtokenとして一元管理する", () => {
+		for (const color of ["#6c3cff", "#238ee8", "#25d3a6", "#ff8a22"]) {
+			expect(themeCss.toLowerCase()).toContain(color);
+		}
+		expect(themeCss).toContain("--fuzzy-brand-gradient");
+		expect(themeCss).toContain("--fuzzy-brand-atmosphere");
+	});
+
 	test("semantic色の通常文字がsoft背景で4.5:1以上になる", () => {
 		const semanticPairs = [
 			["--fuzzy-color-primary-strong", "--fuzzy-color-primary-soft"],

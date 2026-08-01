@@ -1,7 +1,9 @@
-import type { SubmissionAvailability } from "@fuzzy/shared";
+import type { Assignment } from "@fuzzy/shared";
 import { boundedParallelMap } from "../boundedParallelMap";
 import { classifyMoodlePage } from "./pageClassification";
 import type { MoodleAssignmentHint } from "./pageSnapshot";
+
+type SubmissionAvailability = Assignment["submissionAvailability"];
 
 export const ASSIGNMENT_DETAIL_LIMITS = {
 	maxAssignments: 50,
@@ -48,7 +50,7 @@ export async function collectAssignmentSubmissionAvailability(
 	const uniqueUrls = Array.from(
 		new Set(
 			hints.flatMap((hint) => {
-				const normalized = normalizeMoodleAssignmentDetailUrl(hint.detailUrl, baseUrl);
+				const normalized = normalizeMoodleAssignmentDetailUrl(hint.moodleUrl, baseUrl);
 				return normalized ? [normalized] : [];
 			}),
 		),
@@ -80,13 +82,14 @@ export async function collectAssignmentSubmissionAvailability(
 	});
 
 	return hints.map((hint) => {
-		const detailUrl = normalizeMoodleAssignmentDetailUrl(hint.detailUrl, baseUrl);
+		const detailUrl = normalizeMoodleAssignmentDetailUrl(hint.moodleUrl, baseUrl);
 		return {
 			...hint,
-			detailUrl,
+			// assign以外（quiz等）の利用者向けURLは失わず、詳細取得の対象だけを正規化する。
+			moodleUrl: detailUrl ?? hint.moodleUrl,
 			submissionAvailability: detailUrl
 				? (availabilityByUrl.get(detailUrl) ?? "unknown")
-				: "unknown",
+				: hint.submissionAvailability,
 		};
 	});
 }
@@ -185,7 +188,8 @@ async function fetchAssignmentDetailDocument(
 		});
 		if (!response.ok) return null;
 		const responseUrl = normalizeMoodleAssignmentDetailUrl(response.url || url, baseUrl);
-		if (!responseUrl) return null;
+		// 同一Moodle内でも別課題への遷移結果を元の課題へ誤って紐付けない。
+		if (!responseUrl || responseUrl !== url) return null;
 		const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
 		if (!/^(?:text\/html|application\/xhtml\+xml)(?:;|$)/.test(contentType)) return null;
 		const contentLength = Number(response.headers.get("content-length"));
@@ -193,10 +197,8 @@ async function fetchAssignmentDetailDocument(
 			return null;
 		}
 
-		const html = await response.text();
-		if (new TextEncoder().encode(html).byteLength > ASSIGNMENT_DETAIL_LIMITS.maxHtmlBytes) {
-			return null;
-		}
+		const html = await readLimitedHtml(response, ASSIGNMENT_DETAIL_LIMITS.maxHtmlBytes);
+		if (html === null) return null;
 		const parsed = parseHtml(html);
 		const base = parsed.createElement("base");
 		base.href = responseUrl;
@@ -208,11 +210,15 @@ async function fetchAssignmentDetailDocument(
 }
 
 function hasAllowedSubmissionTarget(element: HTMLElement, pageUrl: string): boolean {
-	const form = element.closest<HTMLFormElement>("form");
-	const rawTarget =
-		form?.getAttribute("action") ??
-		(element.tagName.toLowerCase() === "a" ? element.getAttribute("href") : null) ??
-		pageUrl;
+	const tagName = element.tagName.toLowerCase();
+	const associatedForm =
+		tagName === "button" || tagName === "input"
+			? ((element as HTMLButtonElement | HTMLInputElement).form ??
+				element.closest<HTMLFormElement>("form"))
+			: element.closest<HTMLFormElement>("form");
+	const linkTarget = tagName === "a" ? element.getAttribute("href") : null;
+	if (!associatedForm && !linkTarget) return false;
+	const rawTarget = associatedForm?.getAttribute("action") ?? linkTarget;
 	try {
 		const page = new URL(pageUrl);
 		const target = new URL(rawTarget || pageUrl, page);
@@ -223,14 +229,43 @@ function hasAllowedSubmissionTarget(element: HTMLElement, pageUrl: string): bool
 		) {
 			return false;
 		}
-		if (form) {
-			const method = (form.getAttribute("method") ?? "get").toLowerCase();
+		if (associatedForm) {
+			const method = (associatedForm.getAttribute("method") ?? "get").toLowerCase();
 			if (method !== "get" && method !== "post") return false;
 		}
 		return true;
 	} catch {
 		return false;
 	}
+}
+
+async function readLimitedHtml(response: Response, maximumBytes: number): Promise<string | null> {
+	const reader = response.body?.getReader();
+	if (!reader) return null;
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!value || value.byteLength === 0) continue;
+			if (length + value.byteLength > maximumBytes) {
+				await reader.cancel();
+				return null;
+			}
+			chunks.push(value);
+			length += value.byteLength;
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const bytes = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new TextDecoder().decode(bytes);
 }
 
 function isDisabled(element: HTMLElement): boolean {

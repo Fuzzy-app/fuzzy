@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
-
 use super::{db_err, Database};
 use crate::types::{
-	AssignmentChangeRecord, AssignmentSyncInput, DataSyncEventRecord, MoodleAssignmentSyncInput,
+	is_supported_moodle_assignment_url, AssignmentChangeRecord, AssignmentSyncInput,
+	DataSyncEventRecord, MoodleAssignmentSyncInput,
 };
 use crate::{EngineError, EngineResult};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 
 #[derive(Debug)]
 struct StoredAssignment {
@@ -15,8 +15,8 @@ struct StoredAssignment {
 	due_at_status: String,
 	submission_mode: String,
 	submitted: bool,
-	detail_url: Option<String>,
 	submission_availability: String,
+	moodle_url: Option<String>,
 }
 
 struct StoredAssignmentState {
@@ -155,7 +155,8 @@ impl Database {
 			let mut statement = transaction
 				.prepare(
 					"SELECT id, moodle_assignment_id, title, due_at, due_at_status,
-					        submission_mode, submitted, detail_url, submission_availability, removed_at
+					        submission_mode, submitted, submission_availability,
+					        moodle_url, removed_at
 					 FROM assignments
 					 WHERE course_id = ?1
 					   AND source IN ('moodle_dashboard', 'moodle_text')
@@ -174,8 +175,8 @@ impl Database {
 								due_at_status: row.get(4)?,
 								submission_mode: row.get(5)?,
 								submitted: row.get::<_, i64>(6)? != 0,
-								detail_url: row.get(7)?,
-								submission_availability: row.get(8)?,
+								submission_availability: row.get(7)?,
+								moodle_url: row.get(8)?,
 							},
 							removed_at: row.get(9)?,
 						},
@@ -229,9 +230,9 @@ impl Database {
 					.execute(
 						"UPDATE assignments
 						 SET title = ?1, source = ?2, due_at = ?3, due_at_status = ?4,
-						     submission_mode = ?5, submitted = ?6, detail_url = ?7,
-						     submission_availability = ?8, removed_at = NULL,
-						     updated_at = ?9
+						     submission_mode = ?5, submitted = ?6,
+						     submission_availability = ?7, moodle_url = ?8,
+						     removed_at = NULL, updated_at = ?9
 						 WHERE id = ?10",
 						params![
 							incoming.title,
@@ -240,8 +241,8 @@ impl Database {
 							incoming.due_at_status,
 							incoming.submission_mode,
 							submitted,
-							incoming.detail_url,
 							incoming.submission_availability,
+							incoming.moodle_url,
 							synced_at,
 							previous.id
 						],
@@ -253,8 +254,8 @@ impl Database {
 					.execute(
 						"INSERT INTO assignments (
 							course_id, moodle_assignment_id, title, source, due_at,
-							due_at_status, submission_mode, submitted, detail_url,
-							submission_availability, removed_at,
+							due_at_status, submission_mode, submitted,
+							submission_availability, moodle_url, removed_at,
 							created_at, updated_at
 						 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?11)",
 						params![
@@ -266,8 +267,8 @@ impl Database {
 							incoming.due_at_status,
 							incoming.submission_mode,
 							incoming.submitted,
-							incoming.detail_url,
 							incoming.submission_availability,
+							incoming.moodle_url,
 							synced_at
 						],
 					)
@@ -353,7 +354,8 @@ impl Database {
 			let mut statement = transaction
 				.prepare(
 					"SELECT id, title, due_at, due_at_status,
-					        submission_mode, submitted, detail_url, submission_availability, removed_at
+					        submission_mode, submitted, submission_availability,
+					        moodle_url, removed_at
 					 FROM assignments
 					 WHERE source IN ('moodle_dashboard', 'moodle_text')",
 				)
@@ -370,8 +372,8 @@ impl Database {
 								due_at_status: row.get(3)?,
 								submission_mode: row.get(4)?,
 								submitted: row.get::<_, i64>(5)? != 0,
-								detail_url: row.get(6)?,
-								submission_availability: row.get(7)?,
+								submission_availability: row.get(6)?,
+								moodle_url: row.get(7)?,
 							},
 							removed_at: row.get(8)?,
 						},
@@ -426,9 +428,8 @@ impl Database {
 						"UPDATE assignments
 						 SET course_id = ?1, title = ?2, source = ?3, due_at = ?4,
 						     due_at_status = ?5, submission_mode = ?6, submitted = ?7,
-						     detail_url = ?8, submission_availability = ?9,
-						     removed_at = NULL, updated_at = ?10
-						 WHERE id = ?11",
+						     removed_at = NULL, updated_at = ?8
+						 WHERE id = ?9",
 						params![
 							incoming.course_id,
 							incoming.title,
@@ -437,8 +438,6 @@ impl Database {
 							incoming.due_at_status,
 							incoming.submission_mode,
 							submitted,
-							incoming.detail_url,
-							incoming.submission_availability,
 							synced_at,
 							incoming.id
 						],
@@ -469,18 +468,14 @@ impl Database {
 					.execute(
 						"INSERT INTO assignments (
 							id, course_id, title, source, due_at, due_at_status,
-							submission_mode, submitted, detail_url, submission_availability,
-							removed_at, created_at, updated_at
-						 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?11)
+							submission_mode, submitted, removed_at, created_at, updated_at
+						 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?9)
 						 ON CONFLICT(id) DO UPDATE SET
 							course_id = excluded.course_id, title = excluded.title,
 							source = excluded.source, due_at = excluded.due_at,
 							due_at_status = excluded.due_at_status,
 							submission_mode = excluded.submission_mode,
-							submitted = excluded.submitted,
-							detail_url = excluded.detail_url,
-							submission_availability = excluded.submission_availability,
-							removed_at = NULL,
+							submitted = excluded.submitted, removed_at = NULL,
 							updated_at = excluded.updated_at",
 						params![
 							incoming.id,
@@ -491,8 +486,6 @@ impl Database {
 							incoming.due_at_status,
 							incoming.submission_mode,
 							submitted,
-							incoming.detail_url,
-							incoming.submission_availability,
 							synced_at
 						],
 					)
@@ -614,20 +607,6 @@ fn changed_fields(
 			Some(submitted.to_string()),
 		));
 	}
-	if previous.detail_url != incoming.detail_url {
-		changes.push((
-			"detail_url",
-			previous.detail_url.clone(),
-			incoming.detail_url.clone(),
-		));
-	}
-	if previous.submission_availability != incoming.submission_availability {
-		changes.push((
-			"submission_availability",
-			Some(previous.submission_availability.clone()),
-			Some(incoming.submission_availability.clone()),
-		));
-	}
 	changes
 }
 
@@ -668,18 +647,18 @@ fn changed_moodle_fields(
 			Some(submitted.to_string()),
 		));
 	}
-	if previous.detail_url != incoming.detail_url {
-		changes.push((
-			"detail_url",
-			previous.detail_url.clone(),
-			incoming.detail_url.clone(),
-		));
-	}
 	if previous.submission_availability != incoming.submission_availability {
 		changes.push((
 			"submission_availability",
 			Some(previous.submission_availability.clone()),
 			Some(incoming.submission_availability.clone()),
+		));
+	}
+	if previous.moodle_url != incoming.moodle_url {
+		changes.push((
+			"moodle_url",
+			previous.moodle_url.clone(),
+			incoming.moodle_url.clone(),
 		));
 	}
 	changes
@@ -748,13 +727,29 @@ fn validate_moodle_sync_input(
 			|| !matches!(
 				assignment.submission_mode.as_str(),
 				"moodle_auto" | "manual" | "notify_only" | "unknown"
-			) || !matches!(
+			) {
+			return Err(EngineError::InvalidInput {
+				field: "assignments".to_string(),
+				reason: "列挙値が仕様に一致しません".to_string(),
+			});
+		}
+		if !matches!(
 			assignment.submission_availability.as_str(),
 			"available" | "unavailable" | "unknown"
 		) {
 			return Err(EngineError::InvalidInput {
-				field: "assignments".to_string(),
-				reason: "列挙値が仕様に一致しません".to_string(),
+				field: "assignments.submissionAvailability".to_string(),
+				reason: "available、unavailable、unknownのいずれかを指定してください".to_string(),
+			});
+		}
+		if assignment
+			.moodle_url
+			.as_deref()
+			.is_some_and(|value| !is_supported_moodle_assignment_url(value))
+		{
+			return Err(EngineError::InvalidInput {
+				field: "assignments.moodleUrl".to_string(),
+				reason: "対応Moodleの課題詳細URLを指定してください".to_string(),
 			});
 		}
 		if let Some(due_at) = assignment.due_at.as_deref() {
@@ -765,10 +760,6 @@ fn validate_moodle_sync_input(
 				});
 			}
 		}
-		validate_assignment_detail(
-			assignment.detail_url.as_deref(),
-			&assignment.submission_availability,
-		)?;
 	}
 	Ok(())
 }
@@ -895,73 +886,14 @@ fn validate_sync_input(trigger: &str, assignments: &[AssignmentSyncInput]) -> En
 			|| !matches!(
 				assignment.submission_mode.as_str(),
 				"moodle_auto" | "manual" | "notify_only" | "unknown"
-			) || !matches!(
-			assignment.submission_availability.as_str(),
-			"available" | "unavailable" | "unknown"
-		) {
+			) {
 			return Err(EngineError::InvalidInput {
 				field: "assignments".to_string(),
 				reason: "列挙値が仕様に一致しません".to_string(),
 			});
 		}
-		validate_assignment_detail(
-			assignment.detail_url.as_deref(),
-			&assignment.submission_availability,
-		)?;
 	}
 	Ok(())
-}
-
-fn validate_assignment_detail(
-	detail_url: Option<&str>,
-	submission_availability: &str,
-) -> EngineResult<()> {
-	if matches!(submission_availability, "available" | "unavailable") && detail_url.is_none() {
-		return Err(EngineError::InvalidInput {
-			field: "assignments.detailUrl".to_string(),
-			reason: "提出可否を確定した課題にはMoodle詳細URLが必要です".to_string(),
-		});
-	}
-	if let Some(url) = detail_url {
-		if !is_allowed_moodle_assignment_detail_url(url) {
-			return Err(EngineError::InvalidInput {
-				field: "assignments.detailUrl".to_string(),
-				reason: "許可されたHTTPSのMoodle課題詳細URLを指定してください".to_string(),
-			});
-		}
-	}
-	Ok(())
-}
-
-fn is_allowed_moodle_assignment_detail_url(url: &str) -> bool {
-	if url.len() > 2_048 || url.chars().any(char::is_whitespace) || url.contains('#') {
-		return false;
-	}
-	let Some(authority_and_path) = url.strip_prefix("https://") else {
-		return false;
-	};
-	let Some((host, path_and_query)) = authority_and_path.split_once('/') else {
-		return false;
-	};
-	let Some(moodle_year) = host
-		.strip_prefix("moodle")
-		.and_then(|value| value.strip_suffix(".wakayama-u.ac.jp"))
-	else {
-		return false;
-	};
-	if !moodle_year
-		.chars()
-		.all(|character| character.is_ascii_digit())
-	{
-		return false;
-	}
-	let Some((path, query)) = path_and_query.split_once('?') else {
-		return false;
-	};
-	path == "mod/assign/view.php"
-		&& query.strip_prefix("id=").is_some_and(|id| {
-			!id.is_empty() && id.chars().all(|character| character.is_ascii_digit())
-		})
 }
 
 fn sync_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DataSyncEventRecord> {
@@ -989,8 +921,10 @@ mod tests {
 			due_at_status: "normal".to_string(),
 			submission_mode: "moodle_auto".to_string(),
 			submitted: false,
-			detail_url: None,
 			submission_availability: "unknown".to_string(),
+			moodle_url: Some(format!(
+				"https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id={id}"
+			)),
 		}
 	}
 
@@ -1041,8 +975,6 @@ mod tests {
 						due_at_status: "normal".into(),
 						submission_mode: "moodle_auto".into(),
 						submitted: false,
-						detail_url: None,
-						submission_availability: "unknown".into(),
 					},
 					AssignmentSyncInput {
 						id: 3,
@@ -1053,8 +985,6 @@ mod tests {
 						due_at_status: "needs_review".into(),
 						submission_mode: "manual".into(),
 						submitted: false,
-						detail_url: None,
-						submission_availability: "unknown".into(),
 					},
 				],
 			)
@@ -1142,8 +1072,6 @@ mod tests {
 					due_at_status: "normal".to_string(),
 					submission_mode: "moodle_auto".to_string(),
 					submitted: false,
-					detail_url: None,
-					submission_availability: "unknown".to_string(),
 				}],
 			)
 			.unwrap();
@@ -1197,8 +1125,6 @@ mod tests {
 					due_at_status: "normal".into(),
 					submission_mode: "manual".into(),
 					submitted: false,
-					detail_url: None,
-					submission_availability: "unknown".into(),
 				}],
 			)
 			.unwrap();
@@ -1241,8 +1167,6 @@ mod tests {
 				due_at_status: "normal".into(),
 				submission_mode: "unknown".into(),
 				submitted: false,
-				detail_url: None,
-				submission_availability: "unknown".into(),
 			}],
 		);
 		assert!(result.is_err());
@@ -1379,6 +1303,46 @@ mod tests {
 	}
 
 	#[test]
+	fn course_snapshot_persists_and_tracks_submission_availability_and_moodle_url() {
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO courses (id, moodle_course_id, name)
+				 VALUES (1, 'course-1', 'データベース')",
+				[],
+			)
+			.unwrap();
+		let mut assignment =
+			moodle_assignment("701", "正規化レポート", Some("2026-07-30T23:59:00+09:00"));
+		assignment.submission_availability = "available".to_string();
+		database
+			.sync_moodle_assignments("auto", 1, std::slice::from_ref(&assignment))
+			.unwrap();
+
+		let deadline = database.deadlines(Default::default()).unwrap().remove(0);
+		assert_eq!(deadline.submission_availability, "available");
+		assert_eq!(deadline.moodle_url, assignment.moodle_url);
+
+		assignment.submission_availability = "unavailable".to_string();
+		assignment.moodle_url =
+			Some("https://moodle2026.wakayama-u.ac.jp/mod/quiz/view.php?id=701".to_string());
+		let event = database
+			.sync_moodle_assignments("auto", 1, &[assignment])
+			.unwrap();
+		assert_eq!(event.changed_assignment_count, 1);
+		assert_eq!(
+			database
+				.assignment_changes(None)
+				.unwrap()
+				.into_iter()
+				.map(|change| change.field)
+				.collect::<Vec<_>>(),
+			vec!["submission_availability", "moodle_url"]
+		);
+	}
+
+	#[test]
 	fn course_snapshot_rejects_missing_identity_and_offsetless_due_at_atomically() {
 		let mut database = Database::open_in_memory().unwrap();
 		database
@@ -1403,66 +1367,28 @@ mod tests {
 	}
 
 	#[test]
-	fn course_snapshot_persists_submission_availability_and_rejects_untrusted_urls() {
+	fn course_snapshot_rejects_external_moodle_url_atomically() {
 		let mut database = Database::open_in_memory().unwrap();
 		database
 			.conn()
 			.execute(
 				"INSERT INTO courses (id, moodle_course_id, name)
-				 VALUES (1, 'course-1', 'データベース')",
+				 VALUES (1, 'course-1', '英語IIB')",
 				[],
 			)
 			.unwrap();
 		let mut assignment = moodle_assignment(
-			"cm-701",
-			"正規化レポート",
-			Some("2026-07-30T23:59:00+09:00"),
+			"cm-english",
+			"Presentation",
+			Some("2026-07-30T09:00:00+09:00"),
 		);
-		database
-			.sync_moodle_assignments("auto", 1, std::slice::from_ref(&assignment))
-			.unwrap();
+		assignment.moodle_url =
+			Some("https://example.com/mod/assign/view.php?id=cm-english".to_string());
 
-		assignment.detail_url =
-			Some("https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701".to_string());
-		assignment.submission_availability = "available".to_string();
-		let event = database
-			.sync_moodle_assignments("auto", 1, std::slice::from_ref(&assignment))
-			.unwrap();
-		assert_eq!(event.changed_assignment_count, 1);
-		let changes = database.assignment_changes(None).unwrap();
-		assert_eq!(
-			changes
-				.iter()
-				.map(|change| change.field.as_str())
-				.collect::<Vec<_>>(),
-			vec!["detail_url", "submission_availability"]
-		);
-		let persisted: (Option<String>, String) = database
-			.conn()
-			.query_row(
-				"SELECT detail_url, submission_availability
-				 FROM assignments WHERE moodle_assignment_id = 'cm-701'",
-				[],
-				|row| Ok((row.get(0)?, row.get(1)?)),
-			)
-			.unwrap();
-		assert_eq!(
-			persisted,
-			(assignment.detail_url.clone(), "available".to_string())
-		);
-
-		assignment.detail_url =
-			Some("https://outside.example/mod/assign/view.php?id=701".to_string());
-		assert!(database
-			.sync_moodle_assignments("auto", 1, std::slice::from_ref(&assignment))
-			.is_err());
-		assignment.detail_url = Some(
-			"https://moodle2026.wakayama-u.ac.jp/redirect?next=/mod/assign/view.php?id=701"
-				.to_string(),
-		);
 		assert!(database
 			.sync_moodle_assignments("auto", 1, &[assignment])
 			.is_err());
+		assert!(database.latest_sync_event().unwrap().is_none());
 	}
 
 	#[test]

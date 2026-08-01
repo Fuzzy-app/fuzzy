@@ -17,6 +17,7 @@ import type {
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
 	RebuildLibraryRequest,
+	ReconcileCourseFilesRequest,
 	RuleSet,
 	RuleUpdateResult,
 	RuleViolationListItem,
@@ -98,6 +99,9 @@ export interface FuzzyApiClient {
 
 	/** 保存ルートを再走査し、SQLite注釈と全文索引を実ファイルへ整合させる */
 	rebuildLibrary(request: RebuildLibraryRequest): Promise<LibraryMaintenanceSummary>;
+
+	/** Moodleで表示中の1コースに限定し、新規・更新・欠損を差分反映する */
+	reconcileCourseFiles(request: ReconcileCourseFilesRequest): Promise<LibraryMaintenanceSummary>;
 }
 
 export class ApiError extends Error {

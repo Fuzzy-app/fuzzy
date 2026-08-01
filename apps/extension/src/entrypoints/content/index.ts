@@ -8,7 +8,10 @@ import {
 	type AssignmentDetailProgress,
 	collectAssignmentSubmissionAvailability,
 } from "../../lib/moodle/assignmentDetail";
-import { buildMoodleAssignmentSyncPayload } from "../../lib/moodle/assignmentSync";
+import {
+	buildCourseFileReconcilePayload,
+	buildMoodleAssignmentSyncPayload,
+} from "../../lib/moodle/assignmentSync";
 import { classifyMoodlePage, resolveMoodleUiMode } from "../../lib/moodle/pageClassification";
 import {
 	MOODLE_PAGE_SNAPSHOT_MESSAGE,
@@ -59,7 +62,7 @@ function initializeMoodleContent(): void {
 			reportLoginAutomationError,
 		);
 		registerSnapshotMessageListener();
-		void syncCurrentCourseAssignments();
+		void syncCurrentCourseData();
 		mountFuzzyShell();
 		void mountSavePanel();
 		return;
@@ -114,7 +117,38 @@ async function reportExtensionRuntimeFromMoodle(): Promise<void> {
 	}
 }
 
-async function syncCurrentCourseAssignments(): Promise<void> {
+async function syncCurrentCourseData(): Promise<void> {
+	let snapshot: ReturnType<typeof collectMoodlePageSnapshot>;
+	let assignmentRequest: ReturnType<typeof buildMoodleAssignmentSyncPayload>;
+	let fileRequest: ReturnType<typeof buildCourseFileReconcilePayload>;
+	try {
+		snapshot = collectMoodlePageSnapshot(document);
+		assignmentRequest = buildMoodleAssignmentSyncPayload(snapshot, location.href, document);
+		fileRequest = buildCourseFileReconcilePayload(snapshot, location.href, document);
+	} catch (error) {
+		console.warn("[fuzzy] Moodleコース情報を読み取れませんでした", error);
+		return;
+	}
+	const client = new BackgroundApiClient();
+	const operations: Promise<unknown>[] = [];
+	if (assignmentRequest) {
+		operations.push(syncAssignmentsWithDetails(client, snapshot));
+	}
+	if (fileRequest) {
+		operations.push(
+			client.reconcileCourseFiles(fileRequest).catch((error) => {
+				console.warn("[fuzzy] コース資料の差分更新に失敗しました", error);
+			}),
+		);
+	}
+	// 同期失敗は検索・キャッシュ表示・資料保存など独立した機能へ波及させない。
+	await Promise.all(operations);
+}
+
+async function syncAssignmentsWithDetails(
+	client: BackgroundApiClient,
+	snapshot: ReturnType<typeof collectMoodlePageSnapshot>,
+): Promise<void> {
 	let progress: AssignmentDetailProgress = {
 		completed: 0,
 		total: 0,
@@ -122,8 +156,6 @@ async function syncCurrentCourseAssignments(): Promise<void> {
 		skipped: 0,
 	};
 	try {
-		const snapshot = collectMoodlePageSnapshot(document);
-		if (!buildMoodleAssignmentSyncPayload(snapshot, location.href, document)) return;
 		const assignmentHints = await collectAssignmentSubmissionAvailability(
 			snapshot.assignmentHints,
 			{
@@ -141,10 +173,9 @@ async function syncCurrentCourseAssignments(): Promise<void> {
 		);
 		if (!request) return;
 		showAssignmentSyncSaving();
-		await new BackgroundApiClient().syncMoodleAssignments(request);
+		await client.syncMoodleAssignments(request);
 		showAssignmentSyncComplete(progress);
 	} catch (error) {
-		// 同期だけを停止し、検索・キャッシュ表示・資料保存など独立した機能は起動する。
 		console.warn("[fuzzy] Moodle課題の同期に失敗しました", error);
 		showAssignmentSyncFailure();
 	}

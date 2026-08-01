@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-25
+最終更新: 2026-07-28
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。wire型の正本は用途に応じて`crates/engine-core`または`apps/native-host/src/api_types.rs`のRust DTOとし、`ts-rs`で`packages/shared/src/generated/`へTS型を自動生成する（生成物は手編集しない）。`packages/shared/src/types.ts`は生成型の再exportを基本とし、未移行の暫定TS型だけを直接定義する。絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -21,13 +21,18 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 // レスポンス（失敗）
 { "id": "uuid", "ok": false, "error": { "code": "NOT_FOUND", "message": "..." } }
+
+// 900KiBを超えるレスポンスの分割フレーム
+{ "id": "uuid", "ok": true, "chunk": { "index": 0, "total": 2, "encoding": "base64", "data": "..." } }
 ```
 
 `id`は1〜128文字のASCII英数字・ピリオド・アンダースコア・コロン・ハイフン、`command`は1〜64文字のASCII英数字とする。envelopeおよび各payloadの未知フィールドは拒否する。不正な`id`はレスポンスへ反射せず、`id: null`の`INVALID_REQUEST`を返す。
 
+ホスト→拡張機能のレスポンスJSONが900KiBを超える場合、native-hostは元のレスポンスenvelope全体のUTF-8 JSONを512KiBずつBase64化し、同じ`id`を持つ`chunk`フレームとして順番に送る。`index`は0始まり、`total`は2〜128、再構築後の上限は64MiBとする。クライアントは全チャンクを検証してから元envelopeを1回だけ処理し、欠落・重複・不正Base64・異なる`total`・上限超過を`INVALID_RESPONSE`として扱う。64MiBを超える結果は、小さな`RESULT_TOO_LARGE`エラーへ置き換える。
+
 ### 1.2 コマンド一覧
 
-現在のNative Messaging契約バージョンは`3`とする。Moodle課題同期を安定ID付きのコース完全スナップショットへ変更し、`ping`で契約バージョンを照合するため、契約バージョン`2`以前の拡張機能またはnative-hostは互換として扱わない。
+現在のNative Messaging契約バージョンは`5`とする。検索結果へ索引作成時の総ページ数を追加し、`ping`で契約バージョンを照合するため、契約バージョン`4`以前の拡張機能またはnative-hostは互換として扱わない。
 
 | command                    | 用途                      | payload → data（概要）                                  |
 |----------------------------|-------------------------|-----------------------------------------------------|
@@ -41,7 +46,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `appendCheckSimilarFileChunk` | 類似照合用資料のBase64チャンク追加 | `{ transferId, chunkIndex, dataBase64 }` → `{ ok: true }` |
 | `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
 | `checkSimilarFiles`        | 転送済み内容による保存前の類似ファイル検知 | `{ transferId, fileMeta }` → `SimilarFileMatch[]` |
-| `search`                   | 全文検索（該当箇所ジャンプ用のページ情報含む） | `{ query }` → `SearchResult[]`                      |
+| `search`                   | 全文検索（該当ページと総ページ数を含む） | `{ query }` → `SearchResult[]`                      |
 | `getDashboard`             | コース別ダッシュボード集計           | `{}` → `DashboardSummary`                           |
 | `getDeadlines`             | 締切一覧取得（フィルタ可）           | `{ filter? }` → `Assignment[]`                      |
 | `syncMoodleAssignments`    | Moodleコースの課題完全スナップショット同期 | `{ trigger, course, assignments }` → `DataSyncEvent` |
@@ -59,8 +64,9 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `exportData`               | バックアップ用エクスポート           | `{ filePath }` → `{ filePath }`                     |
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 | `rebuildLibrary`           | 保存ルートの再走査・SQLite注釈と全文索引の整合 | `{ rebuildIndex? }` → `LibraryMaintenanceSummary`   |
+| `reconcileCourseFiles`     | 表示中Moodleコースに限定したファイル差分走査 | `{ course: SyncMoodleCourseRequest }` → `LibraryMaintenanceSummary` |
 
-`ping.protocolVersion`は現在値`4`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。v4では課題同期と締切取得へ`detailUrl`と`submissionAvailability`を追加した。
+`ping.protocolVersion`は現在値`6`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
 
 `search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルだけを返す。
 
@@ -81,13 +87,16 @@ interface LibraryMaintenanceSummary {
 	registeredFileCount: number;
 	updatedFileCount: number;
 	indexedFileCount: number;
+	reusedFingerprintCount: number;
 	missingFileCount: number;
 	skippedFileCount: number;
 	warnings: LibraryMaintenanceWarning[];
 }
 ```
 
-`rebuildIndex`の省略時は`false`とし、新規・本文変更・索引メタデータ欠落の資料だけを索引へ反映する。`true`では既存の全文索引と索引メタデータを空にしてから、走査時点で実在する対応資料を再構築する。いずれもSQLiteに設定済みの保存ルートを走査し、新規資料の登録、既存資料の注釈更新、ルール適合状況と重複候補の再計算を行うが、利用者のファイルを移動・削除しない。`warnings.path`は保存ルートからの相対パスだけとし、絶対パスを返さない。native-hostへ接続できない場合はモックで成功を偽装せず`NO_NATIVE_HOST`を返す。
+`rebuildIndex`の省略時は`false`とし、新規・本文変更・索引メタデータ欠落の資料だけを索引へ反映する。`true`では既存の全文索引と索引メタデータを空にしてから、走査時点で実在する対応資料を再構築する。通常再走査では、パス・サイズ・ファイルシステム更新日時が前回観測と一致する資料のBLAKE3／SimHashを再利用し、その件数を`reusedFingerprintCount`で返す。いずれもSQLiteに設定済みの保存ルートを走査し、新規資料の登録、既存資料の注釈更新、ルール適合状況と重複候補の再計算を行うが、利用者のファイルを移動・削除しない。`warnings.path`は保存ルートからの相対パスだけとし、絶対パスを返さない。native-hostへ接続できない場合はモックで成功を偽装せず`NO_NATIVE_HOST`を返す。
+
+`reconcileCourseFiles`は、認証済みの完全な`course/view.php`を表示したときに拡張機能から非同期で呼ぶ。現在の保存ルールとコースフォルダー名から探索起点を決め、新規ファイルの再帰探索、登録済みファイルのサイズ・ナノ秒更新日時の比較、変更時だけの再ハッシュ・再索引、指定コースに属する欠損確認を行う。ルール変更前の場所に残る登録済みファイルも個別に確認し、対象外コースのフォルダーは探索しない。同一コースの同時要求は共有し、成功後5分間の再要求はbackgroundで抑制する。常時監視は行わず、利用者ファイルの移動・削除もしない。
 
 `syncMoodleAssignments`は次の形式を使用する。
 
@@ -108,19 +117,15 @@ interface SyncMoodleAssignmentsRequest {
 		dueAtStatus: "normal" | "needs_review";
 		submissionMode: "moodle_auto" | "manual" | "notify_only" | "unknown";
 		submitted: boolean;
-		detailUrl: string | null;
 		submissionAvailability: "available" | "unavailable" | "unknown";
+		moodleUrl: string | null;
 	}>;
 }
 ```
 
-`moodleCourseId`と`moodleAssignmentId`はMoodleのcourse／course-module由来の安定IDを必須とし、SQLite内部IDをクライアントから受け取らない。`dueAt`は`Z`または`±HH:MM`を明示した実在するISO 8601日時だけを許可する。`detailUrl`は拡張機能が同一オリジンで検証し、数字のcourse-module IDだけを残して正規化したHTTPSの`/mod/assign/view.php?id=...`または`null`とする。`available`／`unavailable`には非`null`の`detailUrl`を必須とし、取得失敗・未知DOM・根拠競合・未対応活動は`unknown`にする。締切状態、`submitted`、`submissionMode`から`submissionAvailability`を推測しない。
+`moodleCourseId`と`moodleAssignmentId`はMoodleのcourse／course-module由来の安定IDを必須とし、SQLite内部IDをクライアントから受け取らない。`dueAt`は`Z`または`±HH:MM`を明示した実在するISO 8601日時だけを許可する。`submissionAvailability`はMoodle上で提出操作が可能なら`available`、明示的に締め切られていれば`unavailable`、DOMから確定できなければ`unknown`とする。`moodleUrl`は`https`、大学のMoodleホスト、`/mod/assign/view.php`または`/mod/quiz/view.php`、安全な`id`を全て満たすURLだけを許可し、不明時は`null`とする。同期対象は当該コースの完全スナップショットに限り、単一セクション表示・部分DOM・安定IDを取得できない活動を含む画面からは送信しない。native-hostはコース内だけを1トランザクションで更新し、受信しなかった既存Moodle課題を`removed_at`付きの同期対象外として保持する。別コースと安定IDのない従来行は変更しない。
 
-同期対象は当該コースの完全スナップショットに限り、単一セクション表示・部分DOM・安定IDを取得できない活動を含む画面からは送信しない。native-hostはコース内だけを1トランザクションで更新し、受信しなかった既存Moodle課題を`removed_at`付きの同期対象外として保持する。別コースと安定IDのない従来行は変更しない。
-
-`getDeadlines`の`Assignment`は同期入力に対応する`detailUrl`と`submissionAvailability`を返す。`AssignmentChange.field`は`"dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted" | "detailUrl" | "submissionAvailability" | "removedAt"`とする。完全スナップショットから課題が消えた場合は`removedAt`の`oldValue: null`、`newValue: syncedAt`を記録し、同じ安定IDが再び現れた場合は`oldValue: 以前のremovedAt`、`newValue: null`を記録する。削除は`removedAssignmentCount`だけ、復帰は`newAssignmentCount`だけへ計上し、`changedAssignmentCount`へ重複加算しない。したがって通知件数に用いる`newAssignmentCount + changedAssignmentCount + removedAssignmentCount`は、状態が変わった課題数と一致する。
-
-課題詳細取得はログイン済みcontent scriptが行う。対象は同一オリジンの許可URL、1同期50件、同時4件、1件10秒、HTML 2MiBまでとし、同じ正規化URLは1回だけ取得する。`credentials: "include"`を使用するが、Cookie、認証情報、取得HTMLをnative-hostや外部サービスへ送らない。1件の失敗は`unknown`として残りを継続する。
+`AssignmentChange.field`は`"dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted" | "submissionAvailability" | "moodleUrl" | "removedAt"`とする。完全スナップショットから課題が消えた場合は`removedAt`の`oldValue: null`、`newValue: syncedAt`を記録し、同じ安定IDが再び現れた場合は`oldValue: 以前のremovedAt`、`newValue: null`を記録する。削除は`removedAssignmentCount`だけ、復帰は`newAssignmentCount`だけへ計上し、`changedAssignmentCount`へ重複加算しない。したがって通知件数に用いる`newAssignmentCount + changedAssignmentCount + removedAssignmentCount`は、状態が変わった課題数と一致する。
 
 `suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。backendは`moodleCourseId`でSQLiteのコースを解決し、省略時は同名候補が一意な場合だけ既存コースへ結び付ける。曖昧な場合は`RULE_CONFLICT`を返し、同じフォルダへの混在を許可しない。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
 
@@ -162,7 +167,7 @@ interface SaveSuggestion {
 
 拡張機能のcontent scriptからbackgroundへ渡す保存要求は`MoodleSaveFilesRequest = { files: MoodleFileMeta[], targetPath, courseId }`とする。`courseId`は`suggestSavePath`がSQLiteへ解決したIDまたは`null`であり、クライアントがコース名から採番しない。backgroundはメッセージ送信元ページと各資料URLが同一オリジンであることを検証し、`credentials: "include"`のGETで本体を取得する。リダイレクト後のURLも同一オリジンでなければ拒否する。Cookie・Authorizationヘッダー等の認証情報はpayloadへ含めず、取得済み内容だけをNative Messagingへ渡す。
 
-`mod/resource/view.php`の種別確定はHEADを先に使用し、HEAD非対応・HTTPエラー・情報不足時はGETへフォールバックする。`Content-Disposition`の`filename*`を`filename`より優先し、宣言charset付きpercent encoding、旧式のRFC 2047 encoded-word、Latin-1として受け取った生UTF-8の順で日本語名を復元する。復元後も制御文字、パス成分、UTF-16長を検証し、対応済み拡張子を持つ実ファイル名を使用する。実ファイル名がない場合は表示名へ確定した拡張子を補う。`text/html`、HTML先頭シグネチャ、ログイン／エラーページ、種別未確定の間接リンクは保存しない。DOCX本体は文字列へ変換せずバイナリのまま転送し、native-hostでZIPアーカイブとして開けることと、`[Content_Types].xml`、`word/document.xml`が空でなく上限内で最後まで読み取れることを確認する。
+`mod/resource/view.php`の種別確定はHEADを先に使用し、HEAD非対応・HTTPエラー・情報不足時はGETへフォールバックする。`Content-Disposition`の`filename*`を`filename`より優先し、対応済み拡張子を持つ実ファイル名を使用する。実ファイル名がない場合は表示名へ確定した拡張子を補う。`text/html`、HTML先頭シグネチャ、ログイン／エラーページ、種別未確定の間接リンクは保存しない。DOCXはnative-hostでZIPアーカイブとして開けることと、`[Content_Types].xml`、`word/document.xml`が空でなく上限内で最後まで読み取れることを確認する。
 
 Native Messagingの転送は同じ接続上で`beginSaveFiles`、0個以上の`appendSaveFileChunk`、`saveFiles`の順に行う。`chunkIndex`はファイルごとに0から連続させる。拡張機能はBase64文字列を192KiB以下に分割し、native-hostは復号後256KiB以下だけを受理する。1要求は20ファイル、1ファイル64MiB、合計128MiBまでとする。backgroundはレスポンスをストリームで読み、Content-Lengthの有無にかかわらず上限到達時に中断する。切断・タイムアウト・一時的なHTTP失敗を固定キャッシュせず、利用者の再実行で新しい`transferId`を使って再試行できるようにする。
 
@@ -257,10 +262,11 @@ Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issue
 Moodleから課題・締切データを取得（同期）した直後、拡張機能は次の手順で「データ取得通知」と「変更点の表示」を行う（`docs/仕様書.md` 1.3節）。
 
 1. native-host側は同期完了ごとに `sync_events` に1行追加し、変更を検出した課題ごとに `assignment_changes` へ差分を記録する。同期対象外化・復帰も`removedAt`の差分として含める（`データベース設計.md` 参照）
-2. 拡張機能は同期完了を検知したら `getLatestSyncEvent` を呼び、`new/changed/removed_assignment_count` の合計を使ってブラウザ通知を出す（例:「Moodleからデータを取得しました（変更2件）」）。削除・復帰を`changed`へ重複計上せず、変更が0件でも取得したこと自体は通知する
-3. 通知または締切ハブから「変更点を見る」操作をした際は `getAssignmentChanges({ sinceSyncEventId })` で対象同期以降の差分一覧を取得し、`field` ごとに変更前後の値（`oldValue` → `newValue`）を表示する
-4. `sinceSyncEventId` を省略した場合は直近の同期1回分、指定した場合はその同期IDより後に検出された差分を返す。同期履歴がない場合、`getLatestSyncEvent` は `null`、変更点一覧は空配列を返す
-5. Moodle取得パイプラインは取得した全課題スナップショットを共有エンジンの同期処理へ渡す。同期処理は、課題更新・フィールド差分・削除扱い・集計を同一トランザクションで確定する
+2. 拡張機能は同期完了を検知したら `getLatestSyncEvent` を呼び、`new/changed/removed_assignment_count` の合計を求める。合計が1件以上の場合だけブラウザ通知を出す（例:「変更が2件あります」）。合計が0件の場合は通知を出さないが、同じ同期結果を後から通知しないよう最終通知確認済みIDは更新する。削除・復帰を`changed`へ重複計上しない
+3. 変更通知のIDには通知対象の`syncEventId`を含める。通知を押した場合は既存のMoodleタブを前面にしてFuzzyの「課題・締切」画面を開き、Moodleタブがない場合は年度に依存しないMoodle入口を新しいタブで開いて、認証済み画面でFuzzyシェルが起動するまで遷移要求を端末内に保持する
+4. 通知から開いた場合は `getAssignmentChanges({ sinceSyncEventId: notificationSyncEventId - 1 })` を使用し、通知対象の同期を含む変更点を表示する。通知後に変更0件の同期が完了していても、通知対象の変更点を失わない。同画面を通常操作で開いた場合は、従来どおり直近の同期1回分を表示する
+5. `sinceSyncEventId` を省略した場合は直近の同期1回分、指定した場合はその同期IDより後に検出された差分を返す。同期履歴がない場合、`getLatestSyncEvent` は `null`、変更点一覧は空配列を返す
+6. Moodle取得パイプラインは取得した全課題スナップショットを共有エンジンの同期処理へ渡す。同期処理は、課題更新・フィールド差分・削除扱い・集計を同一トランザクションで確定する
 
 ---
 
@@ -283,9 +289,41 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 | `import_backup` | OS選択・確認ダイアログを経てSQLiteバックアップを復元し、索引を再構築 | `()` → `{ cancelled, imported, recoveryCopyPath?, maintenance?, maintenanceError? }` |
 | `create_fresh_database` | 確認後に開けないDBを別名で保全し、新規SQLite正本を作成 | `()` → `{ cancelled, created, recoveryCopyPath?, indexError? }` |
 
+`PatternCandidate`は次の形式を使用する。推定不能時は`matchScore: null`、`courseSegmentIndex: null`、`requiresConfirmation: true`とし、`recommended`にせず利用者の明示選択を待つ。
+
+```ts
+interface PatternCandidate {
+	id: string;
+	name: string;
+	description: string;
+	folders: string[];
+	courseSegmentIndex: number | null;
+	fileNameTemplate: string | null;
+	matchScore: number | null;
+	evaluatedCount: number;
+	reason: string;
+	recommended: boolean;
+	requiresConfirmation: boolean;
+}
+```
+
+`save_initial_setup`と`rebuild_library`の実行中は、`library-maintenance-progress`イベントで次の値を通知する。`completedCount`は同じフェーズ内で減少せず、成功・警告付き成功・失敗のいずれでも最後に`phase: "completed"`の終端イベントを送る。絶対パス、ファイル名、本文は含めない。
+
+```ts
+interface LibraryMaintenanceProgress {
+	phase: "scanning" | "registering" | "indexing" | "finalizing" | "completed";
+	state: "running" | "completed" | "completedWithWarnings" | "failed";
+	completedCount: number;
+	totalCount: number | null;
+	warningCount: number;
+}
+```
+
 `pick_base_folder` 等の実体は `crates/engine-core` の `ScanEngine` を呼び出す（`apps/desktop/src-tauri` と `apps/native-host` の両方が同じ `crates/engine-core` に依存する設計。`docs/仕様書.md` 3.3節）。
 
-`save_initial_setup`は、選択フォルダーの実体確認と正規化、ルールテンプレート検証を行った後、`app_settings.base_folder_path`、推定候補ID、推定パターン内の科目セグメント位置、初期コース別候補、`global_rule`、保存日時を1つのSQLiteトランザクションで保存する。続けて保存ルートを走査し、既存資料をSQLiteへ登録して本文検索索引、ルール適合注釈、重複候補を作成する。既存ファイルの移動・削除は行わず、取り込み件数と警告は`maintenance`で画面へ返す。設定確定後の走査または初期コース別例外の同期だけが失敗した場合、保存済み設定を失敗扱いにせず`maintenance.warnings`へ追加し、利用者が前の画面へ戻って同じ設定を再保存できるようにする。`get_setup_status`は保存日時だけでなく保存ルートとグローバルルールが揃っている場合に限って`done: true`を返し、localStorageやIndexedDBを完了判定に使わない。
+`save_initial_setup`は、選択フォルダーの実体確認と正規化、ルールテンプレート検証を行った後、`app_settings.base_folder_path`、推定候補ID、推定パターン内の科目セグメント位置、初期コース別候補、`global_rule`、保存日時を1つのSQLiteトランザクションで保存する。続けて保存ルートを走査し、既存資料をSQLiteへ登録して本文検索索引、ルール適合注釈、重複候補を作成する。初期走査と再走査では仮想環境、依存パッケージ、VCS、OS・ツールキャッシュ、構造から判定できるビルド生成物を探索しない。除外フォルダー外のソース・データ・設定・バイナリは拡張子だけで除外せず、本文抽出非対応のバイナリはハッシュ登録までとする。既存ファイルの移動・削除は行わず、取り込み件数と警告は`maintenance`で画面へ返す。設定確定後の走査または初期コース別例外の同期だけが失敗した場合、保存済み設定を失敗扱いにせず`maintenance.warnings`へ追加し、利用者が前の画面へ戻って同じ設定を再保存できるようにする。`get_setup_status`は保存日時だけでなく保存ルートとグローバルルールが揃っている場合に限って`done: true`を返し、localStorageやIndexedDBを完了判定に使わない。
+
+`search`の`page`は本文が一致したPDF内の1始まりページ番号、`pageCount`は索引作成時に同じPDFページツリーから取得した総ページ数である。backendは`page >= 1`かつ`page <= pageCount`を満たす値だけを返し、整合しない古い索引値は`page: null`へ落とす。拡張機能は総ページ数がある場合に`page / pageCount`を表示し、内部の抽出方式や索引フェーズ名は利用者へ表示しない。
 
 `rebuild_library`は利用者が復旧画面のボタンを押した場合だけ実行し、Native Messagingの`rebuildLibrary`と同じ`LibraryMaintenanceSummary`を返す。保存ルート上で見つからないSQLite行は`files.missing_at`を付けて履歴として保持し、通常のダッシュボード、ルール違反、重複候補、全文検索から除外する。再び同じパスに現れた場合は欠損状態を解除して再索引する。`missingFileCount`は今回の走査後も見つからない登録済み資料の件数であり、利用者の資料ファイルを移動・削除しない。全文索引を明示的に作り直す復旧操作では`rebuildIndex: true`を渡す。走査中はブラウザ側の保存処理と競合しないよう、画面で資料保存の完了とブラウザ終了を案内する。
 

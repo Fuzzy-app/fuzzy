@@ -1,9 +1,9 @@
 export const FUZZY_SCREENS = {
 	dashboard: {
-		navigationLabel: "ダッシュボード",
-		kicker: "ダッシュボード",
-		title: "学習状況をひと目で確認",
-		description: "資料と締切の概要",
+		navigationLabel: "整理状況",
+		kicker: "整理状況",
+		title: "資料の整理状況",
+		description: "保存した資料と整理が必要な資料を確認",
 	},
 	search: {
 		navigationLabel: "資料を検索",
@@ -40,7 +40,12 @@ export const DEADLINE_REVIEW_HELP_TEXT =
 export const POPUP_NAVIGATION_GUIDE = `「${FUZZY_SCREENS.search.navigationLabel}」「${FUZZY_SCREENS.deadlines.navigationLabel}」「${FUZZY_SCREENS.rules.navigationLabel}」は、上部ナビの「Fuzzy」タブから開く`;
 
 export function buildSyncResultNotificationMessage(changeCount: number): string {
-	return changeCount > 0
-		? `変更が${changeCount}件あります。「${FUZZY_SCREENS.deadlines.navigationLabel}」画面で確認できます。`
-		: "変更はありません。";
+	if (!Number.isInteger(changeCount) || changeCount <= 0) {
+		throw new RangeError("changeCount must be a positive integer");
+	}
+	return `変更が${changeCount}件あります。「${FUZZY_SCREENS.deadlines.navigationLabel}」画面で確認できます。`;
+}
+
+export function shouldNotifySyncResult(changeCount: number): boolean {
+	return Number.isInteger(changeCount) && changeCount > 0;
 }

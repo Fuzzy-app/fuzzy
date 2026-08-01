@@ -1,9 +1,4 @@
-import type {
-	Assignment,
-	AssignmentChange,
-	DataSyncEvent,
-	SubmissionAvailability,
-} from "@fuzzy/shared";
+import type { Assignment, AssignmentChange, DataSyncEvent } from "@fuzzy/shared";
 
 // API取得用のDeadlineFilterと区別するため、画面内フィルタには専用名を使う。
 export type DeadlineViewFilter = "all" | "upcoming" | "overdue" | "review";
@@ -91,15 +86,11 @@ export function submissionLabel(assignment: Assignment): string {
 	}
 }
 
-export function submissionAvailabilityLabel(value: SubmissionAvailability): string {
-	switch (value) {
-		case "available":
-			return "提出可能";
-		case "unavailable":
-			return "提出不可";
-		default:
-			return "Moodleで確認";
-	}
+export function submissionAvailabilityLabel(assignment: Assignment): string | null {
+	if (!isOverdue(assignment)) return null;
+	if (assignment.submissionAvailability === "available") return "提出可能";
+	if (assignment.submissionAvailability === "unknown") return "Moodleで確認";
+	return null;
 }
 
 export function sourceLabel(assignment: Assignment): string {
@@ -155,10 +146,10 @@ export function assignmentChangeFieldLabel(field: AssignmentChange["field"]): st
 			return "期限判定";
 		case "submitted":
 			return "提出状況";
-		case "detailUrl":
-			return "Moodle課題ページ";
 		case "submissionAvailability":
 			return "提出可否";
+		case "moodleUrl":
+			return "Moodle課題URL";
 		case "removedAt":
 			return "同期状態";
 	}
@@ -175,12 +166,17 @@ export function assignmentChangeValueLabel(
 	if (field === "dueAt") return formatDate(value);
 	if (field === "dueAtStatus") return value === "needs_review" ? "締切日を確認" : "通常";
 	if (field === "submitted") return value === "true" ? "提出済み" : "未提出";
-	if (field === "detailUrl") return value ? "Moodleで開けます" : "未設定";
 	if (field === "submissionAvailability") {
-		return submissionAvailabilityLabel(
-			value === "available" || value === "unavailable" ? value : "unknown",
-		);
+		switch (value) {
+			case "available":
+				return "提出可能";
+			case "unavailable":
+				return "提出不可";
+			default:
+				return "確認中";
+		}
 	}
+	if (field === "moodleUrl") return "設定あり";
 	if (field === "submissionMode") {
 		switch (value) {
 			case "moodle_auto":

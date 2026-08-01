@@ -3,13 +3,14 @@
 //! すべての方式は同じ走査結果を受け取り、同じ[`SavePatternGuess`]を返す。
 //! 呼び出し側は方式固有のロジックへ依存せず、用途や検証結果に応じて切り替えられる。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::path::Component;
+use std::path::{Component, Path, PathBuf};
 
 use crate::error::EngineResult;
 use crate::section::{parse_section_file_prefix, parse_section_name, SectionMatch};
 use crate::types::{FileEntry, SavePatternGuess};
+use unicode_normalization::UnicodeNormalization;
 
 const COURSE_DIRECTORY_TEMPLATE: &str = "{course}";
 const SECTION_FILE_NAME_TEMPLATE: &str = "{section}_{filename}";
@@ -100,17 +101,18 @@ impl PatternEstimator for FrequencyPatternEstimator {
 
 	fn estimate(&self, entries: &[FileEntry]) -> EngineResult<Vec<SavePatternGuess>> {
 		estimate_with(entries, |entry, evidence| {
-			let Some(has_section_folder) = add_folder_evidence(entry, evidence) else {
+			let Some(folder) = add_folder_evidence(entry, evidence) else {
 				return;
 			};
-			if has_section_folder {
+			if folder.has_section_folder {
 				return;
 			}
 			if parse_section_file_prefix(&entry.file_name).is_some() {
 				add_evidence(
 					evidence,
-					PatternTemplate::file_name_section(),
+					PatternTemplate::file_name_section(folder.directory_template),
 					FREQUENCY_EVIDENCE_WEIGHT,
+					entry,
 				);
 			}
 		})
@@ -131,10 +133,10 @@ impl PatternEstimator for EvidenceWeightedPatternEstimator {
 
 	fn estimate(&self, entries: &[FileEntry]) -> EngineResult<Vec<SavePatternGuess>> {
 		estimate_with(entries, |entry, evidence| {
-			let Some(has_section_folder) = add_folder_evidence(entry, evidence) else {
+			let Some(folder) = add_folder_evidence(entry, evidence) else {
 				return;
 			};
-			if has_section_folder {
+			if folder.has_section_folder {
 				return;
 			}
 			let Some(section) = parse_section_file_prefix(&entry.file_name) else {
@@ -145,7 +147,12 @@ impl PatternEstimator for EvidenceWeightedPatternEstimator {
 			} else {
 				EXPLICIT_FILE_NAME_EVIDENCE_WEIGHT
 			};
-			add_evidence(evidence, PatternTemplate::file_name_section(), weight);
+			add_evidence(
+				evidence,
+				PatternTemplate::file_name_section(folder.directory_template),
+				weight,
+				entry,
+			);
 		})
 	}
 }
@@ -164,9 +171,9 @@ impl PatternTemplate {
 		}
 	}
 
-	fn file_name_section() -> Self {
+	fn file_name_section(directory: String) -> Self {
 		Self {
-			directory: COURSE_DIRECTORY_TEMPLATE.to_string(),
+			directory,
 			file_name: Some(SECTION_FILE_NAME_TEMPLATE.to_string()),
 		}
 	}
@@ -176,6 +183,25 @@ impl PatternTemplate {
 struct Evidence {
 	matched_count: usize,
 	weighted_support: f64,
+	representative_paths: BTreeSet<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FolderEvidence {
+	directory_template: String,
+	has_section_folder: bool,
+}
+
+/// 保存ルートからの相対パスを、年度・学期・科目・授業回の役割へ分類した結果。
+///
+/// 強い根拠を持たないセグメントが複数ある場合は、科目を勝手に選ばず`None`を返す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathRoleClassification {
+	pub directory_template: String,
+	pub course_segment_index: usize,
+	pub academic_year: Option<i64>,
+	pub term: Option<String>,
+	pub has_section_folder: bool,
 }
 
 fn estimate_with(
@@ -191,15 +217,43 @@ fn estimate_with(
 		collect(entry, &mut evidence);
 	}
 
+	let classified = entries
+		.iter()
+		.filter_map(|entry| classify_relative_path(&entry.relative_path))
+		.collect::<Vec<_>>();
+	let classified_count = classified.len();
+	let mut directory_evaluated_counts = BTreeMap::<String, usize>::new();
+	for classification in &classified {
+		*directory_evaluated_counts
+			.entry(classification.directory_template.clone())
+			.or_default() += 1;
+	}
 	let minimum_support = if entries.len() >= 3 { 2 } else { 1 };
 	let mut guesses = evidence
 		.into_iter()
 		.filter(|(_, evidence)| evidence.matched_count >= minimum_support)
-		.map(|(template, evidence)| SavePatternGuess {
-			directory_template: template.directory,
-			file_name_template: template.file_name,
-			confidence: (evidence.weighted_support / entries.len() as f64).clamp(0.0, 1.0),
-			matched_count: evidence.matched_count,
+		.filter_map(|(template, evidence)| {
+			let evaluated_count = if template.file_name.is_some() {
+				directory_evaluated_counts
+					.get(&template.directory)
+					.copied()
+					.unwrap_or_default()
+			} else {
+				classified_count
+			};
+			let course_segment_index = template
+				.directory
+				.split(['/', '\\'])
+				.position(|segment| segment.contains("{course}"))?;
+			(evaluated_count > 0).then(|| SavePatternGuess {
+				directory_template: template.directory,
+				file_name_template: template.file_name,
+				course_segment_index,
+				confidence: (evidence.weighted_support / evaluated_count as f64).clamp(0.0, 1.0),
+				matched_count: evidence.matched_count,
+				evaluated_count,
+				representative_paths: evidence.representative_paths.into_iter().take(8).collect(),
+			})
 		})
 		.collect::<Vec<_>>();
 	sort_guesses(&mut guesses);
@@ -210,37 +264,19 @@ fn estimate_with(
 fn add_folder_evidence(
 	entry: &FileEntry,
 	evidence: &mut BTreeMap<PatternTemplate, Evidence>,
-) -> Option<bool> {
-	let parent = entry.relative_path.parent()?;
-	let segments = parent
-		.components()
-		.map(|component| match component {
-			Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
-			_ => None,
-		})
-		.collect::<Option<Vec<_>>>()?;
-
-	let (directory_template, has_section_folder) = match segments.as_slice() {
-		[_course] => (COURSE_DIRECTORY_TEMPLATE.to_string(), false),
-		[_course, section_name] => {
-			let section = parse_section_name(section_name)?;
-			(
-				format!(
-					"{COURSE_DIRECTORY_TEMPLATE}/{}",
-					section_directory_segment(&section)?
-				),
-				true,
-			)
-		}
-		_ => return None,
-	};
+) -> Option<FolderEvidence> {
+	let classification = classify_relative_path(&entry.relative_path)?;
 
 	add_evidence(
 		evidence,
-		PatternTemplate::directory_only(directory_template),
+		PatternTemplate::directory_only(classification.directory_template.clone()),
 		FOLDER_EVIDENCE_WEIGHT,
+		entry,
 	);
-	Some(has_section_folder)
+	Some(FolderEvidence {
+		directory_template: classification.directory_template,
+		has_section_folder: classification.has_section_folder,
+	})
 }
 
 fn section_directory_segment(section: &SectionMatch) -> Option<String> {
@@ -255,10 +291,139 @@ fn add_evidence(
 	evidence: &mut BTreeMap<PatternTemplate, Evidence>,
 	template: PatternTemplate,
 	weight: f64,
+	entry: &FileEntry,
 ) {
 	let item = evidence.entry(template).or_default();
 	item.matched_count += 1;
 	item.weighted_support += weight;
+	if let Some(parent) = entry.relative_path.parent() {
+		item.representative_paths.insert(parent.to_path_buf());
+	}
+}
+
+/// ファイルの親階層を役割分類し、科目位置を一意に特定できた場合だけ返す。
+pub fn classify_relative_path(relative_path: &Path) -> Option<PathRoleClassification> {
+	let parent = relative_path.parent()?;
+	let segments = parent
+		.components()
+		.map(|component| match component {
+			Component::Normal(value) => value.to_str().map(str::trim),
+			_ => None,
+		})
+		.collect::<Option<Vec<_>>>()?;
+	if segments.is_empty() || segments.iter().any(|segment| segment.is_empty()) {
+		return None;
+	}
+
+	let mut templates = Vec::with_capacity(segments.len());
+	let mut unclassified = Vec::new();
+	let mut academic_year = None;
+	let mut term = None;
+	let mut has_section_folder = false;
+	for (index, segment) in segments.iter().enumerate() {
+		if let Some((year, template)) = parse_academic_year_component(segment) {
+			if academic_year.replace(year).is_some() {
+				return None;
+			}
+			templates.push(template);
+			continue;
+		}
+		if let Some(normalized_term) = normalize_term_component(segment) {
+			if term.replace(normalized_term).is_some() {
+				return None;
+			}
+			templates.push("{term}".to_string());
+			continue;
+		}
+		if let Some(section) = parse_section_name(segment) {
+			// 授業回フォルダーはファイルの直上だけを強い根拠として扱う。
+			if index + 1 != segments.len() || has_section_folder {
+				return None;
+			}
+			templates.push(section_directory_segment(&section)?);
+			has_section_folder = true;
+			continue;
+		}
+		unclassified.push(index);
+		templates.push(String::new());
+	}
+
+	let [course_segment_index] = unclassified.as_slice() else {
+		return None;
+	};
+	templates[*course_segment_index] = COURSE_DIRECTORY_TEMPLATE.to_string();
+	Some(PathRoleClassification {
+		directory_template: templates.join("/"),
+		course_segment_index: *course_segment_index,
+		academic_year,
+		term,
+		has_section_folder,
+	})
+}
+
+/// `2026`、`2026年`、`2026年度`だけを暦年として認識する。
+pub fn parse_academic_year_component(value: &str) -> Option<(i64, String)> {
+	let normalized = value.trim().nfkc().collect::<String>();
+	let (digits, template) = if let Some(digits) = normalized.strip_suffix("年度") {
+		(digits, "{year}年度")
+	} else if let Some(digits) = normalized.strip_suffix('年') {
+		(digits, "{year}年")
+	} else {
+		(normalized.as_str(), "{year}")
+	};
+	if digits.len() != 4 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+		return None;
+	}
+	digits
+		.parse::<i64>()
+		.ok()
+		.filter(|year| (1900..=9999).contains(year))
+		.map(|year| (year, template.to_string()))
+}
+
+/// 学期、学年付き学期、クォーター表記を正規化する。
+pub fn normalize_term_component(value: &str) -> Option<String> {
+	let normalized = value.trim().nfkc().collect::<String>();
+	if matches!(
+		normalized.as_str(),
+		"前期" | "後期" | "通年" | "春学期" | "秋学期" | "Spring" | "Fall"
+	) {
+		return Some(normalized);
+	}
+	let lower = normalized.to_ascii_lowercase();
+	if matches!(lower.as_str(), "spring" | "fall") {
+		return Some(normalized);
+	}
+	if let Some(number) = lower.strip_suffix('q') {
+		return parse_quarter_number(number).map(|_| normalized);
+	}
+	if let Some(number) = normalized.strip_suffix("クォーター") {
+		let number = number.strip_prefix('第').unwrap_or(number);
+		return parse_quarter_number(number).map(|_| normalized);
+	}
+	for suffix in ["前期", "後期", "春学期", "秋学期"] {
+		if let Some(grade) = normalized
+			.strip_suffix(suffix)
+			.and_then(|prefix| prefix.strip_suffix('年'))
+		{
+			if grade.len() == 1
+				&& grade
+					.parse::<u8>()
+					.ok()
+					.is_some_and(|grade| (1..=9).contains(&grade))
+			{
+				return Some(normalized);
+			}
+		}
+	}
+	None
+}
+
+fn parse_quarter_number(value: &str) -> Option<u8> {
+	value
+		.parse::<u8>()
+		.ok()
+		.filter(|quarter| (1..=4).contains(quarter))
 }
 
 fn sort_guesses(guesses: &mut [SavePatternGuess]) {

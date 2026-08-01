@@ -59,6 +59,12 @@ describe("Moodle向け公開範囲", () => {
 		).text();
 		expect(contentScriptSource).toContain(`matches: ["${MOODLE_HTTPS_MATCH_PATTERN}"]`);
 		expect(contentScriptSource).not.toContain("*://*.wakayama-u.ac.jp/*");
+
+		const shellElementsSource = await Bun.file(
+			new URL("../../apps/extension/src/entrypoints/content/shellElements.ts", import.meta.url),
+		).text();
+		expect(shellElementsSource).toContain('BRAND_ICON_PATH = "/icon/fuzzy.svg"');
+		expect(shellElementsSource).not.toContain("/icon/128.png");
 	});
 
 	test("Native Messagingの許可元に使う固定拡張IDをmanifest公開鍵から導出できる", () => {

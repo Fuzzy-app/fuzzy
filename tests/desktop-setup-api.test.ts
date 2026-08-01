@@ -26,9 +26,12 @@ describe("desktop setup API", () => {
 			description: "推定結果",
 			folders: ["情報アーキテクチャ/第03回"],
 			courseSegmentIndex: 0,
+			fileNameTemplate: null,
 			matchScore: 90,
+			evaluatedCount: 1,
 			reason: "一致",
 			recommended: true,
+			requiresConfirmation: false,
 		};
 		const runtime = runtimeFor({
 			pick_base_folder: "C:/Fuzzy",
@@ -41,6 +44,7 @@ describe("desktop setup API", () => {
 					registeredFileCount: 1,
 					updatedFileCount: 0,
 					indexedFileCount: 1,
+					reusedFingerprintCount: 0,
 					missingFileCount: 0,
 					skippedFileCount: 0,
 					warnings: [],
@@ -73,6 +77,7 @@ describe("desktop setup API", () => {
 				registeredFileCount: 1,
 				updatedFileCount: 0,
 				indexedFileCount: 1,
+				reusedFingerprintCount: 0,
 				missingFileCount: 0,
 				skippedFileCount: 0,
 				warnings: [],

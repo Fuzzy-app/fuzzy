@@ -52,6 +52,7 @@ describe("Moodle課題詳細の提出可否", () => {
 				</form>
 			</main></body></html>`,
 			'<html><body class="notloggedin"><main><form><input type="password"></form></main></body></html>',
+			'<html><body class="loggedin"><main><button type="submit">提出を追加する</button></main></body></html>',
 		]) {
 			const { document } = parseHTML(html);
 			expect(analyzeAssignmentSubmissionAvailability(document, DETAIL_URL)).toBe("unknown");
@@ -113,7 +114,7 @@ describe("Moodle課題詳細の提出可否", () => {
 	});
 
 	test("HTML以外・ログイン画面・想定外リダイレクトはunknownのままにする", async () => {
-		const urls = [701, 702, 703].map(
+		const urls = [701, 702, 703, 704].map(
 			(id) => `https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=${id}`,
 		);
 		const result = await collectAssignmentSubmissionAvailability(
@@ -139,7 +140,9 @@ describe("Moodle課題詳細の提出可否", () => {
 						requestedUrl,
 					);
 					Object.defineProperty(response, "url", {
-						value: "https://moodle2026.wakayama-u.ac.jp/login/index.php",
+						value: requestedUrl.endsWith("703")
+							? "https://moodle2026.wakayama-u.ac.jp/login/index.php"
+							: "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=999",
 					});
 					return response;
 				}) as typeof fetch,
@@ -150,7 +153,28 @@ describe("Moodle課題詳細の提出可否", () => {
 			"unknown",
 			"unknown",
 			"unknown",
+			"unknown",
 		]);
+	});
+
+	test("Content-LengthがなくてもHTML上限を超えた時点でunknownにする", async () => {
+		const oversized = new Uint8Array(ASSIGNMENT_DETAIL_LIMITS.maxHtmlBytes + 1);
+		oversized.fill(0x20);
+		const result = await collectAssignmentSubmissionAvailability([hint("assign:701", DETAIL_URL)], {
+			baseUrl: BASE_URL,
+			fetch: (async () => {
+				const response = new Response(oversized, {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				});
+				Object.defineProperty(response, "url", { value: DETAIL_URL });
+				return response;
+			}) as unknown as typeof fetch,
+			parseHtml: () => {
+				throw new Error("上限超過HTMLは解析しない");
+			},
+		});
+		expect(result[0]?.submissionAvailability).toBe("unknown");
 	});
 
 	test("総件数上限を超えた候補は取得せずunknownにする", async () => {
@@ -177,10 +201,10 @@ describe("Moodle課題詳細の提出可否", () => {
 	});
 });
 
-function hint(moodleAssignmentId: string, detailUrl: string): MoodleAssignmentHint {
+function hint(moodleAssignmentId: string, moodleUrl: string): MoodleAssignmentHint {
 	return {
 		moodleAssignmentId,
-		detailUrl,
+		moodleUrl,
 		title: "正規化レポート",
 		dueText: "提出期限: 2026年7月30日 23:59",
 		sourceText: "正規化レポート",

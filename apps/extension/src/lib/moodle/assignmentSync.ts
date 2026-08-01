@@ -1,4 +1,5 @@
-import type { SyncMoodleAssignmentsRequest } from "@fuzzy/shared";
+import type { ReconcileCourseFilesRequest, SyncMoodleAssignmentsRequest } from "@fuzzy/shared";
+import { isSupportedMoodleAssignmentUrl } from "../../../moodleSite";
 import { type MoodlePageSnapshot, hasCompleteAssignmentHintExtraction } from "./pageSnapshot";
 
 /**
@@ -45,8 +46,11 @@ export function buildMoodleAssignmentSyncPayload(
 			dueAtStatus: parsedDue.dueAtStatus,
 			submissionMode: "moodle_auto",
 			submitted: hint.submitted,
-			detailUrl: hint.detailUrl,
 			submissionAvailability: hint.submissionAvailability,
+			moodleUrl:
+				hint.moodleUrl === null || isSupportedMoodleAssignmentUrl(hint.moodleUrl)
+					? hint.moodleUrl
+					: null,
 		});
 	}
 
@@ -59,6 +63,28 @@ export function buildMoodleAssignmentSyncPayload(
 			term: snapshot.term,
 		},
 		assignments,
+	};
+}
+
+/** 完全なコースページの表示時だけ、当該コースに限定した差分走査要求を作る。 */
+export function buildCourseFileReconcilePayload(
+	snapshot: MoodlePageSnapshot,
+	pageUrl: string,
+	root: Document | Element = document,
+): ReconcileCourseFilesRequest | null {
+	if (!isCompleteCoursePage(pageUrl, root)) return null;
+	const moodleCourseId = snapshot.moodleCourseId?.trim() ?? "";
+	const name = snapshot.courseName?.trim() ?? "";
+	if (!/^[A-Za-z0-9._:-]{1,128}$/.test(moodleCourseId) || !name || name.length > 1_000) {
+		return null;
+	}
+	return {
+		course: {
+			moodleCourseId,
+			name,
+			academicYear: snapshot.academicYear,
+			term: snapshot.term,
+		},
 	};
 }
 
@@ -112,7 +138,7 @@ export function parseMoodleDueAt(
 	};
 }
 
-function isCompleteCoursePage(pageUrl: string, root: Document | Element): boolean {
+export function isCompleteCoursePage(pageUrl: string, root: Document | Element): boolean {
 	try {
 		const url = new URL(pageUrl);
 		if (!/\/course\/view\.php$/i.test(url.pathname) || !url.searchParams.get("id")) return false;

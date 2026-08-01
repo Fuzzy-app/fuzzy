@@ -14,9 +14,10 @@ use engine_core::library::{
 	LibraryMaintenanceWarning as EngineLibraryMaintenanceWarning,
 };
 use engine_core::types::{
-	AssignmentChangeRecord, AssignmentRecord, CourseDashboardRecord, CourseRuleOverrideRecord,
-	DashboardRecord, DataSyncEventRecord, DeadlineFilter as EngineDeadlineFilter,
-	DuplicateGroupRecord, MoodleAssignmentSyncInput as EngineMoodleAssignmentSyncInput,
+	is_supported_moodle_assignment_url, AssignmentChangeRecord, AssignmentRecord,
+	CourseDashboardRecord, CourseRuleOverrideRecord, DashboardRecord, DataSyncEventRecord,
+	DeadlineFilter as EngineDeadlineFilter, DuplicateGroupRecord,
+	MoodleAssignmentSyncInput as EngineMoodleAssignmentSyncInput,
 	NotificationRuleInput as EngineNotificationRuleInput, NotificationRuleRecord, RuleSetRecord,
 	RuleViolationRecord,
 };
@@ -233,13 +234,23 @@ pub enum SubmissionMode {
 	Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum SubmissionAvailability {
 	Available,
 	Unavailable,
 	Unknown,
+}
+
+impl SubmissionAvailability {
+	const fn as_str(self) -> &'static str {
+		match self {
+			Self::Available => "available",
+			Self::Unavailable => "unavailable",
+			Self::Unknown => "unknown",
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -254,8 +265,8 @@ pub struct Assignment {
 	pub due_at_status: DueAtStatus,
 	pub submission_mode: SubmissionMode,
 	pub submitted: bool,
-	pub detail_url: Option<String>,
 	pub submission_availability: SubmissionAvailability,
+	pub moodle_url: Option<String>,
 }
 
 impl TryFrom<AssignmentRecord> for Assignment {
@@ -287,12 +298,16 @@ impl TryFrom<AssignmentRecord> for Assignment {
 				_ => return Err(invalid_stored_value("提出状況の更新方式")),
 			},
 			submitted: value.submitted,
-			detail_url: value.detail_url,
 			submission_availability: match value.submission_availability.as_str() {
 				"available" => SubmissionAvailability::Available,
 				"unavailable" => SubmissionAvailability::Unavailable,
 				"unknown" => SubmissionAvailability::Unknown,
 				_ => return Err(invalid_stored_value("提出可否")),
+			},
+			moodle_url: match value.moodle_url {
+				Some(url) if is_supported_moodle_assignment_url(&url) => Some(url),
+				Some(_) => return Err(invalid_stored_value("Moodle課題URL")),
+				None => None,
 			},
 		})
 	}
@@ -350,8 +365,8 @@ pub struct SyncMoodleAssignmentRequest {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
-	pub detail_url: Option<String>,
 	pub submission_availability: SubmissionAvailability,
+	pub moodle_url: Option<String>,
 }
 
 impl From<SyncMoodleAssignmentRequest> for EngineMoodleAssignmentSyncInput {
@@ -364,13 +379,8 @@ impl From<SyncMoodleAssignmentRequest> for EngineMoodleAssignmentSyncInput {
 			due_at_status: value.due_at_status,
 			submission_mode: value.submission_mode,
 			submitted: value.submitted,
-			detail_url: value.detail_url,
-			submission_availability: match value.submission_availability {
-				SubmissionAvailability::Available => "available",
-				SubmissionAvailability::Unavailable => "unavailable",
-				SubmissionAvailability::Unknown => "unknown",
-			}
-			.to_string(),
+			submission_availability: value.submission_availability.as_str().to_string(),
+			moodle_url: value.moodle_url,
 		}
 	}
 }
@@ -392,8 +402,8 @@ pub enum AssignmentChangeField {
 	SubmissionMode,
 	DueAtStatus,
 	Submitted,
-	DetailUrl,
 	SubmissionAvailability,
+	MoodleUrl,
 	RemovedAt,
 }
 
@@ -419,8 +429,8 @@ impl TryFrom<AssignmentChangeRecord> for AssignmentChange {
 			"submission_mode" => AssignmentChangeField::SubmissionMode,
 			"due_at_status" => AssignmentChangeField::DueAtStatus,
 			"submitted" => AssignmentChangeField::Submitted,
-			"detail_url" => AssignmentChangeField::DetailUrl,
 			"submission_availability" => AssignmentChangeField::SubmissionAvailability,
+			"moodle_url" => AssignmentChangeField::MoodleUrl,
 			"removed_at" => AssignmentChangeField::RemovedAt,
 			_ => return Err(invalid_stored_value("assignment_changes.field")),
 		};
@@ -772,6 +782,7 @@ pub struct SearchResult {
 	pub course_name: Option<String>,
 	pub snippet: String,
 	pub page: Option<u32>,
+	pub page_count: Option<u32>,
 	pub score: f32,
 }
 
@@ -817,6 +828,14 @@ pub struct RebuildLibraryRequest {
 	pub rebuild_index: Option<bool>,
 }
 
+/// Moodleで表示中の1コースだけを差分走査する要求。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ReconcileCourseFilesRequest {
+	pub course: SyncMoodleCourseRequest,
+}
+
 /// 再スキャンで個別に処理できなかった相対パスと利用者向け理由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -835,6 +854,7 @@ pub struct LibraryMaintenanceSummary {
 	pub registered_file_count: usize,
 	pub updated_file_count: usize,
 	pub indexed_file_count: usize,
+	pub reused_fingerprint_count: usize,
 	pub missing_file_count: usize,
 	pub skipped_file_count: usize,
 	pub warnings: Vec<LibraryMaintenanceWarning>,
@@ -856,6 +876,7 @@ impl From<EngineLibraryMaintenanceSummary> for LibraryMaintenanceSummary {
 			registered_file_count: value.registered_file_count,
 			updated_file_count: value.updated_file_count,
 			indexed_file_count: value.indexed_file_count,
+			reused_fingerprint_count: value.reused_fingerprint_count,
 			missing_file_count: value.missing_file_count,
 			skipped_file_count: value.skipped_file_count,
 			warnings: value.warnings.into_iter().map(Into::into).collect(),
@@ -968,10 +989,10 @@ mod tests {
 			due_at_status: "needs_review".to_string(),
 			submission_mode: "manual".to_string(),
 			submitted: false,
-			detail_url: Some(
+			submission_availability: "available".to_string(),
+			moodle_url: Some(
 				"https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701".to_string(),
 			),
-			submission_availability: "available".to_string(),
 		})
 		.unwrap();
 		let value = serde_json::to_value(assignment).unwrap();
@@ -980,6 +1001,10 @@ mod tests {
 		assert_eq!(value["dueAtStatus"], "needs_review");
 		assert_eq!(value["submissionMode"], "manual");
 		assert_eq!(value["submissionAvailability"], "available");
+		assert_eq!(
+			value["moodleUrl"],
+			"https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701"
+		);
 
 		let dashboard = DashboardSummary::from(DashboardRecord {
 			courses: Vec::new(),
@@ -1079,13 +1104,17 @@ mod tests {
 				"dueAtStatus": "normal",
 				"submissionMode": "moodle_auto",
 				"submitted": false,
-				"detailUrl": "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=101",
-				"submissionAvailability": "available"
+				"submissionAvailability": "available",
+				"moodleUrl": "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701"
 			}]
 		}))
 		.unwrap();
 		assert_eq!(request.course.moodle_course_id, "course-412");
 		assert_eq!(request.assignments[0].moodle_assignment_id, "cm-412-101");
+		assert_eq!(
+			request.assignments[0].submission_availability,
+			SubmissionAvailability::Available
+		);
 		assert!(
 			serde_json::from_value::<SyncMoodleAssignmentsRequest>(serde_json::json!({
 				"trigger": "auto",
@@ -1103,10 +1132,13 @@ mod tests {
 
 		let ping = serde_json::to_value(PingResult {
 			version: "0.1.0".to_string(),
-			protocol_version: 4,
+			protocol_version: engine_core::EXTENSION_RUNTIME_PROTOCOL_VERSION,
 		})
 		.unwrap();
-		assert_eq!(ping["protocolVersion"], 4);
+		assert_eq!(
+			ping["protocolVersion"],
+			engine_core::EXTENSION_RUNTIME_PROTOCOL_VERSION
+		);
 	}
 
 	#[test]

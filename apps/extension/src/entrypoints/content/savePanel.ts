@@ -349,7 +349,7 @@ export async function mountSavePanel(): Promise<void> {
 		panel.classList.toggle("is-collapsed", !isPanelOpen);
 		// 開閉ハンドルは開いている間だけ表示（閉じている間は「Fuzzy」タブで再オープン）。
 		collapseHandle.style.display = isPanelOpen ? "grid" : "none";
-		panel.innerHTML = "";
+		panel.replaceChildren();
 
 		if (!isPanelOpen) {
 			panel.append(renderOpenTab());

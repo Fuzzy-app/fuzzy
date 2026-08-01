@@ -18,8 +18,8 @@ const assignment: Assignment = {
 	dueAtStatus: "normal",
 	submissionMode: "moodle_auto",
 	submitted: false,
-	detailUrl: "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=1",
-	submissionAvailability: "available",
+	submissionAvailability: "unknown",
+	moodleUrl: null,
 };
 
 const rules: NotificationRule[] = [

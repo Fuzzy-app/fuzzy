@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
+use super::library::saved_path_key;
 use super::rules::apply_rule_compliance;
 use super::{db_err, Database};
 use crate::rule::{validate_rule_set, DefaultRuleEngine};
@@ -313,10 +314,11 @@ impl Database {
 				});
 			}
 			let relocated_path = new_base_folder.join(relative_path);
+			let relocated_path = saved_path_key(&relocated_path);
 			transaction
 				.execute(
 					"UPDATE files SET saved_path = ?1 WHERE id = ?2",
-					params![relocated_path.to_string_lossy(), file_id],
+					params![relocated_path, file_id],
 				)
 				.map_err(db_err)?;
 			rebased_file_count += 1;
@@ -386,6 +388,7 @@ fn active_course_ids_in_base(
 	base_folder: &Path,
 	course_name: &str,
 ) -> EngineResult<BTreeSet<i64>> {
+	let base_folder = PathBuf::from(saved_path_key(base_folder));
 	let mut statement = conn
 		.prepare(
 			"SELECT DISTINCT c.id, f.saved_path
@@ -408,7 +411,9 @@ fn active_course_ids_in_base(
 		.map_err(db_err)?;
 	Ok(records
 		.into_iter()
-		.filter(|(_, saved_path)| saved_path.starts_with(base_folder))
+		.filter(|(_, saved_path)| {
+			PathBuf::from(saved_path_key(saved_path)).starts_with(&base_folder)
+		})
 		.map(|(course_id, _)| course_id)
 		.collect())
 }
@@ -537,7 +542,7 @@ mod tests {
 	use rusqlite::params;
 
 	use super::{
-		validate_base_folder, Database, INITIAL_COURSE_OVERRIDE_NOTE,
+		saved_path_key, validate_base_folder, Database, INITIAL_COURSE_OVERRIDE_NOTE,
 		INITIAL_COURSE_OVERRIDE_PATTERN,
 	};
 	use crate::index::DefaultIndexEngine;
@@ -871,7 +876,9 @@ mod tests {
 			.unwrap();
 		assert_eq!(
 			PathBuf::from(relocated.0),
-			canonical_new_root.join("データベース/正規化.pdf")
+			PathBuf::from(saved_path_key(
+				&canonical_new_root.join("データベース/正規化.pdf")
+			))
 		);
 		assert!(relocated.1);
 		assert!(database.search_document_metadata(41).unwrap().is_none());

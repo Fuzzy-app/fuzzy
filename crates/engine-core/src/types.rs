@@ -5,6 +5,7 @@
 //! `packages/shared/src/generated/` へのTS型自動生成に切り替える予定。
 
 use std::path::PathBuf;
+use url::Url;
 
 /// Moodle文脈をSQLiteのコースへ解決した結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,8 +58,8 @@ pub struct AssignmentRecord {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
-	pub detail_url: Option<String>,
 	pub submission_availability: String,
+	pub moodle_url: Option<String>,
 }
 
 /// One assignment received from the Moodle acquisition pipeline.
@@ -72,8 +73,6 @@ pub struct AssignmentSyncInput {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
-	pub detail_url: Option<String>,
-	pub submission_availability: String,
 }
 
 /// Moodleの安定した課題識別子を使う、コース単位同期の入力。
@@ -86,8 +85,42 @@ pub struct MoodleAssignmentSyncInput {
 	pub due_at_status: String,
 	pub submission_mode: String,
 	pub submitted: bool,
-	pub detail_url: Option<String>,
 	pub submission_availability: String,
+	pub moodle_url: Option<String>,
+}
+
+pub fn is_supported_moodle_assignment_url(value: &str) -> bool {
+	if value.len() > 2_048 {
+		return false;
+	}
+	let Ok(url) = Url::parse(value) else {
+		return false;
+	};
+	let Some(host) = url.host_str() else {
+		return false;
+	};
+	let moodle_suffix = host
+		.strip_prefix("moodle")
+		.and_then(|value| value.strip_suffix(".wakayama-u.ac.jp"));
+	let supported_host = moodle_suffix.is_some_and(|year| {
+		year.is_empty() || year.chars().all(|character| character.is_ascii_digit())
+	});
+	let assignment_id = url
+		.query_pairs()
+		.find_map(|(key, value)| (key == "id").then_some(value));
+	url.scheme() == "https"
+		&& supported_host
+		&& matches!(url.path(), "/mod/assign/view.php" | "/mod/quiz/view.php")
+		&& url.username().is_empty()
+		&& url.password().is_none()
+		&& url.fragment().is_none()
+		&& assignment_id.is_some_and(|value| {
+			!value.is_empty()
+				&& value.len() <= 128
+				&& value.chars().all(|character| {
+					character.is_ascii_alphanumeric() || "._:-".contains(character)
+				})
+		})
 }
 
 /// Aggregate result of one assignment synchronization.
@@ -205,7 +238,7 @@ pub struct FileEntry {
 	pub file_name: String,
 	/// バイト単位のサイズ。
 	pub size: u64,
-	/// 最終更新日時（UNIXエポック秒）。
+	/// 最終更新日時（UNIXエポックからのナノ秒）。取得不能時は`None`。
 	pub modified_at: Option<i64>,
 }
 
@@ -236,10 +269,16 @@ pub struct SavePatternGuess {
 	pub directory_template: String,
 	/// 比較評価用に推定したファイル名テンプレート。命名規則を検出しない場合は`None`。
 	pub file_name_template: Option<String>,
+	/// 走査起点から見た科目セグメント位置。
+	pub course_segment_index: usize,
 	/// 確からしさ（0.0〜1.0）。確からしさ順の提示に使う。
 	pub confidence: f64,
 	/// このパターンに合致した既存ファイル数。
 	pub matched_count: usize,
+	/// この候補を評価できたファイル数。`confidence`の分母を説明するために使う。
+	pub evaluated_count: usize,
+	/// この候補を実際に支持した相対フォルダーパスの代表例。
+	pub representative_paths: Vec<PathBuf>,
 }
 
 /// グローバル／コース別の保存ルール一式。
@@ -348,6 +387,8 @@ pub struct SearchDocumentMetadata {
 	pub file_name: String,
 	/// コース未紐付けの場合は`None`。
 	pub course_name: Option<String>,
+	/// PDF等の総ページ数。本文索引と同時に検証できない形式では`None`。
+	pub page_count: Option<u32>,
 }
 
 /// 重複・類似ファイルの検出結果1件。
