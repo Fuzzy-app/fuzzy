@@ -125,12 +125,13 @@ export function mountFuzzyShell(): void {
 		if (api.mode !== "unknown") setTopMode(api.mode);
 	};
 
-	const applyShellFrame = () => {
+	const applyShellFrame = (measuredTopOffset?: number) => {
 		if (!page) return;
-		shellTopOffset = getShellTopOffset(navHost);
+		shellTopOffset = measuredTopOffset ?? getShellTopOffset(navHost);
 		page.style.top = `${shellTopOffset}px`;
 		page.style.height = `calc(100vh - ${shellTopOffset}px)`;
 	};
+	const handleShellResize = () => applyShellFrame();
 
 	const renderEntryState = () => {
 		navButton.classList.toggle("is-active", isOpen);
@@ -299,7 +300,7 @@ export function mountFuzzyShell(): void {
 		if (!isOpen) return;
 		isOpen = false;
 		renderEntryState();
-		window.removeEventListener("resize", applyShellFrame);
+		window.removeEventListener("resize", handleShellResize);
 		page?.remove();
 		restoreMainContent();
 		document.body.classList.remove("fuzzy-shell-open");
@@ -354,12 +355,12 @@ export function mountFuzzyShell(): void {
 		isOpen = true;
 		renderEntryState();
 		// Measure Moodle's header before the shell's compacting rules hide page content.
-		shellTopOffset = getShellTopOffset(navHost);
+		const initialShellTopOffset = getShellTopOffset(navHost);
 		document.body.classList.add("fuzzy-shell-open");
 		moveMainContentToStash();
 		document.body.append(buildPage());
-		applyShellFrame();
-		window.addEventListener("resize", applyShellFrame);
+		applyShellFrame(initialShellTopOffset);
+		window.addEventListener("resize", handleShellResize);
 
 		// 接続モードの表示だけ非同期で更新する（検索は自動では実行しない）
 		void apiPromise.then(
