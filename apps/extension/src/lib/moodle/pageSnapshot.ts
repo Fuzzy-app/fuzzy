@@ -180,7 +180,14 @@ export function extractCourseName(root: Document | Element = document): string |
 		...extractBreadcrumbs(root).slice(-2),
 	];
 
-	return firstMeaningful(candidates);
+	return firstMeaningful(candidates.filter((candidate) => !isMoodleSiteTitle(candidate)));
+}
+
+/** Moodleのサイト名はコース名として保存しない。年度情報は別フィールドで扱う。 */
+export function isMoodleSiteTitle(value: string | null | undefined): boolean {
+	const normalized = normalizeText(value);
+	if (!normalized) return false;
+	return /(?:(?:\[[^\]]*\]|\u3010[^\u3011]*\u3011)\s*)?Moodle\s*20\d{2}$/i.test(normalized);
 }
 
 export function extractSectionTitle(root: Document | Element = document): string | null {

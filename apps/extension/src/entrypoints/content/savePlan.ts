@@ -7,6 +7,7 @@ import {
 	normalizeRelativeSavePath,
 	normalizeWindowsPath,
 } from "@fuzzy/shared";
+import { contextualMoodleCourseId } from "../../lib/moodle/assignmentSync";
 import type { MoodleFileLink, MoodlePageSnapshot } from "../../lib/moodle/pageSnapshot";
 
 export type FileSuggestions = Map<string, SaveSuggestion[]>;
@@ -30,12 +31,14 @@ interface ManualDestination {
 export async function loadFileSuggestions(
 	api: Pick<FuzzyApiClient, "suggestSavePath">,
 	snapshot: MoodlePageSnapshot,
+	pageUrl = typeof location === "undefined" ? "" : location.href,
 ): Promise<FileSuggestions> {
+	const moodleCourseId = contextualMoodleCourseId(snapshot, pageUrl);
 	const entries = await Promise.all(
 		snapshot.files.map(async (file) => {
 			const suggestions = await api.suggestSavePath({
 				course: {
-					moodleCourseId: snapshot.moodleCourseId,
+					moodleCourseId,
 					name: snapshot.courseName,
 					academicYear: snapshot.academicYear,
 					term: snapshot.term,
