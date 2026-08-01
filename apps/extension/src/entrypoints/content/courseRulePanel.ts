@@ -4,15 +4,15 @@ import type {
 	RulePreviewValues,
 	RuleSet,
 } from "@fuzzy/shared";
+import { createRuleSegmentsFromTemplate } from "@fuzzy/shared";
 import { element, optionElement } from "./rulesScreenElements";
 import {
 	type CourseRuleDraft,
-	effectivePattern,
 	getAvailableCourses,
 	isSameCourseRuleDraft,
-	previewPattern,
 	validateCourseRuleDraft,
 } from "./rulesScreenModel";
+import { createStructuredRuleBuilder } from "./structuredRuleBuilder";
 
 export interface CourseRulePanelOptions {
 	rules: RuleSet;
@@ -75,13 +75,13 @@ function buildAddRow(options: CourseRulePanelOptions): HTMLElement {
 	select.setAttribute("aria-label", "保存方法を変更する授業");
 
 	if (options.loadingCourses) {
-		select.append(optionElement("", "コースを読み込んでいます…"));
+		select.append(optionElement("", "授業を読み込んでいます…"));
 		select.disabled = true;
 	} else if (options.courseLoadError) {
-		select.append(optionElement("", "コースを読み込めませんでした"));
+		select.append(optionElement("", "授業を読み込めませんでした"));
 		select.disabled = true;
 	} else if (available.length === 0) {
-		select.append(optionElement("", "追加できるコースはありません"));
+		select.append(optionElement("", "追加できる授業はありません"));
 		select.disabled = true;
 	} else {
 		for (const course of available) {
@@ -143,57 +143,79 @@ function buildOverrideCard(
 	const title = element("div");
 	title.append(
 		element("h3", "", draft.courseName),
-		element("p", "fuzzy-rules-override-id", `コースID: ${override.courseId}`),
+		element("p", "fuzzy-rules-override-id", "この授業だけに適用"),
 	);
+	let usesGlobalRule = draft.patternTemplate.trim().length === 0;
 	const kindBadge = element(
 		"span",
-		draft.splitBySection ? "fuzzy-rules-kind-badge" : "fuzzy-rules-kind-badge is-no-section",
-		draft.splitBySection ? "回ごとに分ける" : "回ごとに分けない",
+		usesGlobalRule ? "fuzzy-rules-kind-badge" : "fuzzy-rules-kind-badge is-no-section",
+		usesGlobalRule ? "基本設定を使用" : "授業別に変更",
 	);
 	head.append(title, kindBadge);
 
-	const grid = element("div", "fuzzy-rules-override-grid");
-	const splitLabel = element("label", "fuzzy-rules-checkbox");
-	const splitInput = element("input");
-	splitInput.type = "checkbox";
-	splitInput.checked = draft.splitBySection;
-	splitLabel.append(
-		splitInput,
-		element("span", "", "講義回（第1回、第2回…）ごとにフォルダを分ける"),
+	const modeFieldset = element("fieldset", "fuzzy-rules-choice-group");
+	const modeLegend = element("legend", "", "この授業の保存方法");
+	const modeName = `fuzzy-course-rule-mode-${override.courseId}`;
+	const basicModeLabel = element("label", "fuzzy-rules-radio");
+	const basicModeInput = element("input");
+	basicModeInput.type = "radio";
+	basicModeInput.name = modeName;
+	basicModeInput.value = "global";
+	basicModeInput.checked = usesGlobalRule;
+	basicModeInput.disabled = options.savingTarget !== null;
+	basicModeLabel.append(
+		basicModeInput,
+		element("span", "", "基本の保存設定を使う（基本設定を変更したとき、この授業にも反映）"),
 	);
+	const customModeLabel = element("label", "fuzzy-rules-radio");
+	const customModeInput = element("input");
+	customModeInput.type = "radio";
+	customModeInput.name = modeName;
+	customModeInput.value = "custom";
+	customModeInput.checked = !usesGlobalRule;
+	customModeInput.disabled = options.savingTarget !== null;
+	customModeLabel.append(
+		customModeInput,
+		element("span", "", "この授業だけフォルダーの並びを変更する"),
+	);
+	modeFieldset.append(modeLegend, basicModeLabel, customModeLabel);
 
-	const patternField = element("label", "fuzzy-rules-field");
-	const patternInput = element("input", "fuzzy-rules-input");
-	patternInput.type = "text";
-	patternInput.value = draft.patternTemplate;
-	patternInput.placeholder = "空欄なら基本の保存設定を使用";
-	patternInput.autocomplete = "off";
+	let updateCardState = () => {};
+	const builder = createStructuredRuleBuilder({
+		idPrefix: `fuzzy-course-rule-${override.courseId}`,
+		initialTemplate: draft.patternTemplate.trim() || options.rules.globalPatternTemplate,
+		previewValues: { ...options.previewValues, course: draft.courseName },
+		previewLabel: `${draft.courseName}での保存例`,
+		showPreview: false,
+		disabled: options.savingTarget !== null,
+		onChange: (template, segments) => {
+			if (!usesGlobalRule) {
+				draft.patternTemplate = template;
+				draft.splitBySection = segments.some(({ kind }) => kind === "section");
+			}
+			updateCardState();
+		},
+		onClearMessage: options.onClearMessage,
+	});
+	builder.root.id = `${modeName}-builder`;
+	builder.root.hidden = usesGlobalRule;
+	customModeInput.setAttribute("aria-controls", builder.root.id);
+	customModeInput.setAttribute("aria-expanded", String(!usesGlobalRule));
+
 	const validationText = element("p", "fuzzy-rules-validation");
-	patternField.append(
-		element("span", "", "この授業の保存先の形式"),
-		patternInput,
-		element("p", "fuzzy-rules-help", "空欄にすると基本の保存設定を使います。"),
-		validationText,
-	);
+	validationText.setAttribute("role", "alert");
+	validationText.setAttribute("aria-live", "assertive");
 
 	const noteField = element("label", "fuzzy-rules-field");
 	const noteInput = element("textarea", "fuzzy-rules-textarea");
 	noteInput.value = draft.note;
 	noteInput.placeholder = "この授業だけ設定を変える理由（任意）";
+	noteInput.disabled = options.savingTarget !== null;
 	noteField.append(element("span", "", "メモ"), noteInput);
-	grid.append(splitLabel, patternField, noteField);
 
-	const previewValue = element(
-		"p",
-		"fuzzy-rules-preview-value",
-		previewPattern(
-			effectivePattern(draft, options.rules.globalPatternTemplate),
-			options.previewValues,
-			draft.courseName,
-		),
-	);
+	const previewValue = element("p", "fuzzy-rules-preview-value", builder.getPreview());
 	const preview = element("div", "fuzzy-rules-preview");
-	preview.append(element("p", "fuzzy-rules-preview-label", "このコースでの保存例"), previewValue);
+	preview.append(element("p", "fuzzy-rules-preview-label", "この授業での保存例"), previewValue);
 
 	const saveButton = element(
 		"button",
@@ -205,30 +227,40 @@ function buildOverrideCard(
 				: "この授業の設定を保存",
 	);
 	saveButton.type = "button";
-	const updateCardState = () => {
-		const validationError = validateCourseRuleDraft(draft, options.rules.globalPatternTemplate);
-		kindBadge.textContent = draft.splitBySection ? "回ごとに分ける" : "回ごとに分けない";
-		kindBadge.classList.toggle("is-no-section", !draft.splitBySection);
+	updateCardState = () => {
+		const courseValidationError = validateCourseRuleDraft(
+			draft,
+			options.rules.globalPatternTemplate,
+		);
+		const validationError = builder.getValidationError() ?? courseValidationError;
+		kindBadge.textContent = usesGlobalRule ? "基本設定を使用" : "授業別に変更";
+		kindBadge.classList.toggle("is-no-section", !usesGlobalRule);
 		validationText.textContent = validationError ?? "";
 		validationText.hidden = validationError === null;
-		previewValue.textContent = previewPattern(
-			effectivePattern(draft, options.rules.globalPatternTemplate),
-			options.previewValues,
-			draft.courseName,
-		);
+		builder.root.hidden = usesGlobalRule;
+		customModeInput.setAttribute("aria-expanded", String(!usesGlobalRule));
+		previewValue.textContent = builder.getPreview();
 		saveButton.disabled =
 			options.savingTarget !== null ||
 			Boolean(validationError) ||
 			isSameCourseRuleDraft(draft, override);
 	};
 
-	splitInput.addEventListener("change", () => {
-		draft.splitBySection = splitInput.checked;
+	basicModeInput.addEventListener("change", () => {
+		if (!basicModeInput.checked) return;
+		usesGlobalRule = true;
+		draft.patternTemplate = "";
+		draft.splitBySection = createRuleSegmentsFromTemplate(options.rules.globalPatternTemplate).some(
+			({ kind }) => kind === "section",
+		);
 		options.onClearMessage();
 		updateCardState();
 	});
-	patternInput.addEventListener("input", () => {
-		draft.patternTemplate = patternInput.value;
+	customModeInput.addEventListener("change", () => {
+		if (!customModeInput.checked) return;
+		usesGlobalRule = false;
+		draft.patternTemplate = builder.getTemplate();
+		draft.splitBySection = builder.getSegments().some(({ kind }) => kind === "section");
 		options.onClearMessage();
 		updateCardState();
 	});
@@ -246,6 +278,6 @@ function buildOverrideCard(
 
 	const actionRow = element("div", "fuzzy-rules-action-row");
 	actionRow.append(saveButton, clearButton);
-	card.append(head, grid, preview, actionRow);
+	card.append(head, modeFieldset, builder.root, validationText, noteField, preview, actionRow);
 	return card;
 }

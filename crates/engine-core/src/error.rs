@@ -28,6 +28,8 @@ pub enum EngineError {
 	Database { message: String },
 	/// グローバルルールとコース別例外ルールの定義が矛盾している。
 	RuleConflict { reason: String },
+	/// 読み込み後にセットアップ設定が更新され、再読込が必要。
+	SetupConflict { reason: String },
 	/// Tantivy索引の構築・検索エラー。
 	Index { message: String },
 	/// その他の内部エラー。
@@ -47,6 +49,9 @@ impl EngineError {
 			Self::Io(_) | Self::PathIo { .. } => "ファイルの読み書きに失敗しました。",
 			Self::Database { .. } => "データベースの処理に失敗しました。",
 			Self::RuleConflict { .. } => "設定内容が他のルールと競合しています。",
+			Self::SetupConflict { .. } => {
+				"保存済みの設定が更新されています。最新の設定を読み直してください。"
+			}
 			Self::Index { .. } => "検索索引の処理に失敗しました。",
 			Self::Internal { .. } => "内部処理に失敗しました。",
 		}
@@ -69,6 +74,9 @@ impl fmt::Display for EngineError {
 			}
 			Self::Database { message } => write!(f, "DBエラー: {message}"),
 			Self::RuleConflict { reason } => write!(f, "ルール定義が矛盾しています: {reason}"),
+			Self::SetupConflict { reason } => {
+				write!(f, "セットアップ設定が更新されています: {reason}")
+			}
 			Self::Index { message } => write!(f, "索引エラー: {message}"),
 			Self::Internal { message } => write!(f, "内部エラー: {message}"),
 		}

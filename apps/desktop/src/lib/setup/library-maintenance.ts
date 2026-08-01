@@ -303,7 +303,7 @@ export async function rebuildLibraryClient(
 		return summary;
 	} catch {
 		throw new LibraryMaintenanceError(
-			"保存先の再スキャンと検索索引の再構築に失敗しました。資料の保存完了後にブラウザを閉じ、再試行してください。",
+			"保存先の確認と資料情報の作り直しに失敗しました。資料の保存完了後にブラウザを閉じ、再試行してください。",
 		);
 	}
 }
@@ -316,11 +316,11 @@ export async function getApplicationRecoveryStatusClient(
 		return {
 			database: {
 				state: "ready",
-				message: "ブラウザプレビューではSQLite復旧状態を確認しません。",
+				message: "ブラウザプレビューでは設定の復旧状態を確認しません。",
 			},
 			searchIndex: {
 				state: "ready",
-				message: "ブラウザプレビューでは検索索引を使用しません。",
+				message: "ブラウザプレビューでは資料の検索情報を使用しません。",
 			},
 		};
 	}
@@ -348,7 +348,7 @@ export async function createFreshDatabaseClient(
 		return result;
 	} catch {
 		throw new LibraryMaintenanceError(
-			"破損DBを保全して新しいデータベースを作成できませんでした。Fuzzyを終了せず、時間をおいて再試行してください。",
+			"現在の設定を保全して新しい設定を作成できませんでした。Fuzzyを終了せず、時間をおいて再試行してください。",
 		);
 	}
 }
@@ -401,7 +401,7 @@ export async function importBackupClient(
 		return result;
 	} catch {
 		throw new LibraryMaintenanceError(
-			"バックアップから復元できませんでした。Fuzzyが書き出したSQLiteファイルか確認してください。",
+			"バックアップから復元できませんでした。Fuzzyが書き出したバックアップか確認してください。",
 		);
 	}
 }

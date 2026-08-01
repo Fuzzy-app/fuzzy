@@ -1,8 +1,33 @@
-import type { CourseRuleOverrideInput } from "./types";
+import type { CourseRuleOverrideInput, StructuredRuleSegment } from "./types";
 
 export const RULE_TEMPLATE_TOKENS = ["year", "term", "course", "assignment", "section"] as const;
 
 export type RuleTemplateToken = (typeof RULE_TEMPLATE_TOKENS)[number];
+
+export const RULE_SEGMENT_KINDS = [
+	"year",
+	"term",
+	"course",
+	"assignment",
+	"section",
+	"fixed",
+] as const;
+
+export type RuleSegmentKind = (typeof RULE_SEGMENT_KINDS)[number];
+
+export interface RuleSegment extends StructuredRuleSegment {
+	id: string;
+	kind: RuleSegmentKind;
+}
+
+export const RULE_SEGMENT_LABELS: Readonly<Record<RuleSegmentKind, string>> = {
+	year: "年度",
+	term: "学期",
+	course: "科目",
+	assignment: "課題",
+	section: "授業回",
+	fixed: "固定フォルダー名",
+};
 
 export interface RulePreset {
 	id: string;
@@ -44,6 +69,149 @@ export interface RulePreviewValues {
 
 const windowsReservedNamePattern = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const tokenPattern = /\{([^{}]+)\}/g;
+const segmentTokenPattern = /^\{(year|term|course|assignment|section)\}$/;
+let ruleSegmentSequence = 0;
+
+function createRuleSegmentId(kind: RuleSegmentKind): string {
+	ruleSegmentSequence += 1;
+	return `rule-segment-${ruleSegmentSequence}-${kind}`;
+}
+
+export function createRuleSegmentsFromTemplate(patternTemplate: string): RuleSegment[] {
+	return patternTemplate
+		.trim()
+		.split(/[\\/]/)
+		.filter(Boolean)
+		.map((segment) => {
+			const normalized = segment.trim();
+			const token = normalized.match(segmentTokenPattern)?.[1] as RuleTemplateToken | undefined;
+			if (token) return { id: createRuleSegmentId(token), kind: token };
+			if (/^第\s*\{section\}\s*回$/.test(normalized)) {
+				return {
+					id: createRuleSegmentId("section"),
+					kind: "section",
+					format: "numbered",
+				};
+			}
+			if (/^\{year\}年度$/.test(normalized)) {
+				return {
+					id: createRuleSegmentId("year"),
+					kind: "year",
+					format: "academicYearSuffix",
+				};
+			}
+			if (/^\{year\}年$/.test(normalized)) {
+				return {
+					id: createRuleSegmentId("year"),
+					kind: "year",
+					format: "yearSuffix",
+				};
+			}
+			return {
+				id: createRuleSegmentId("fixed"),
+				kind: "fixed",
+				value: normalized,
+			};
+		});
+}
+
+export function createRuleSegment(kind: RuleSegmentKind, _index: number, value = ""): RuleSegment {
+	return {
+		id: createRuleSegmentId(kind),
+		kind,
+		...(kind === "fixed" ? { value } : {}),
+	};
+}
+
+export function ruleSegmentsToTemplate(segments: readonly RuleSegment[]): string {
+	return segments
+		.map((segment) => {
+			if (segment.kind === "fixed") return (segment.value ?? "").trim();
+			if (segment.kind === "section" && segment.format === "numbered") {
+				return "第{section}回";
+			}
+			if (segment.kind === "year" && segment.format === "academicYearSuffix") {
+				return "{year}年度";
+			}
+			if (segment.kind === "year" && segment.format === "yearSuffix") {
+				return "{year}年";
+			}
+			return `{${segment.kind}}`;
+		})
+		.join("/");
+}
+
+export function validateRuleSegments(segments: readonly RuleSegment[]): string | null {
+	if (segments.length === 0) return "フォルダーの並びを1つ以上追加してください。";
+	const courseCount = segments.filter(({ kind }) => kind === "course").length;
+	if (courseCount === 0) return "「科目」は必ず1つ追加してください。";
+	if (courseCount > 1) return "「科目」は重複して追加できません。";
+
+	const seenKinds = new Set<RuleSegmentKind>();
+	for (const segment of segments) {
+		if (segment.kind !== "fixed") {
+			if (
+				(segment.format === "numbered" && segment.kind !== "section") ||
+				((segment.format === "yearSuffix" || segment.format === "academicYearSuffix") &&
+					segment.kind !== "year")
+			) {
+				return "選択したフォルダー項目の表示形式を使用できません。";
+			}
+			if (seenKinds.has(segment.kind)) {
+				return `「${RULE_SEGMENT_LABELS[segment.kind]}」は重複して追加できません。`;
+			}
+			seenKinds.add(segment.kind);
+			continue;
+		}
+		const rawValue = segment.value ?? "";
+		const value = rawValue.trim();
+		if (!value) return "固定フォルダー名を入力してください。";
+		if (rawValue !== value) {
+			return "固定フォルダー名の前後に空白は使用できません。";
+		}
+		if (/[{}]/.test(value)) {
+			return "固定フォルダー名に波括弧は使用できません。";
+		}
+		if (/^(?:[a-z]:[\\/]|[\\/]{1,2})/i.test(value)) {
+			return "固定フォルダー名に絶対パスやUNCパスは指定できません。";
+		}
+		if (value === "." || value === ".." || /[\\/]/.test(value)) {
+			return "固定フォルダー名には「.」「..」やパス区切りを使用できません。";
+		}
+		if ([...value].some(isInvalidWindowsPathCharacter)) {
+			return "固定フォルダー名にWindowsで使用できない文字が含まれています。";
+		}
+		if (/[. ]$/.test(value)) {
+			return "固定フォルダー名の末尾にピリオドや空白は使用できません。";
+		}
+		if (windowsReservedNamePattern.test(value)) {
+			return `Windowsの予約名「${value}」は固定フォルダー名に使用できません。`;
+		}
+	}
+	return validateRulePattern(ruleSegmentsToTemplate(segments));
+}
+
+export function previewRuleSegments(
+	segments: readonly RuleSegment[],
+	values: RulePreviewValues = createRulePreviewValues(),
+): string {
+	return segments
+		.map((segment) => {
+			if (segment.kind === "fixed") return (segment.value ?? "").trim();
+			if (segment.kind === "section" && segment.format === "numbered") {
+				return `第${values.section}回`;
+			}
+			if (segment.kind === "year" && segment.format === "academicYearSuffix") {
+				return `${values.year}年度`;
+			}
+			if (segment.kind === "year" && segment.format === "yearSuffix") {
+				return `${values.year}年`;
+			}
+			return values[segment.kind];
+		})
+		.filter(Boolean)
+		.join(" / ");
+}
 
 export function createRulePreviewValues(now = new Date()): RulePreviewValues {
 	const calendarYear = now.getFullYear();
@@ -109,10 +277,10 @@ export function validateCourseRuleOverride(
 	const patternError = validateRulePattern(effectivePattern);
 	if (patternError) return patternError;
 	if (!override.splitBySection && effectivePattern.includes("{section}")) {
-		return "回ごとに分けない場合はテンプレートから {section} を外してください。";
+		return "回ごとに分けない場合は、フォルダーの並びから「授業回」を外してください。";
 	}
 	if (override.splitBySection && !effectivePattern.includes("{section}")) {
-		return "回ごとに分ける場合はテンプレートに {section} を含めてください。";
+		return "回ごとに分ける場合は、フォルダーの並びに「授業回」を追加してください。";
 	}
 	return null;
 }

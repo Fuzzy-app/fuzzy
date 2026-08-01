@@ -15,6 +15,7 @@
 		"prepare:native-host:release": "bun run scripts/prepare-native-host.ts --release",
 		"package:extension": "bun run scripts/package-extension.ts",
 		"collect:windows": "bun run scripts/collect-windows-artifacts.ts",
+		"generate:icons": "bun run scripts/generate-brand-icons.ts",
 		"dist:windows": "bun run tauri build --bundles nsis && bun run package:extension && bun run collect:windows",
 		"validate:extension-store": "bun run scripts/validate-extension-store.ts",
 		"preview": "vite preview",

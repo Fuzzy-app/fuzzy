@@ -375,7 +375,7 @@ fn load_base_folder_path(conn: &Connection) -> EngineResult<PathBuf> {
 	})
 }
 
-fn load_rule_set(conn: &Connection) -> EngineResult<RuleSet> {
+pub(super) fn load_rule_set(conn: &Connection) -> EngineResult<RuleSet> {
 	let global_pattern_template = conn
 		.query_row(
 			"SELECT pattern_template FROM global_rule WHERE id = 1",

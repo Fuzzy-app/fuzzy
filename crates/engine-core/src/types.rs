@@ -190,6 +190,30 @@ pub struct RuleSetRecord {
 	pub course_overrides: Vec<CourseRuleOverrideRecord>,
 }
 
+/// 初期セットアップまたは再セットアップで保存した設定一式。
+///
+/// コース別候補はTauri境界の表示モデルなので、SQLiteへ保存したJSONをそのまま返し、
+/// 利用者向け型への変換はdesktop側で行う。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSetupConfigurationRecord {
+	pub revision: String,
+	pub saved_at: String,
+	pub base_folder_path: PathBuf,
+	pub scan_pattern_id: String,
+	pub course_segment_index: Option<usize>,
+	pub rule_key: String,
+	pub rule_template: String,
+	pub course_overrides_json: String,
+}
+
+/// 再セットアップ設定の保存結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupConfigurationUpdate {
+	pub saved_at: String,
+	pub root_changed: bool,
+	pub rebased_file_count: usize,
+}
+
 /// SQLite上のルール違反。絶対パスはNative Messaging境界で相対化する。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleViolationRecord {

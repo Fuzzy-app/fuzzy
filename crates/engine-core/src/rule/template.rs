@@ -200,6 +200,16 @@ pub(super) fn validate_pattern(field: &str, pattern: &str) -> EngineResult<()> {
 			reason: "テンプレートには {course} を含めてください".to_string(),
 		});
 	}
+	let mut unique_tokens = BTreeSet::new();
+	if let Some(duplicate) = tokens
+		.iter()
+		.find(|token| !unique_tokens.insert(token.as_str()))
+	{
+		return Err(EngineError::InvalidInput {
+			field: field.to_string(),
+			reason: format!("同じ項目 {{{duplicate}}} は1回だけ指定してください"),
+		});
+	}
 
 	for segment in pattern.split(['/', '\\']) {
 		if segment.is_empty() {
@@ -378,6 +388,8 @@ mod tests {
 			"{term}/{unknown}/{course}",
 			"{term}//{course}",
 			"{term}/CON/{course}",
+			"{course}/{course}",
+			"{term}/{course}/{term}",
 		] {
 			assert!(
 				validate_pattern("pattern", invalid).is_err(),

@@ -80,7 +80,7 @@ export async function getExtensionRecoveryStatusClient(
 	} catch {
 		throw new ExtensionInstallError(
 			"STATUS_UNAVAILABLE",
-			"SQLiteから拡張機能の応答情報を読み込めませんでした。Fuzzyを再起動してから再試行してください。",
+			"拡張機能の状態を読み込めませんでした。Fuzzyを再起動してから再試行してください。",
 		);
 	}
 }

@@ -61,6 +61,15 @@ export interface SaveSuggestion {
 	courseFolder: CourseFolderNameResolution;
 }
 
+/** 初期・再セットアップと常設ルール管理で共有する、表示用の構造化階層。 */
+export interface StructuredRuleSegment {
+	kind: "year" | "term" | "course" | "assignment" | "section" | "fixed";
+	/** `fixed`だけが持つ実フォルダー名。 */
+	value?: string;
+	/** 既存の「2026年」「2026年度」「第3回」形式を損失なく往復するための表示形式。 */
+	format?: "yearSuffix" | "academicYearSuffix" | "numbered";
+}
+
 /** 初期走査で推定した、利用者確認前の保存構造候補。 */
 export interface InitialScanPatternCandidate {
 	id: string;
@@ -68,6 +77,8 @@ export interface InitialScanPatternCandidate {
 	description: string;
 	/** この候補を実際に支持した相対フォルダーパスの代表例。 */
 	folders: string[];
+	/** 画面が表示名を解析せずルールビルダーへ渡す、推定済みの階層役割。 */
+	directorySegments: StructuredRuleSegment[] | null;
 	/** 保存ルート直下から数えた科目セグメント位置。未分類ではnull。 */
 	courseSegmentIndex: number | null;
 	/** 比較評価用のファイル名規則。DBの保存ルールには自動保存しない。 */

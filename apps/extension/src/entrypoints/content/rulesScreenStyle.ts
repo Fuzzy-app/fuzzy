@@ -231,6 +231,7 @@ export function ensureRulesScreenStyle(): void {
 		.fuzzy-rules-tab:focus,
 		.fuzzy-rules-secondary-button:focus,
 		.fuzzy-rules-save-button:focus,
+		.fuzzy-rules-radio input:focus,
 		.fuzzy-rules-checkbox input:focus {
 			outline: 3px solid var(--fuzzy-focus-ring);
 			outline-offset: 2px;
@@ -280,6 +281,110 @@ export function ensureRulesScreenStyle(): void {
 			align-items: center;
 			justify-content: flex-end;
 			gap: 12px;
+		}
+
+		.fuzzy-structured-rule-builder {
+			display: grid;
+			gap: 10px;
+			border-radius: 12px;
+			padding: 14px;
+			background: var(--fuzzy-color-background);
+			box-shadow: inset 0 0 0 1px var(--fuzzy-color-border);
+		}
+
+		.fuzzy-structured-rule-builder[hidden] {
+			display: none;
+		}
+
+		.fuzzy-rule-builder-heading {
+			margin: 0;
+			color: var(--fuzzy-color-text);
+			font-size: var(--fuzzy-font-size-body);
+			font-weight: 900;
+		}
+
+		.fuzzy-rule-builder {
+			display: grid;
+			gap: 10px;
+		}
+
+		.fuzzy-rule-builder-row {
+			display: grid;
+			grid-template-columns: minmax(160px, 0.75fr) minmax(180px, 1fr) auto;
+			align-items: center;
+			gap: 10px;
+			padding: 11px;
+			border-radius: 12px;
+			background: var(--fuzzy-color-page);
+			box-shadow: inset 0 0 0 1px var(--fuzzy-color-border);
+		}
+
+		.fuzzy-rule-builder-actions {
+			display: flex;
+			gap: 6px;
+			grid-column: 3;
+		}
+
+		.fuzzy-rule-builder-add {
+			display: grid;
+			grid-template-columns: minmax(220px, 1fr) auto;
+			align-items: end;
+			gap: 10px;
+			border-top: 1px solid var(--fuzzy-color-border-soft);
+			padding-top: 10px;
+		}
+
+		.fuzzy-rules-choice-group {
+			display: grid;
+			gap: 8px;
+			min-width: 0;
+			margin: 0;
+			border: 1px solid var(--fuzzy-color-border);
+			border-radius: 12px;
+			padding: 12px;
+			background: var(--fuzzy-color-background);
+		}
+
+		.fuzzy-rules-choice-group legend {
+			padding: 0 5px;
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-small);
+			font-weight: 900;
+		}
+
+		.fuzzy-rules-radio {
+			display: flex;
+			align-items: flex-start;
+			gap: 9px;
+			border-radius: 9px;
+			padding: 8px;
+			color: var(--fuzzy-color-text);
+			font-size: var(--fuzzy-font-size-small);
+			font-weight: 750;
+			line-height: 1.55;
+			cursor: pointer;
+		}
+
+		.fuzzy-rules-radio:has(input:checked) {
+			background: var(--fuzzy-color-primary-soft);
+		}
+
+		.fuzzy-rules-radio input {
+			flex: 0 0 auto;
+			margin-top: 3px;
+			accent-color: var(--fuzzy-color-primary);
+		}
+
+		.fuzzy-visually-hidden {
+			position: absolute !important;
+			width: 1px !important;
+			height: 1px !important;
+			margin: -1px !important;
+			padding: 0 !important;
+			overflow: hidden !important;
+			clip: rect(0 0 0 0) !important;
+			white-space: nowrap !important;
+			border: 0 !important;
 		}
 
 		.fuzzy-rules-save-button,
@@ -431,6 +536,19 @@ export function ensureRulesScreenStyle(): void {
 			}
 
 			.fuzzy-rules-add-row {
+				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-rule-builder-row {
+				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-rule-builder-actions {
+				grid-column: auto;
+				flex-wrap: wrap;
+			}
+
+			.fuzzy-rule-builder-add {
 				grid-template-columns: 1fr;
 			}
 

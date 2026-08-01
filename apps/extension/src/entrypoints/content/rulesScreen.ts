@@ -28,6 +28,8 @@ import {
 	validateRulePattern,
 } from "./rulesScreenModel";
 import { ensureRulesScreenStyle } from "./rulesScreenStyle";
+import { previewStructuredRuleTemplate } from "./structuredRuleBuilder";
+import { userFacingErrorMessage } from "./userFacingError";
 
 export interface RuleManagementScreen {
 	root: HTMLElement;
@@ -419,7 +421,7 @@ export function createRuleManagementScreen(
 				override: {
 					splitBySection: false,
 					patternTemplate: defaultPattern,
-					note: "このコースは回ごとに保存しない",
+					note: "この授業は回ごとに保存しない",
 				},
 			});
 			syncOverrideDraft(course.courseId, nextRules);
@@ -525,7 +527,7 @@ export function createRuleManagementScreen(
 			buildSummaryCard(
 				"現在の基本設定",
 				patternLabel(rules.globalPatternTemplate),
-				rules.globalPatternTemplate,
+				`保存例: ${previewStructuredRuleTemplate(rules.globalPatternTemplate, previewValues)}`,
 				"is-accent",
 			),
 			buildSummaryCard(
@@ -566,7 +568,7 @@ export function createRuleManagementScreen(
 				),
 			);
 		}
-		if (message) rulesPanel.append(buildRulesMessage(message));
+		if (message && rules) rulesPanel.append(buildRulesMessage(message));
 		if (loadingRules && !rules) {
 			rulesPanel.append(
 				element("section", "fuzzy-placeholder", "保存済みルールを読み込んでいます…"),
@@ -576,16 +578,16 @@ export function createRuleManagementScreen(
 
 		if (!rules) {
 			const errorPanel = element("section", "fuzzy-error-panel");
+			errorPanel.setAttribute("role", "alert");
 			const retry = element("button", "fuzzy-primary-button", "再読み込み");
 			retry.type = "button";
 			retry.addEventListener("click", () => {
 				rulesLoaded = false;
 				activate();
 			});
-			errorPanel.append(
-				element("p", "", options.store.snapshot.error ?? "ルールを読み込めませんでした。"),
-				retry,
-			);
+			const loadError =
+				message?.kind === "error" ? message.text : errorMessage(options.store.snapshot.error);
+			errorPanel.append(element("p", "", loadError), retry);
 			rulesPanel.append(errorPanel);
 			return;
 		}
@@ -633,5 +635,8 @@ export function createRuleManagementScreen(
 }
 
 function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : "ルールを更新できませんでした。";
+	return userFacingErrorMessage(
+		error,
+		"保存・整理設定を更新できませんでした。接続を確認し、再読み込みしてください。",
+	);
 }
