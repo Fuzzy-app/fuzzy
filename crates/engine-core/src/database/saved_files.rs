@@ -200,7 +200,7 @@ impl Database {
 
 		let has_active_files = transaction
 			.query_row(
-				"SELECT EXISTS(SELECT 1 FROM files WHERE missing_at IS NULL)",
+				"SELECT EXISTS(SELECT 1 FROM files WHERE missing_at IS NULL AND excluded_at IS NULL)",
 				[],
 				|row| row.get::<_, bool>(0),
 			)
@@ -263,6 +263,7 @@ impl Database {
 				 FROM files
 				 WHERE moodle_file_id = ?1
 					AND missing_at IS NULL
+					AND excluded_at IS NULL
 				 ORDER BY id DESC
 				 LIMIT 1",
 				[moodle_file_id],
@@ -336,7 +337,7 @@ impl Database {
 			.query_row(
 				"SELECT course_id, section_no
 				 FROM files
-				 WHERE id = ?1 AND missing_at IS NULL",
+				 WHERE id = ?1 AND missing_at IS NULL AND excluded_at IS NULL",
 				[source_file_id],
 				|row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
 			)
@@ -368,6 +369,7 @@ impl Database {
 			file_ids.push(result.file_id);
 		}
 		transaction.commit().map_err(db_err)?;
+		self.refresh_excluded_file_flags()?;
 		Ok(file_ids)
 	}
 
@@ -384,7 +386,7 @@ impl Database {
 					.query_row(
 						"SELECT original_name
 						 FROM files
-						 WHERE id = ?1 AND missing_at IS NULL",
+						 WHERE id = ?1 AND missing_at IS NULL AND excluded_at IS NULL",
 						[matched.file_id],
 						|row| row.get::<_, String>(0),
 					)

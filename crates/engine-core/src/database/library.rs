@@ -293,6 +293,7 @@ impl Database {
 		let result =
 			upsert_scanned_file_observed_in_transaction(&transaction, file, modified_at_ns)?;
 		transaction.commit().map_err(db_err)?;
+		self.refresh_excluded_file_flags()?;
 		Ok(result)
 	}
 
@@ -321,6 +322,7 @@ impl Database {
 			)?);
 		}
 		transaction.commit().map_err(db_err)?;
+		self.refresh_excluded_file_flags()?;
 		Ok(results)
 	}
 
@@ -343,7 +345,8 @@ impl Database {
 				   AND size_bytes = ?2
 				   AND scan_modified_at_ns = ?3
 				   AND simhash IS NOT NULL
-				   AND missing_at IS NULL",
+				   AND missing_at IS NULL
+				   AND excluded_at IS NULL",
 				params![saved_path, size_bytes, modified_at_ns],
 				|row| {
 					Ok(ReusableScannedFingerprint {

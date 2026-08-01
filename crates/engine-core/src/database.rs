@@ -19,6 +19,7 @@ use crate::{
 
 mod backup;
 mod duplicates;
+mod exclusions;
 mod learning;
 mod library;
 mod missing;
@@ -34,7 +35,7 @@ pub use saved_files::{ExtractedFileRegistration, SavedZipSource};
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// SQLite接続。接続時にFK有効化と初版スキーマの適用・検証を保証する。
 pub struct Database {
@@ -76,7 +77,11 @@ impl Database {
 		if database_is_empty(&conn)? {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		} else {
-			let version = schema_version(&conn)?;
+			let mut version = schema_version(&conn)?;
+			if version < SCHEMA_VERSION {
+				migrate_schema(&mut conn, version)?;
+				version = schema_version(&conn)?;
+			}
 			validate_schema_generation(&conn, version)?;
 			validate_foreign_key_integrity(&conn)?;
 		}
@@ -302,6 +307,7 @@ impl Database {
 				 LEFT JOIN search_index_meta
 					ON search_index_meta.file_id = files.id
 				 WHERE files.missing_at IS NULL
+				   AND files.excluded_at IS NULL
 				   AND search_index_meta.file_id IS NULL",
 			)
 			.map_err(db_err)?;
@@ -328,6 +334,7 @@ impl Database {
 					INNER JOIN search_index_meta
 						ON search_index_meta.file_id = files.id
 					WHERE files.missing_at IS NULL
+					  AND files.excluded_at IS NULL
 				)",
 				[],
 				|row| row.get(0),
@@ -348,7 +355,8 @@ impl Database {
 				 INNER JOIN search_index_meta ON search_index_meta.file_id = files.id
 				 LEFT JOIN courses ON courses.id = files.course_id
 				 WHERE files.id = ?1
-					AND files.missing_at IS NULL",
+					AND files.missing_at IS NULL
+					AND files.excluded_at IS NULL",
 				[file_id],
 				|row| {
 					Ok(SearchDocumentMetadata {
@@ -375,6 +383,32 @@ impl Database {
 	pub(crate) fn conn(&self) -> &Connection {
 		&self.conn
 	}
+}
+
+fn migrate_schema(conn: &mut Connection, version: i64) -> EngineResult<()> {
+	if version != 1 {
+		return Err(EngineError::Database {
+			message: format!("Unsupported SQLite schema version: {version}"),
+		});
+	}
+	let transaction = conn.transaction().map_err(db_err)?;
+	transaction
+		.execute_batch(
+			"ALTER TABLE files ADD COLUMN excluded_at TEXT;
+			 CREATE TABLE excluded_folders (
+				 id INTEGER PRIMARY KEY AUTOINCREMENT,
+				 scope TEXT NOT NULL CHECK (scope IN ('root', 'course')),
+				 course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
+				 relative_path TEXT NOT NULL,
+				 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+				 CHECK ((scope = 'root' AND course_id IS NULL) OR (scope = 'course' AND course_id IS NOT NULL)),
+				 UNIQUE (scope, course_id, relative_path)
+			 );
+			 CREATE INDEX idx_excluded_folders_course ON excluded_folders(course_id);
+			 PRAGMA user_version = 2;",
+		)
+		.map_err(db_err)?;
+	transaction.commit().map_err(db_err)
 }
 
 fn observation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtensionRuntimeObservation> {
@@ -504,6 +538,11 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("course_rule_overrides", "id", false, 1),
 	("course_rule_overrides", "course_id", true, 0),
 	("course_rule_overrides", "split_by_section", true, 0),
+	("excluded_folders", "id", false, 1),
+	("excluded_folders", "scope", true, 0),
+	("excluded_folders", "course_id", false, 0),
+	("excluded_folders", "relative_path", true, 0),
+	("excluded_folders", "created_at", true, 0),
 	("files", "id", false, 1),
 	("files", "original_name", true, 0),
 	("files", "saved_path", true, 0),
@@ -514,6 +553,7 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("files", "rule_compliant", true, 0),
 	("files", "downloaded_at", true, 0),
 	("files", "missing_at", false, 0),
+	("files", "excluded_at", false, 0),
 	("duplicate_groups", "id", false, 1),
 	("duplicate_groups", "method", true, 0),
 	("duplicate_members", "group_id", true, 1),
@@ -559,6 +599,7 @@ const EXPECTED_FOREIGN_KEYS: &[(&str, &str, &str, &str, &str)] = &[
 		"id",
 		"CASCADE",
 	),
+	("excluded_folders", "course_id", "courses", "id", "CASCADE"),
 	("files", "course_id", "courses", "id", "SET NULL"),
 	(
 		"duplicate_members",
@@ -972,6 +1013,10 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 		],
 	),
 	(
+		"excluded_folders",
+		&["id", "scope", "course_id", "relative_path", "created_at"],
+	),
+	(
 		"courses",
 		&[
 			"id",
@@ -1018,6 +1063,7 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"violation_reason",
 			"downloaded_at",
 			"missing_at",
+			"excluded_at",
 		],
 	),
 	("duplicate_groups", &["id", "method", "created_at"]),
@@ -1414,7 +1460,7 @@ mod tests {
 	fn pre_release_schema_generation_is_rejected() {
 		let mut conn = Connection::open_in_memory().unwrap();
 		apply_schema(&mut conn, SCHEMA_SQL).unwrap();
-		conn.execute_batch("PRAGMA user_version = 2;").unwrap();
+		conn.execute_batch("PRAGMA user_version = 3;").unwrap();
 
 		assert!(matches!(
 			Database::from_connection(conn, None),
