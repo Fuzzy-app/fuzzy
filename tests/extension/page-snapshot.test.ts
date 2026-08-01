@@ -42,6 +42,22 @@ describe("Moodle資料のDOM解析", () => {
 		expect(snapshot.term).toBe("2026年度前期");
 	});
 
+	test("Moodleサイト名をコース名から除外しても年度は抽出する", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="412">
+				<body>
+					<main class="course-content">
+						<h1>【和歌山大学】 Moodle2026</h1>
+					</main>
+				</body>
+			</html>
+		`);
+
+		const snapshot = collectMoodlePageSnapshot(document);
+		expect(snapshot.courseName).toBeNull();
+		expect(snapshot.academicYear).toBe(2026);
+	});
+
 	test("未認識のバッジでもMP3・EXEアイコンから種別を推定する", () => {
 		expect(
 			resolveMoodleActivityMimeHint(
