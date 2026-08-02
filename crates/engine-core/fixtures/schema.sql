@@ -55,6 +55,17 @@ CREATE TABLE course_rule_overrides (
 	UNIQUE (course_id)
 );
 
+CREATE TABLE excluded_folders (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	scope         TEXT NOT NULL CHECK (scope IN ('root', 'course')),
+	course_id     INTEGER REFERENCES courses(id) ON DELETE CASCADE,
+	relative_path TEXT NOT NULL,
+	created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+	CHECK ((scope = 'root' AND course_id IS NULL) OR (scope = 'course' AND course_id IS NOT NULL)),
+	UNIQUE (scope, course_id, relative_path)
+);
+CREATE INDEX idx_excluded_folders_course ON excluded_folders(course_id);
+
 CREATE TABLE files (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
 	course_id        INTEGER REFERENCES courses(id) ON DELETE SET NULL,
@@ -75,6 +86,7 @@ CREATE TABLE files (
 	violation_reason TEXT,
 	-- 再スキャン時に実体を確認できない行は履歴として保持し、通常表示・索引・判定から除外する。
 	missing_at       TEXT,
+	excluded_at      TEXT,
 	downloaded_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_files_course ON files(course_id);
@@ -156,4 +168,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

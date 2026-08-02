@@ -16,6 +16,14 @@ pub struct CourseContextRecord {
 	pub term: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExcludedFolderRecord {
+	pub id: i64,
+	pub scope: String,
+	pub course_id: Option<i64>,
+	pub relative_path: String,
+}
+
 /// ファイルシステムへの保存成功後にSQLiteへ登録するメタデータ。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedFileRegistration {

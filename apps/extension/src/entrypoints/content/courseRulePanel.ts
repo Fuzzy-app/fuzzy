@@ -28,6 +28,7 @@ export interface CourseRulePanelOptions {
 	onClearMessage(): void;
 	onAdd(): void;
 	onSave(courseId: number): void;
+	onClear(courseId: number): void;
 }
 
 export function buildCourseRulePanel(options: CourseRulePanelOptions): HTMLElement {
@@ -269,10 +270,14 @@ function buildOverrideCard(
 		updateCardState();
 	});
 	saveButton.addEventListener("click", () => options.onSave(override.courseId));
+	const clearButton = element("button", "fuzzy-rules-secondary-button", "この授業の例外設定を解除");
+	clearButton.type = "button";
+	clearButton.disabled = options.savingTarget !== null;
+	clearButton.addEventListener("click", () => options.onClear(override.courseId));
 	updateCardState();
 
 	const actionRow = element("div", "fuzzy-rules-action-row");
-	actionRow.append(saveButton);
+	actionRow.append(saveButton, clearButton);
 	card.append(head, modeFieldset, builder.root, validationText, noteField, preview, actionRow);
 	return card;
 }

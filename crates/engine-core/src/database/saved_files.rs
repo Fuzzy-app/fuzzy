@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 
 use super::library::{
 	matching_local_course_for_moodle, merge_local_course_into, saved_path_key,
@@ -94,6 +94,26 @@ impl Database {
 				)
 				.optional()
 				.map_err(db_err)?;
+			let existing = match existing {
+				Some(existing) => Some(existing),
+				None => {
+					let legacy = legacy_course_for_context(&transaction, stable_id)?;
+					if let Some((course_id, current_name, current_year, current_term)) = legacy {
+						transaction
+							.execute(
+								"UPDATE courses
+								 SET moodle_course_id = ?1, updated_at = datetime('now')
+								 WHERE id = ?2",
+								params![stable_id, course_id],
+							)
+							.map_err(db_err)?;
+						context_changed = true;
+						Some((course_id, current_name, current_year, current_term))
+					} else {
+						None
+					}
+				}
+			};
 			match existing {
 				Some((course_id, current_name, current_year, current_term)) => {
 					if let Some(name) = name {
@@ -200,7 +220,7 @@ impl Database {
 
 		let has_active_files = transaction
 			.query_row(
-				"SELECT EXISTS(SELECT 1 FROM files WHERE missing_at IS NULL)",
+				"SELECT EXISTS(SELECT 1 FROM files WHERE missing_at IS NULL AND excluded_at IS NULL)",
 				[],
 				|row| row.get::<_, bool>(0),
 			)
@@ -230,12 +250,14 @@ impl Database {
 	pub fn register_saved_file(&self, file: &SavedFileRegistration) -> EngineResult<i64> {
 		validate_file_registration(file)?;
 		let saved_path = saved_path_key(&file.saved_path);
+		let excluded = self.is_path_excluded(&file.saved_path, file.course_id)?;
 		self.conn
 			.execute(
 				"INSERT INTO files (
 					course_id, section_no, moodle_file_id, original_name, saved_path,
-					size_bytes, mime_type, hash_blake3, simhash
-				 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+					size_bytes, mime_type, hash_blake3, simhash, excluded_at
+				 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+					CASE WHEN ?10 THEN datetime('now') ELSE NULL END)",
 				params![
 					file.course_id,
 					file.section_no,
@@ -246,6 +268,7 @@ impl Database {
 					file.mime_type,
 					file.hash_blake3,
 					file.simhash as i64,
+					excluded,
 				],
 			)
 			.map_err(db_err)?;
@@ -263,6 +286,7 @@ impl Database {
 				 FROM files
 				 WHERE moodle_file_id = ?1
 					AND missing_at IS NULL
+					AND excluded_at IS NULL
 				 ORDER BY id DESC
 				 LIMIT 1",
 				[moodle_file_id],
@@ -336,7 +360,7 @@ impl Database {
 			.query_row(
 				"SELECT course_id, section_no
 				 FROM files
-				 WHERE id = ?1 AND missing_at IS NULL",
+				 WHERE id = ?1 AND missing_at IS NULL AND excluded_at IS NULL",
 				[source_file_id],
 				|row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
 			)
@@ -368,6 +392,7 @@ impl Database {
 			file_ids.push(result.file_id);
 		}
 		transaction.commit().map_err(db_err)?;
+		self.refresh_excluded_file_flags()?;
 		Ok(file_ids)
 	}
 
@@ -384,7 +409,7 @@ impl Database {
 					.query_row(
 						"SELECT original_name
 						 FROM files
-						 WHERE id = ?1 AND missing_at IS NULL",
+						 WHERE id = ?1 AND missing_at IS NULL AND excluded_at IS NULL",
 						[matched.file_id],
 						|row| row.get::<_, String>(0),
 					)
@@ -402,6 +427,65 @@ impl Database {
 			})
 			.collect()
 	}
+}
+
+type LegacyCourseContext = (i64, String, Option<i64>, Option<String>);
+
+fn legacy_course_for_context(
+	transaction: &Transaction<'_>,
+	stable_id: &str,
+) -> EngineResult<Option<LegacyCourseContext>> {
+	let Some((raw_id, academic_year)) = parse_contextual_moodle_id(stable_id) else {
+		return Ok(None);
+	};
+	let mut statement = transaction
+		.prepare(
+			"SELECT id, name, academic_year, term
+			 FROM courses
+			 WHERE moodle_course_id = ?1
+			   AND (academic_year = ?2 OR academic_year IS NULL)
+			 ORDER BY id",
+		)
+		.map_err(db_err)?;
+	let matches = statement
+		.query_map(params![raw_id, academic_year], |row| {
+			Ok((
+				row.get::<_, i64>(0)?,
+				row.get::<_, String>(1)?,
+				row.get::<_, Option<i64>>(2)?,
+				row.get::<_, Option<String>>(3)?,
+			))
+		})
+		.map_err(db_err)?
+		.collect::<rusqlite::Result<Vec<_>>>()
+		.map_err(db_err)?;
+	match matches.as_slice() {
+		[] => Ok(None),
+		[course] => Ok(Some(course.clone())),
+		_ => Err(EngineError::RuleConflict {
+			reason: "同じMoodle IDと年度の旧コースが複数あるため自動移行できません".to_string(),
+		}),
+	}
+}
+
+fn parse_contextual_moodle_id(value: &str) -> Option<(&str, i64)> {
+	let mut parts = value.splitn(4, ':');
+	if parts.next() != Some("moodle") {
+		return None;
+	}
+	let hostname = parts.next()?;
+	let academic_year = parts.next()?.parse::<i64>().ok()?;
+	let raw_id = parts.next()?;
+	if hostname.is_empty()
+		|| !(1900..=9999).contains(&academic_year)
+		|| !matches!(raw_id.len(), 1..=80)
+		|| !raw_id
+			.chars()
+			.all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
+	{
+		return None;
+	}
+	Some((raw_id, academic_year))
 }
 
 fn invalid(field: &str, reason: &str) -> EngineError {
@@ -516,6 +600,40 @@ mod tests {
 		assert_eq!(updated.name, "Data Science II");
 		assert_eq!(updated.academic_year, Some(2027));
 		assert_eq!(updated.term.as_deref(), Some("Fall"));
+	}
+
+	#[test]
+	fn migrates_a_legacy_moodle_course_id_to_the_contextual_id() {
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO courses (moodle_course_id, name, academic_year, term)
+				 VALUES ('412', 'Data Science', 2026, 'Spring')",
+				[],
+			)
+			.unwrap();
+		let legacy_course_id = database.conn().last_insert_rowid();
+
+		let resolved = database
+			.resolve_course_context(
+				Some("moodle:moodle.example:2026:412"),
+				Some("Data Science"),
+				Some(2026),
+				Some("Spring"),
+			)
+			.unwrap();
+
+		assert_eq!(resolved.course_id, legacy_course_id);
+		let stored_id: String = database
+			.conn()
+			.query_row(
+				"SELECT moodle_course_id FROM courses WHERE id = ?1",
+				[legacy_course_id],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(stored_id, "moodle:moodle.example:2026:412");
 	}
 
 	#[test]
@@ -674,6 +792,51 @@ mod tests {
 			database.saved_file_path_by_moodle_id("file-4376").unwrap(),
 			saved_path
 		);
+	}
+
+	#[test]
+	fn registers_new_files_as_excluded_when_their_folder_is_excluded() {
+		let directory = TestDirectory::new();
+		let database = Database::open_in_memory().unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO app_settings (key, value) VALUES ('base_folder_path', ?1)",
+				[directory.path.to_string_lossy().as_ref()],
+			)
+			.unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO excluded_folders (scope, course_id, relative_path)
+				 VALUES ('root', NULL, 'ignored')",
+				[],
+			)
+			.unwrap();
+
+		let file_id = database
+			.register_saved_file(&SavedFileRegistration {
+				course_id: None,
+				section_no: None,
+				moodle_file_id: Some("file-excluded".to_string()),
+				original_name: "new.txt".to_string(),
+				saved_path: directory.path.join("ignored").join("new.txt"),
+				size_bytes: 3,
+				mime_type: Some("text/plain".to_string()),
+				hash_blake3: "b3:excluded".to_string(),
+				simhash: 7,
+			})
+			.unwrap();
+
+		let excluded: bool = database
+			.conn()
+			.query_row(
+				"SELECT excluded_at IS NOT NULL FROM files WHERE id = ?1",
+				[file_id],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert!(excluded);
 	}
 
 	#[test]

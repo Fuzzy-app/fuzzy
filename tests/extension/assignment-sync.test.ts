@@ -3,11 +3,13 @@ import { parseHTML } from "linkedom";
 import {
 	buildCourseFileReconcilePayload,
 	buildMoodleAssignmentSyncPayload,
+	contextualMoodleCourseId,
 	parseMoodleDueAt,
 } from "../../apps/extension/src/lib/moodle/assignmentSync";
 import {
 	collectMoodlePageSnapshot,
 	detectSubmissionAvailability,
+	isMoodleSiteTitle,
 } from "../../apps/extension/src/lib/moodle/pageSnapshot";
 
 describe("Moodle課題の実データ同期", () => {
@@ -31,7 +33,7 @@ describe("Moodle課題の実データ同期", () => {
 			),
 		).toEqual({
 			course: {
-				moodleCourseId: "412",
+				moodleCourseId: "moodle:moodle2026.wakayama-u.ac.jp:2026:412",
 				name: "データベース",
 				academicYear: 2026,
 				term: "前期",
@@ -80,7 +82,7 @@ describe("Moodle課題の実データ同期", () => {
 		);
 
 		expect(payload?.course).toMatchObject({
-			moodleCourseId: "412",
+			moodleCourseId: "moodle:moodle2026.wakayama-u.ac.jp:2026:412",
 			name: "データベース",
 			academicYear: 2026,
 		});
@@ -126,7 +128,7 @@ describe("Moodle課題の実データ同期", () => {
 			"https://moodle.example/course/view.php?id=412",
 			document,
 		);
-		expect(payload?.assignments).toEqual([]);
+		expect(payload).toBeNull();
 	});
 
 	test("個別活動ページは完全snapshotとして送らない", () => {
@@ -253,7 +255,7 @@ describe("Moodle課題の実データ同期", () => {
 			"https://moodle.example/course/view.php?id=412",
 			document,
 		);
-		expect(payload?.assignments).toEqual([]);
+		expect(payload).toBeNull();
 	});
 
 	test("明示offset付きISOを受理し、解釈不能な期限は要確認にする", () => {
@@ -274,5 +276,35 @@ describe("Moodle課題の実データ同期", () => {
 		expect(detectSubmissionAvailability("この課題は提出を受け付けていません")).toBe("unavailable");
 		expect(detectSubmissionAvailability("提出期限: 2026年7月30日")).toBe("unknown");
 		expect(detectSubmissionAvailability("提出期限は過ぎています")).toBe("unknown");
+	});
+});
+describe("Moodle course identity isolation", () => {
+	test("Moodle site title is not treated as a course name", () => {
+		expect(isMoodleSiteTitle("【和歌山大学】 Moodle2026")).toBe(true);
+		expect(isMoodleSiteTitle("情報システム実験")).toBe(false);
+	});
+
+	test("course ids include Moodle host and academic year when the page URL is known", () => {
+		expect(
+			contextualMoodleCourseId(
+				{ moodleCourseId: "412", academicYear: 2025 } as never,
+				"https://moodle2025.wakayama-u.ac.jp/2025/course/view.php?id=412",
+			),
+		).toBe("moodle:moodle2025.wakayama-u.ac.jp:2025:412");
+		expect(
+			contextualMoodleCourseId(
+				{ moodleCourseId: "412", academicYear: 2026 } as never,
+				"https://moodle2026.wakayama-u.ac.jp/2026/course/view.php?id=412",
+			),
+		).not.toBe("moodle:moodle2025.wakayama-u.ac.jp:2025:412");
+	});
+
+	test("does not create a contextual course id when the academic year is unknown", () => {
+		expect(
+			contextualMoodleCourseId(
+				{ moodleCourseId: "412", academicYear: null } as never,
+				"https://moodle.example/course/view.php?id=412",
+			),
+		).toBeNull();
 	});
 });

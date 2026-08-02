@@ -8,6 +8,7 @@ import {
 	normalizeRelativeSavePath,
 	normalizeWindowsPath,
 } from "@fuzzy/shared";
+import { contextualMoodleCourseId } from "../../lib/moodle/assignmentSync";
 import type { MoodleFileLink, MoodlePageSnapshot } from "../../lib/moodle/pageSnapshot";
 
 export type FileSuggestions = Map<string, SaveSuggestion[]>;
@@ -73,8 +74,9 @@ interface ManualDestination {
 export async function loadFileSuggestions(
 	api: Pick<FuzzyApiClient, "suggestSavePath">,
 	snapshot: MoodlePageSnapshot,
+	pageUrl = typeof location === "undefined" ? "" : location.href,
 ): Promise<FileSuggestions> {
-	const result = await loadFileSuggestionsWithFailures(api, snapshot);
+	const result = await loadFileSuggestionsWithFailures(api, snapshot, pageUrl);
 	if (result.firstError) throw result.firstError;
 	return result.suggestions;
 }
@@ -86,13 +88,15 @@ export async function loadFileSuggestions(
 export async function loadFileSuggestionsWithFailures(
 	api: Pick<FuzzyApiClient, "suggestSavePath">,
 	snapshot: MoodlePageSnapshot,
+	pageUrl = typeof location === "undefined" ? "" : location.href,
 ): Promise<FileSuggestionLoadResult> {
+	const moodleCourseId = contextualMoodleCourseId(snapshot, pageUrl);
 	const results = await Promise.all(
 		snapshot.files.map(async (file) => {
 			try {
 				const suggestions = await api.suggestSavePath({
 					course: {
-						moodleCourseId: snapshot.moodleCourseId,
+						moodleCourseId,
 						name: snapshot.courseName,
 						academicYear: snapshot.academicYear,
 						term: snapshot.term,

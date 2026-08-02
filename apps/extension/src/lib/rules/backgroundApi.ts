@@ -1,5 +1,6 @@
 import type {
 	DuplicateGroupListItem,
+	ExcludedFolder,
 	RuleUpdateResult,
 	RuleViolationListItem,
 } from "@fuzzy/shared";
@@ -8,6 +9,7 @@ import type {
 	RuleManagementApi,
 	RuleSet,
 	UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest,
 	UpdateGlobalRuleRequest,
 } from "./types";
 
@@ -17,6 +19,9 @@ const RULE_MANAGEMENT_METHODS = [
 	"getRules",
 	"updateGlobalRule",
 	"updateCourseRuleOverride",
+	"clearCourseRuleOverride",
+	"getExcludedFolders",
+	"updateExcludedFolders",
 	"getRuleViolations",
 	"getDuplicateGroups",
 ] as const;
@@ -70,6 +75,17 @@ export async function respondToRuleManagementRequest(
 					message.request as UpdateCourseRuleOverrideRequest,
 				);
 				break;
+			case "clearCourseRuleOverride":
+				data = await api.clearCourseRuleOverride(
+					(message.request as { courseId: number }).courseId,
+				);
+				break;
+			case "getExcludedFolders":
+				data = await api.getExcludedFolders((message.request as { courseId?: number }).courseId);
+				break;
+			case "updateExcludedFolders":
+				data = await api.updateExcludedFolders(message.request as UpdateExcludedFoldersRequest);
+				break;
 			case "getRuleViolations":
 				data = await api.getRuleViolations();
 				break;
@@ -110,6 +126,18 @@ export class BackgroundRuleManagementApi implements RuleManagementApi {
 
 	updateCourseRuleOverride(request: UpdateCourseRuleOverrideRequest): Promise<RuleUpdateResult> {
 		return this.#call("updateCourseRuleOverride", request);
+	}
+
+	clearCourseRuleOverride(courseId: number): Promise<RuleUpdateResult> {
+		return this.#call("clearCourseRuleOverride", { courseId });
+	}
+
+	getExcludedFolders(courseId?: number): Promise<ExcludedFolder[]> {
+		return this.#call("getExcludedFolders", courseId === undefined ? {} : { courseId });
+	}
+
+	updateExcludedFolders(request: UpdateExcludedFoldersRequest): Promise<ExcludedFolder[]> {
+		return this.#call("updateExcludedFolders", request);
 	}
 
 	getRuleViolations(): Promise<RuleViolationListItem[]> {

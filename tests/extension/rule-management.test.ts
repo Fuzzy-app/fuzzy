@@ -310,6 +310,9 @@ describe("RuleManagementStore", () => {
 				return result;
 			},
 			updateCourseRuleOverride: (request) => mock.updateCourseRuleOverride(request),
+			clearCourseRuleOverride: (courseId) => mock.clearCourseRuleOverride(courseId),
+			getExcludedFolders: (courseId) => mock.getExcludedFolders(courseId),
+			updateExcludedFolders: (request) => mock.updateExcludedFolders(request),
 			getRuleViolations: () => mock.getRuleViolations(),
 			getDuplicateGroups: () => mock.getDuplicateGroups(),
 		};
@@ -483,6 +486,7 @@ describe("ルール管理画面", () => {
 			onClearMessage: () => {},
 			onAdd: () => {},
 			onSave: () => {},
+			onClear: () => {},
 		});
 
 		expect(panel.querySelector("select option")?.textContent).toBe(expected);
@@ -504,6 +508,9 @@ describe("ルール管理画面", () => {
 			getRules: fail,
 			updateGlobalRule: fail,
 			updateCourseRuleOverride: fail,
+			clearCourseRuleOverride: fail,
+			getExcludedFolders: fail,
+			updateExcludedFolders: fail,
 			getRuleViolations: fail,
 			getDuplicateGroups: fail,
 		};

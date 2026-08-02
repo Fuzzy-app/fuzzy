@@ -19,15 +19,16 @@ use serde::Serialize;
 use crate::api_types::{
 	AppendCheckSimilarFileChunkRequest, AppendSaveFileChunkRequest, Assignment, AssignmentChange,
 	BeginCheckSimilarFileRequest, BeginSaveFilesRequest, CheckSimilarFilesTransferRequest,
-	CourseFolderNameResolution, DashboardSummary, DataSyncEvent, DuplicateGroupListItem,
-	EmptyRequest, ExportDataRequest, ExportDataResult, ExtractZipRequest, ExtractZipResult,
-	GetAssignmentChangesRequest, GetDeadlinesRequest, ImportDataRequest, ImportDataResult,
-	LibraryMaintenanceSummary, NotificationRule, NotificationRuleUpdateResult, OkResult,
-	PingResult, RebuildLibraryRequest, ReconcileCourseFilesRequest, RuleSet, RuleViolationListItem,
-	SaveFilesRequest, SaveFilesResult, SaveSuggestion, SearchRequest, SearchResult,
-	SimilarFileMatch, SuggestSavePathRequest, SyncMoodleAssignmentsRequest,
-	UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest,
-	UpdateGlobalRuleRequest, UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
+	ClearCourseRuleOverrideRequest, CourseFolderNameResolution, DashboardSummary, DataSyncEvent,
+	DuplicateGroupListItem, EmptyRequest, ExcludedFolder, ExportDataRequest, ExportDataResult,
+	ExtractZipRequest, ExtractZipResult, GetAssignmentChangesRequest, GetDeadlinesRequest,
+	GetExcludedFoldersRequest, ImportDataRequest, ImportDataResult, LibraryMaintenanceSummary,
+	NotificationRule, NotificationRuleUpdateResult, OkResult, PingResult, RebuildLibraryRequest,
+	ReconcileCourseFilesRequest, RuleSet, RuleViolationListItem, SaveFilesRequest, SaveFilesResult,
+	SaveSuggestion, SearchRequest, SearchResult, SimilarFileMatch, SuggestSavePathRequest,
+	SyncMoodleAssignmentsRequest, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
+	UpdateCourseRuleOverrideRequest, UpdateExcludedFoldersRequest, UpdateGlobalRuleRequest,
+	UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
 };
 use crate::file_transfer::{extract_zip_archive, FileTransferCommitResult, FileTransferManager};
 use crate::protocol::{Request, Response};
@@ -52,6 +53,7 @@ pub fn dispatch_with_services(
 		"reconcileCourseFiles" => reconcile_course_files(database, index_engine, request),
 		"saveFiles" => save_files(database, index_engine, file_transfers, request),
 		"extractZip" => extract_zip(database, index_engine, request),
+		"updateExcludedFolders" => update_excluded_folders(database, index_engine, request),
 		_ => dispatch_with_file_transfers(database, file_transfers, request),
 	}
 }
@@ -85,6 +87,8 @@ fn dispatch_with_file_transfers(
 		"getRules" => get_rules(database, request),
 		"updateGlobalRule" => update_global_rule(database, request),
 		"updateCourseRuleOverride" => update_course_rule_override(database, request),
+		"clearCourseRuleOverride" => clear_course_rule_override(database, request),
+		"getExcludedFolders" => get_excluded_folders(database, request),
 		"getRuleViolations" => get_rule_violations(database, request),
 		"getDuplicateGroups" => get_duplicate_groups(database, request),
 		"getNotificationRules" => get_notification_rules(database, request),
@@ -764,6 +768,70 @@ fn update_course_rule_override(database: &mut Database, request: Request) -> Res
 	)
 }
 
+fn clear_course_rule_override(database: &mut Database, request: Request) -> Response {
+	let payload = match parse_payload::<ClearCourseRuleOverrideRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	respond(
+		request.id,
+		database
+			.clear_course_rule_override(payload.course_id, &DefaultRuleEngine)
+			.map(|()| OkResult { ok: true }),
+	)
+}
+
+fn get_excluded_folders(database: &Database, request: Request) -> Response {
+	let payload = match parse_payload::<GetExcludedFoldersRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	respond(
+		request.id,
+		database
+			.list_excluded_folders(payload.course_id)
+			.map(|folders| {
+				folders
+					.into_iter()
+					.map(ExcludedFolder::from)
+					.collect::<Vec<_>>()
+			}),
+	)
+}
+
+fn update_excluded_folders(
+	database: &mut Database,
+	index_engine: &mut dyn IndexEngine,
+	request: Request,
+) -> Response {
+	let payload = match parse_payload::<UpdateExcludedFoldersRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = (|| {
+		let folders = database.update_excluded_folders(
+			&payload.scope,
+			payload.course_id,
+			&payload.paths,
+			&DefaultRuleEngine,
+		)?;
+		if database.base_folder_path().is_ok() {
+			LibraryMaintenance::reconcile(database, index_engine, false)?;
+		}
+		refresh_saved_file_derivatives(database, "除外フォルダー変更");
+		Ok(folders)
+	})();
+	respond(
+		request.id,
+		result.map(|folders| {
+			folders
+				.into_iter()
+				.map(ExcludedFolder::from)
+				.collect::<Vec<_>>()
+		}),
+	)
+}
+
 fn get_rule_violations(database: &Database, request: Request) -> Response {
 	if let Err(response) = parse_payload::<EmptyRequest>(&request) {
 		return response;
@@ -1399,6 +1467,80 @@ mod tests {
 		);
 		assert!(!invalid.ok);
 		assert_eq!(invalid.error.unwrap().code, "INVALID_REQUEST");
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn changing_excluded_folders_reconciles_files_before_unexcluding_them() {
+		let root = unique_temp_dir();
+		let course = root.join("Data Science");
+		std::fs::create_dir_all(&course).unwrap();
+		let file = course.join("notes.txt");
+		std::fs::write(&file, "before").unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"estimated-1",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+
+		let rebuilt = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"rebuildLibrary",
+				serde_json::json!({ "rebuildIndex": true }),
+			),
+		);
+		assert!(rebuilt.ok, "{:?}", rebuilt.error);
+		let file_id = database.registered_library_files().unwrap()[0].file_id;
+
+		let excluded = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"updateExcludedFolders",
+				serde_json::json!({
+					"scope": "root",
+					"courseId": null,
+					"paths": ["Data Science"]
+				}),
+			),
+		);
+		assert!(excluded.ok, "{:?}", excluded.error);
+
+		std::fs::write(&file, "after changed").unwrap();
+		let unexcluded = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request(
+				"updateExcludedFolders",
+				serde_json::json!({
+					"scope": "root",
+					"courseId": null,
+					"paths": []
+				}),
+			),
+		);
+		assert!(unexcluded.ok, "{:?}", unexcluded.error);
+		assert!(
+			index
+				.indexed_file_ids
+				.iter()
+				.filter(|indexed_id| **indexed_id == file_id)
+				.count() >= 2
+		);
+
 		std::fs::remove_dir_all(root).unwrap();
 	}
 

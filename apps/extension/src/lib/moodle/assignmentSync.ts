@@ -2,6 +2,26 @@ import type { ReconcileCourseFilesRequest, SyncMoodleAssignmentsRequest } from "
 import { isSupportedMoodleAssignmentUrl } from "../../../moodleSite";
 import { type MoodlePageSnapshot, hasCompleteAssignmentHintExtraction } from "./pageSnapshot";
 
+/** Moodleのホスト・年度・コースIDを組み合わせ、年度をまたいだ同一IDの衝突を防ぐ。 */
+export function contextualMoodleCourseId(
+	snapshot: MoodlePageSnapshot,
+	pageUrl: string,
+): string | null {
+	const rawId = snapshot.moodleCourseId?.trim() ?? "";
+	if (!/^[A-Za-z0-9._:-]{1,80}$/.test(rawId)) return null;
+	if (!pageUrl) return rawId;
+	try {
+		const hostname = new URL(pageUrl).hostname.toLowerCase();
+		if (!hostname) return null;
+		if (snapshot.academicYear === null) return null;
+		const year = snapshot.academicYear;
+		const contextualId = `moodle:${hostname}:${year}:${rawId}`;
+		return contextualId.length <= 128 ? contextualId : null;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * course/view.phpだけを当該コースの完全snapshotとして送る。
  * 個別活動ページの部分DOMを完全snapshotとして送って、未表示課題をremoved扱いにしない。
@@ -13,7 +33,7 @@ export function buildMoodleAssignmentSyncPayload(
 ): SyncMoodleAssignmentsRequest | null {
 	if (!isCompleteCoursePage(pageUrl, root)) return null;
 	if (!hasCompleteAssignmentHintExtraction(root, snapshot.assignmentHints)) return null;
-	const moodleCourseId = snapshot.moodleCourseId?.trim() ?? "";
+	const moodleCourseId = contextualMoodleCourseId(snapshot, pageUrl) ?? "";
 	const courseName = snapshot.courseName?.trim() ?? "";
 	if (
 		!/^[A-Za-z0-9._:-]{1,128}$/.test(moodleCourseId) ||
@@ -73,7 +93,7 @@ export function buildCourseFileReconcilePayload(
 	root: Document | Element = document,
 ): ReconcileCourseFilesRequest | null {
 	if (!isCompleteCoursePage(pageUrl, root)) return null;
-	const moodleCourseId = snapshot.moodleCourseId?.trim() ?? "";
+	const moodleCourseId = contextualMoodleCourseId(snapshot, pageUrl) ?? "";
 	const name = snapshot.courseName?.trim() ?? "";
 	if (!/^[A-Za-z0-9._:-]{1,128}$/.test(moodleCourseId) || !name || name.length > 1_000) {
 		return null;

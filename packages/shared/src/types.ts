@@ -114,6 +114,21 @@ export interface MoodleCourseContext {
 	breadcrumbs: string[];
 }
 
+export type ExcludedFolderScope = "root" | "course";
+
+export interface ExcludedFolder {
+	id: number;
+	scope: ExcludedFolderScope;
+	courseId: number | null;
+	relativePath: string;
+}
+
+export interface UpdateExcludedFoldersRequest {
+	scope: ExcludedFolderScope;
+	courseId: number | null;
+	paths: string[];
+}
+
 export interface MoodleFileMeta {
 	title: string;
 	url: string;

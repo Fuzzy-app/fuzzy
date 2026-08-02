@@ -146,6 +146,45 @@ impl Database {
 		transaction.commit().map_err(db_err)
 	}
 
+	/// Remove a course-specific override and restore the global rule.
+	pub fn clear_course_rule_override(
+		&mut self,
+		course_id: i64,
+		engine: &impl RuleEngine,
+	) -> EngineResult<()> {
+		if course_id <= 0 {
+			return Err(EngineError::InvalidInput {
+				field: "courseId".to_string(),
+				reason: "courseId must be a positive integer".to_string(),
+			});
+		}
+		let transaction = self
+			.conn
+			.transaction_with_behavior(TransactionBehavior::Immediate)
+			.map_err(db_err)?;
+		let course_exists = transaction
+			.query_row("SELECT 1 FROM courses WHERE id = ?1", [course_id], |_| {
+				Ok(())
+			})
+			.optional()
+			.map_err(db_err)?
+			.is_some();
+		if !course_exists {
+			return Err(EngineError::NotFound {
+				entity: "course".to_string(),
+				id: course_id.to_string(),
+			});
+		}
+		transaction
+			.execute(
+				"DELETE FROM course_rule_overrides WHERE course_id = ?1",
+				[course_id],
+			)
+			.map_err(db_err)?;
+		apply_rule_compliance(&transaction, engine)?;
+		transaction.commit().map_err(db_err)
+	}
+
 	/// SQLiteに注釈されたルール違反を取得する。
 	/// 絶対パスは内部値のまま返し、Native Messaging境界でのみ相対化する。
 	pub fn rule_violations(&self) -> EngineResult<Vec<RuleViolationRecord>> {
@@ -163,6 +202,7 @@ impl Database {
 				 LEFT JOIN courses c ON c.id = f.course_id
 				 WHERE f.rule_compliant = 0
 					AND f.missing_at IS NULL
+					AND f.excluded_at IS NULL
 				 ORDER BY f.id",
 			)
 			.map_err(db_err)?;
@@ -446,6 +486,7 @@ fn load_rule_files(conn: &Connection) -> EngineResult<Vec<RuleFileEntry>> {
 			 FROM files f
 			 LEFT JOIN courses c ON c.id = f.course_id
 			 WHERE f.missing_at IS NULL
+			   AND f.excluded_at IS NULL
 			 ORDER BY f.id",
 		)
 		.map_err(db_err)?;
@@ -851,6 +892,23 @@ mod tests {
 				None,
 				&DefaultRuleEngine
 			),
+			Err(EngineError::NotFound { .. })
+		));
+	}
+
+	#[test]
+	fn clearing_course_rule_override_restores_global_rule() {
+		let mut database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+		database
+			.clear_course_rule_override(4, &DefaultRuleEngine)
+			.unwrap();
+		assert_eq!(
+			database.rule_set_record().unwrap().course_overrides.len(),
+			0
+		);
+		assert!(matches!(
+			database.clear_course_rule_override(999, &DefaultRuleEngine),
 			Err(EngineError::NotFound { .. })
 		));
 	}

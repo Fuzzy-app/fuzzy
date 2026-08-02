@@ -82,5 +82,13 @@ export async function callBackgroundApi(
 			return client.rebuildLibrary(message.request as RebuildLibraryRequest);
 		case "reconcileCourseFiles":
 			return client.reconcileCourseFiles(message.request as ReconcileCourseFilesRequest);
+		case "clearCourseRuleOverride":
+			return client.clearCourseRuleOverride((message.request as { courseId: number }).courseId);
+		case "getExcludedFolders":
+			return client.getExcludedFolders((message.request as { courseId?: number }).courseId);
+		case "updateExcludedFolders":
+			return client.updateExcludedFolders(
+				message.request as Parameters<typeof client.updateExcludedFolders>[0],
+			);
 	}
 }

@@ -1,7 +1,9 @@
 import type {
+	ExcludedFolder,
 	FuzzyApiClient,
 	RuleSet,
 	UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest,
 	UpdateGlobalRuleRequest,
 } from "@fuzzy/shared";
 
@@ -12,6 +14,9 @@ export type RuleManagementApi = Pick<
 	| "getRules"
 	| "updateGlobalRule"
 	| "updateCourseRuleOverride"
+	| "clearCourseRuleOverride"
+	| "getExcludedFolders"
+	| "updateExcludedFolders"
 	| "getRuleViolations"
 	| "getDuplicateGroups"
 >;
@@ -32,4 +37,10 @@ export interface RuleManagementState {
 	mutationRevision: number;
 }
 
-export type { RuleSet, UpdateCourseRuleOverrideRequest, UpdateGlobalRuleRequest };
+export type {
+	ExcludedFolder,
+	RuleSet,
+	UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest,
+	UpdateGlobalRuleRequest,
+};

@@ -129,7 +129,7 @@ export async function mountSavePanel(): Promise<void> {
 			snapshot = fullSnapshot;
 			lastSavePath = storedPath;
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot, location.href);
 			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
@@ -159,7 +159,7 @@ export async function mountSavePanel(): Promise<void> {
 		try {
 			snapshot = await collectMoodlePageSnapshotWithNestedFolders();
 			selectedFileIds = new Set(snapshot.files.map(fileId));
-			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot, location.href);
 			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
@@ -348,7 +348,7 @@ export async function mountSavePanel(): Promise<void> {
 		}
 
 		try {
-			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot);
+			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot, location.href);
 			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();

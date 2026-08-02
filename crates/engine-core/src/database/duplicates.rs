@@ -29,7 +29,7 @@ impl Database {
 				 FROM duplicate_groups dg
 				 JOIN duplicate_members dm ON dm.group_id = dg.id
 				 JOIN files f ON f.id = dm.file_id
-				 WHERE f.missing_at IS NULL
+					 WHERE f.missing_at IS NULL AND f.excluded_at IS NULL
 				 ORDER BY dg.id, f.id",
 			)
 			.map_err(db_err)?;
@@ -67,7 +67,10 @@ impl Database {
 			}
 			group.members.push(member);
 		}
-		Ok(groups.into_values().collect())
+		Ok(groups
+			.into_values()
+			.filter(|group| group.members.len() >= 2)
+			.collect())
 	}
 
 	/// 保存前の照合や再計算に使う、SQLite上の全フィンガープリントを読み込む。
@@ -89,7 +92,7 @@ impl Database {
 			.query_row(
 				"SELECT saved_path
 				 FROM files
-				 WHERE id = ?1 AND missing_at IS NULL",
+				 WHERE id = ?1 AND missing_at IS NULL AND excluded_at IS NULL",
 				[file_id],
 				|row| row.get::<_, String>(0),
 			)
@@ -161,7 +164,7 @@ fn load_file_fingerprints(conn: &Connection) -> EngineResult<Vec<StoredFileFinge
 		.prepare(
 			"SELECT id, hash_blake3, simhash
 			 FROM files
-			 WHERE missing_at IS NULL
+				 WHERE missing_at IS NULL AND excluded_at IS NULL
 			 ORDER BY id",
 		)
 		.map_err(db_err)?;
@@ -340,6 +343,21 @@ mod tests {
 			.members
 			.iter()
 			.all(|member| member.similarity == 1.0));
+	}
+
+	#[test]
+	fn does_not_return_a_duplicate_group_with_only_one_active_member() {
+		let database = Database::open_in_memory().unwrap();
+		database.conn().execute_batch(SEED_SQL).unwrap();
+		database
+			.conn()
+			.execute(
+				"UPDATE files SET excluded_at = datetime('now') WHERE id = 9",
+				[],
+			)
+			.unwrap();
+
+		assert!(database.duplicate_groups().unwrap().is_empty());
 	}
 
 	#[test]
