@@ -47,7 +47,7 @@ describe("desktop setup API", () => {
 			},
 			get_setup_status: { done: true, savedAt: "2026-07-25T00:00:00.000Z" },
 			get_saved_setup_configuration: {
-				revision: "setup-v1:test",
+				revision: "setup-v0:test",
 				savedAt: "2026-07-25T00:00:00.000Z",
 				baseFolderPath: "C:/Fuzzy",
 				pattern: { id: "estimated-1", courseSegmentIndex: 0 },
@@ -98,7 +98,7 @@ describe("desktop setup API", () => {
 			savedAt: "2026-07-25T00:00:00.000Z",
 		});
 		expect(await getSavedSetupConfigurationClient(runtime)).toEqual({
-			revision: "setup-v1:test",
+			revision: "setup-v0:test",
 			savedAt: "2026-07-25T00:00:00.000Z",
 			baseFolderPath: "C:/Fuzzy",
 			pattern: { id: "estimated-1", courseSegmentIndex: 0 },
@@ -134,7 +134,7 @@ describe("desktop setup API", () => {
 			},
 		});
 		expect(
-			await saveSetupChangesClient({ ...payload, expectedRevision: "setup-v1:test" }, runtime),
+			await saveSetupChangesClient({ ...payload, expectedRevision: "setup-v0:test" }, runtime),
 		).toEqual({
 			ok: true,
 			rootChanged: false,
@@ -158,7 +158,7 @@ describe("desktop setup API", () => {
 		expect(parseSetupStatus({ done: "yes" })).toBeNull();
 		expect(
 			parseSavedSetupConfiguration({
-				revision: "setup-v1:test",
+				revision: "setup-v0:test",
 				savedAt: "not-a-date",
 			}),
 		).toBeNull();
@@ -192,7 +192,7 @@ describe("desktop setup API", () => {
 		await expect(
 			saveSetupChangesClient(
 				{
-					expectedRevision: "setup-v1:test",
+					expectedRevision: "setup-v0:test",
 					path: "C:/Fuzzy",
 					pattern,
 					rule: {

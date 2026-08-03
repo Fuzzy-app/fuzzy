@@ -159,11 +159,20 @@ describe("Tauri extension bundle", () => {
 		const hooks = await Bun.file(
 			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer-hooks.nsh"),
 		).text();
+		const template = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer.nsi"),
+		).text();
 
 		expect(hooks).toContain("--register-native-host");
 		expect(hooks).toContain("--unregister-native-host");
+		expect(hooks).toContain("$UpdateMode <> 1");
+		expect(hooks).toContain("SetRebootFlag false");
+		expect(hooks).not.toContain("REBOOTOK");
 		expect(hooks).not.toContain("taskkill");
 		expect(hooks).not.toContain("/F");
+		expect(template).toContain("MUI_UNPAGE_FINISH");
+		expect(template).not.toContain("REBOOTOK");
+		expect(template).not.toContain("DeleteAppDataCheckbox");
 	});
 
 	test("既存インストールの案内を明確にし、アンインストール後に再セットアップへ進まない", async () => {

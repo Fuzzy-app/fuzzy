@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
 use super::library::{
 	matching_local_course_for_moodle, merge_local_course_into, saved_path_key,
@@ -94,26 +94,6 @@ impl Database {
 				)
 				.optional()
 				.map_err(db_err)?;
-			let existing = match existing {
-				Some(existing) => Some(existing),
-				None => {
-					let legacy = legacy_course_for_context(&transaction, stable_id)?;
-					if let Some((course_id, current_name, current_year, current_term)) = legacy {
-						transaction
-							.execute(
-								"UPDATE courses
-								 SET moodle_course_id = ?1, updated_at = datetime('now')
-								 WHERE id = ?2",
-								params![stable_id, course_id],
-							)
-							.map_err(db_err)?;
-						context_changed = true;
-						Some((course_id, current_name, current_year, current_term))
-					} else {
-						None
-					}
-				}
-			};
 			match existing {
 				Some((course_id, current_name, current_year, current_term)) => {
 					if let Some(name) = name {
@@ -429,65 +409,6 @@ impl Database {
 	}
 }
 
-type LegacyCourseContext = (i64, String, Option<i64>, Option<String>);
-
-fn legacy_course_for_context(
-	transaction: &Transaction<'_>,
-	stable_id: &str,
-) -> EngineResult<Option<LegacyCourseContext>> {
-	let Some((raw_id, academic_year)) = parse_contextual_moodle_id(stable_id) else {
-		return Ok(None);
-	};
-	let mut statement = transaction
-		.prepare(
-			"SELECT id, name, academic_year, term
-			 FROM courses
-			 WHERE moodle_course_id = ?1
-			   AND (academic_year = ?2 OR academic_year IS NULL)
-			 ORDER BY id",
-		)
-		.map_err(db_err)?;
-	let matches = statement
-		.query_map(params![raw_id, academic_year], |row| {
-			Ok((
-				row.get::<_, i64>(0)?,
-				row.get::<_, String>(1)?,
-				row.get::<_, Option<i64>>(2)?,
-				row.get::<_, Option<String>>(3)?,
-			))
-		})
-		.map_err(db_err)?
-		.collect::<rusqlite::Result<Vec<_>>>()
-		.map_err(db_err)?;
-	match matches.as_slice() {
-		[] => Ok(None),
-		[course] => Ok(Some(course.clone())),
-		_ => Err(EngineError::RuleConflict {
-			reason: "同じMoodle IDと年度の旧コースが複数あるため自動移行できません".to_string(),
-		}),
-	}
-}
-
-fn parse_contextual_moodle_id(value: &str) -> Option<(&str, i64)> {
-	let mut parts = value.splitn(4, ':');
-	if parts.next() != Some("moodle") {
-		return None;
-	}
-	let hostname = parts.next()?;
-	let academic_year = parts.next()?.parse::<i64>().ok()?;
-	let raw_id = parts.next()?;
-	if hostname.is_empty()
-		|| !(1900..=9999).contains(&academic_year)
-		|| !matches!(raw_id.len(), 1..=80)
-		|| !raw_id
-			.chars()
-			.all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
-	{
-		return None;
-	}
-	Some((raw_id, academic_year))
-}
-
 fn invalid(field: &str, reason: &str) -> EngineError {
 	EngineError::InvalidInput {
 		field: field.to_string(),
@@ -533,7 +454,7 @@ mod tests {
 		let directory = TestDirectory::new();
 		let mut database = Database::open_in_memory().unwrap();
 		let course_id = database
-			.ensure_contextual_local_scan_course("Data Science", "Data Science", None, None, false)
+			.ensure_contextual_local_scan_course("Data Science", "Data Science", None, None)
 			.unwrap();
 		database
 			.conn()
@@ -603,40 +524,6 @@ mod tests {
 	}
 
 	#[test]
-	fn migrates_a_legacy_moodle_course_id_to_the_contextual_id() {
-		let mut database = Database::open_in_memory().unwrap();
-		database
-			.conn()
-			.execute(
-				"INSERT INTO courses (moodle_course_id, name, academic_year, term)
-				 VALUES ('412', 'Data Science', 2026, 'Spring')",
-				[],
-			)
-			.unwrap();
-		let legacy_course_id = database.conn().last_insert_rowid();
-
-		let resolved = database
-			.resolve_course_context(
-				Some("moodle:moodle.example:2026:412"),
-				Some("Data Science"),
-				Some(2026),
-				Some("Spring"),
-			)
-			.unwrap();
-
-		assert_eq!(resolved.course_id, legacy_course_id);
-		let stored_id: String = database
-			.conn()
-			.query_row(
-				"SELECT moodle_course_id FROM courses WHERE id = ?1",
-				[legacy_course_id],
-				|row| row.get(0),
-			)
-			.unwrap();
-		assert_eq!(stored_id, "moodle:moodle.example:2026:412");
-	}
-
-	#[test]
 	fn name_fallback_requires_exactly_one_existing_course() {
 		let mut database = Database::open_in_memory().unwrap();
 		database
@@ -660,10 +547,10 @@ mod tests {
 	fn rejects_ambiguous_same_named_local_courses_without_context() {
 		let mut database = Database::open_in_memory().unwrap();
 		database
-			.ensure_contextual_local_scan_course("Shared", "archive-a/Shared", None, None, false)
+			.ensure_contextual_local_scan_course("Shared", "archive-a/Shared", None, None)
 			.unwrap();
 		database
-			.ensure_contextual_local_scan_course("Shared", "archive-b/Shared", None, None, false)
+			.ensure_contextual_local_scan_course("Shared", "archive-b/Shared", None, None)
 			.unwrap();
 
 		assert!(matches!(

@@ -235,11 +235,6 @@ impl LibraryMaintenance {
 				.entries
 				.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 		}
-		let course_context_counts = if course_scope.is_some() {
-			HashMap::new()
-		} else {
-			scan_course_context_counts(&snapshot.entries, course_segment_index)
-		};
 		let mut summary = LibraryMaintenanceSummary {
 			scanned_file_count: snapshot.entries.len(),
 			..Default::default()
@@ -295,9 +290,6 @@ impl LibraryMaintenance {
 								&course.identity,
 								course.academic_year,
 								course.term.as_deref(),
-								course_context_counts
-									.get(&course.name)
-									.is_some_and(|contexts| contexts.len() == 1),
 							) {
 								Ok(course_id) => Some(course_id),
 								Err(error) => {
@@ -766,22 +758,6 @@ struct ScannedCourseContext {
 	identity: String,
 	academic_year: Option<i64>,
 	term: Option<String>,
-}
-
-fn scan_course_context_counts(
-	entries: &[FileEntry],
-	index: Option<usize>,
-) -> HashMap<String, HashSet<String>> {
-	let mut contexts = HashMap::<String, HashSet<String>>::new();
-	for entry in entries {
-		if let Some(course) = course_context_at(entry, index) {
-			contexts
-				.entry(course.name)
-				.or_default()
-				.insert(course.identity);
-		}
-	}
-	contexts
 }
 
 fn course_context_at(entry: &FileEntry, index: Option<usize>) -> Option<ScannedCourseContext> {
@@ -1383,7 +1359,7 @@ mod tests {
 		assert_ne!(courses[0].1, courses[1].1);
 		assert!(courses
 			.iter()
-			.all(|course| course.1.starts_with("local-scan:v2:")));
+			.all(|course| course.1.starts_with("local-scan:v0:")));
 
 		let resolved = database
 			.resolve_course_context(
@@ -1404,7 +1380,7 @@ mod tests {
 				|row| row.get(0),
 			)
 			.unwrap();
-		assert!(remaining_2025_id.starts_with("local-scan:v2:"));
+		assert!(remaining_2025_id.starts_with("local-scan:v0:"));
 	}
 
 	#[test]

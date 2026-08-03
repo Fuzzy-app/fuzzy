@@ -36,8 +36,8 @@ pub use saved_files::{ExtractedFileRegistration, SavedZipSource};
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-/// 開発途中の旧SQLiteを移行せず、初期実装の変更時は新規作成へ戻す。
-const SCHEMA_VERSION: i64 = 2;
+/// 初回リリース前のSQLiteスキーマ世代。
+const SCHEMA_VERSION: i64 = 0;
 type SearchDocumentRecord = (
 	i64,
 	String,
@@ -688,9 +688,7 @@ fn schema_version(conn: &Connection) -> EngineResult<i64> {
 
 pub(super) fn validate_schema_generation(conn: &Connection, version: i64) -> EngineResult<()> {
 	if version != SCHEMA_VERSION {
-		let detail = if version == 0 {
-			"世代情報のない非空DBはFuzzy初版の正規スキーマとして確認できません".to_string()
-		} else if version > SCHEMA_VERSION {
+		let detail = if version > SCHEMA_VERSION {
 			format!(
 				"新しいバージョンのFuzzyで作成された可能性があります（対応上限: {SCHEMA_VERSION}）"
 			)
@@ -1098,7 +1096,7 @@ fn validate_check_constraints(conn: &Connection) -> EngineResult<()> {
 	let requirements = [
 		(
 			"extension_runtime_observations",
-			"check(protocol_version>0)",
+			"check(protocol_version>=0)",
 		),
 		("global_rule", "check(id=1)"),
 		("duplicate_groups", "check(methodin('exact','similar'))"),
@@ -1588,7 +1586,7 @@ mod tests {
 	}
 
 	#[test]
-	fn nonempty_unversioned_database_is_rejected_without_changes() {
+	fn incomplete_v0_database_is_rejected_without_changes() {
 		let conn = Connection::open_in_memory().unwrap();
 		conn.execute_batch(
 			"CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
@@ -1802,7 +1800,7 @@ mod tests {
 		);
 
 		database
-			.record_extension_runtime(&report("2.0.0", EXTENSION_RUNTIME_PROTOCOL_VERSION - 1))
+			.record_extension_runtime(&report("2.0.0", EXTENSION_RUNTIME_PROTOCOL_VERSION + 1))
 			.unwrap();
 
 		assert_eq!(
@@ -1909,7 +1907,7 @@ mod tests {
 		);
 
 		database
-			.record_extension_runtime(&report("0.2.0", EXTENSION_RUNTIME_PROTOCOL_VERSION - 1))
+			.record_extension_runtime(&report("0.2.0", EXTENSION_RUNTIME_PROTOCOL_VERSION + 1))
 			.unwrap();
 		assert_eq!(
 			database.extension_recovery_status().unwrap().state,

@@ -86,11 +86,11 @@ QA用ファイルを一般利用者向けダウンロードとして案内しま
 
 公開審査前QA版:
 
-- Tag: `v0.1.0-qa.2`
-- Release title: `Fuzzy v0.1.0-qa.2 — QAプレリリース（未署名）`
+- Tag: `v0.1.0-qa.3`
+- Release title: `Fuzzy v0.1.0-qa.3 — QAプレリリース（未署名）`
 - Pre-releaseとして作成し、Latest releaseにはしない
 - Asset: `Fuzzy-Setup.exe`
-- Asset: `Fuzzy-0.1.0-qa.2-windows-unsigned.zip`
+- Asset: `Fuzzy-0.1.0-qa.3-windows-unsigned.zip`
 - Asset: `SHA256SUMS.txt`
 - Release本文とAsset名の両方で未署名・QA専用と明示する
 
@@ -138,6 +138,7 @@ Release本文へ次を記載します。
 - [ ] SHA-256一覧が全件一致
 - [ ] 配布物とビルド元が一致
 - [ ] NSISのインストールとアンインストールが成功
+- [ ] アンインストール完了後にPCの再起動を要求しない
 - [ ] native-host登録と解除が自動で成功
 - [ ] アンインストールでFuzzy管理下のデータを削除し、資料と利用者のバックアップを残す
 - [ ] GitHub ReleaseのAssetを別PCからダウンロードできる

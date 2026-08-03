@@ -235,7 +235,7 @@ export function parseExtensionRuntimeObservation(
 		!/^[A-Za-z0-9.+-]{1,64}$/.test(observation.extensionVersion) ||
 		typeof observation.protocolVersion !== "number" ||
 		!Number.isInteger(observation.protocolVersion) ||
-		observation.protocolVersion <= 0 ||
+		observation.protocolVersion < 0 ||
 		typeof observation.firstSeenAt !== "string" ||
 		Number.isNaN(Date.parse(observation.firstSeenAt)) ||
 		typeof observation.lastSeenAt !== "string" ||

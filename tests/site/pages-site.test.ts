@@ -31,7 +31,7 @@ describe("Fuzzy GitHub Pages site", () => {
 		expect(document.querySelectorAll('a[href*="/releases/latest/download/"]')).toHaveLength(0);
 		expect(
 			document.querySelectorAll(
-				'a[href="https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.2"]',
+				'a[href="https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.3"]',
 			),
 		).toHaveLength(2);
 		expect(disabledDownloads).toHaveLength(4);

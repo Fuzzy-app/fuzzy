@@ -293,8 +293,6 @@ export class SearchScreenController {
 
 	#createResultRow(result: SearchPresentationResult, index: number): HTMLDivElement {
 		const row = el("div", "fuzzy-result-row");
-		row.setAttribute("role", "button");
-		row.tabIndex = 0;
 		row.dataset.resultKey = this.#resultKey(result, index);
 
 		const kindClass = fileKindClass(result.fileName);

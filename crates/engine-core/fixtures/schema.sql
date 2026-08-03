@@ -17,7 +17,7 @@ CREATE TABLE app_settings (
 CREATE TABLE extension_runtime_observations (
 	installation_id   TEXT NOT NULL,
 	extension_version TEXT NOT NULL,
-	protocol_version  INTEGER NOT NULL CHECK (protocol_version > 0),
+	protocol_version  INTEGER NOT NULL CHECK (protocol_version >= 0),
 	first_seen_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
 	last_seen_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
 	PRIMARY KEY (installation_id, extension_version, protocol_version)
@@ -168,4 +168,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 0;

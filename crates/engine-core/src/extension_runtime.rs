@@ -10,7 +10,7 @@ use ts_rs::TS;
 use crate::{EngineError, EngineResult};
 
 /// 現在のNative Messaging契約バージョン。
-pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 6;
+pub const EXTENSION_RUNTIME_PROTOCOL_VERSION: u32 = 0;
 /// 正常状態として扱う拡張機能の最低バージョン。
 pub const MINIMUM_COMPATIBLE_EXTENSION_VERSION: &str = "0.1.0";
 /// 最終応答を「最近」とみなす期間（24時間）。
@@ -48,13 +48,6 @@ impl ExtensionRuntimeReport {
 				reason: "英数字と . - + だけを使用してください".to_string(),
 			});
 		}
-		if self.protocol_version == 0 {
-			return Err(EngineError::InvalidInput {
-				field: "protocolVersion".to_string(),
-				reason: "1以上で指定してください".to_string(),
-			});
-		}
-
 		Ok(())
 	}
 }
@@ -189,7 +182,7 @@ mod tests {
 
 		report.extension_version = "1.0.0".to_string();
 		report.protocol_version = 0;
-		assert!(report.validate().is_err());
+		assert!(report.validate().is_ok());
 	}
 
 	#[test]

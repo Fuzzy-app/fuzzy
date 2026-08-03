@@ -438,7 +438,7 @@ fn index_schema() -> (Schema, Field, Field, Field) {
 		.set_tokenizer(TOKENIZER_NAME)
 		.set_index_option(IndexRecordOption::WithFreqsAndPositions);
 	let body = builder.add_text_field(
-		"body_normalized_v2",
+		"body_normalized_v0",
 		TextOptions::default()
 			.set_indexing_options(indexing)
 			.set_stored(),

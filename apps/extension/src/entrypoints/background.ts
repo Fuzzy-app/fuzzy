@@ -26,7 +26,6 @@ import {
 	type DashboardCacheReadResponseMessage,
 	isDashboardCacheReadRequestMessage,
 } from "../lib/cache/dashboardCacheMessaging";
-import { resetExtensionOwnedStorage } from "../lib/extensionStorageReset";
 import { createDeadlineNotificationMonitor } from "../lib/notifications/deadlineNotificationMonitor";
 import {
 	createSyncNotificationId,
@@ -176,16 +175,8 @@ export default defineBackground(() => {
 		void reportExtensionRuntimeOnce();
 	};
 
-	const initializeExtensionStorage = () => {
-		void resetExtensionOwnedStorage(browser.storage.local)
-			.catch((error) => {
-				console.warn("[fuzzy] 拡張機能の内部データを初期化できませんでした", error);
-			})
-			.finally(() => startNotificationMonitoring());
-	};
-
-	browser.runtime.onInstalled.addListener(initializeExtensionStorage);
-	browser.runtime.onStartup.addListener(initializeExtensionStorage);
+	browser.runtime.onInstalled.addListener(startNotificationMonitoring);
+	browser.runtime.onStartup.addListener(startNotificationMonitoring);
 	browser.runtime.onConnect.addListener((port) => {
 		if (port.name !== MOODLE_NATIVE_SESSION_PORT) return;
 		activeMoodleSessions.add(port);
@@ -210,7 +201,7 @@ export default defineBackground(() => {
 			console.warn("[fuzzy] 通知から課題・締切画面を開けませんでした", error);
 		});
 	});
-	initializeExtensionStorage();
+	startNotificationMonitoring();
 
 	browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		if (isExtensionRuntimeReportRequestMessage(message)) {

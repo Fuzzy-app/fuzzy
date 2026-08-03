@@ -72,7 +72,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 `getDashboard`の`courses`要素には、保存資料から確定できた`academicYear`（年度）と`term`（学期）を含める。旧キャッシュとの互換性のため、クライアントはこれらが省略された場合を「学期未設定」として扱う。`fileCount`や`violationCount`など既存の集計値の意味は変更しない。
 
-`ping.protocolVersion`は現在値`6`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
+`ping.protocolVersion`は初期値`0`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。初回リリース前のため、過去世代との互換処理やマイグレーションは持たない。
 
 `search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルだけを返す。
 
@@ -278,7 +278,7 @@ content scriptはNative Messagingへ直接接続せず、ルール取得・更�
 
 Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issueで定義する。Google認証、送信対象の確認、明示的な追加操作、認証解除を必須とし、既存のローカルAPIへ暗黙の外部送信を追加しない。Windowsデスクトップ通知の常駐方式とAPIも別Issueで定義する。
 
-`reportExtensionRuntime`はブラウザ名を受け取らない。`installationId`は拡張機能が`browser.storage.local`へ保存する1〜128文字の英数字・ハイフン、`extensionVersion`はmanifestのバージョン、`protocolVersion`は1以上の整数とする。native-hostは境界で再検証し、拡張機能が送る日時は使用せず、受信時のUTC時刻を`firstSeenAt`／`lastSeenAt`として返す。Native Messagingホストマニフェストの許可元はFuzzy拡張機能のIDだけに限定し、別の拡張機能からこのコマンドを呼べないようにする。
+`reportExtensionRuntime`はブラウザ名を受け取らない。`installationId`は拡張機能が`browser.storage.local`へ保存する1〜128文字の英数字・ハイフン、`extensionVersion`はmanifestのバージョン、`protocolVersion`は0以上の整数とする。native-hostは境界で再検証し、拡張機能が送る日時は使用せず、受信時のUTC時刻を`firstSeenAt`／`lastSeenAt`として返す。Native Messagingホストマニフェストの許可元はFuzzy拡張機能のIDだけに限定し、別の拡張機能からこのコマンドを呼べないようにする。
 
 `ExtensionRuntimeObservation`は次の形とする。
 

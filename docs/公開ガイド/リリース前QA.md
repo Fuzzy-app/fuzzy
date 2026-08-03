@@ -116,6 +116,7 @@
 - [ ] Native Messaging登録を解除
 - [ ] Native Messaging manifestを解除
 - [ ] Fuzzy本体を削除
+- [ ] 完了画面を表示し、PCの再起動を要求しない
 - [ ] Fuzzy管理下のSQLite・検索索引・表示キャッシュを削除する
 - [ ] バックアップを削除しない
 - [ ] 授業資料を削除しない

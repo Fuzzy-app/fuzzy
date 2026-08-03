@@ -620,12 +620,12 @@ fn load_saved_setup_configuration(
 
 fn setup_configuration_revision(values: &[&str]) -> String {
 	let mut hasher = blake3::Hasher::new();
-	hasher.update(b"fuzzy-setup-configuration-v1");
+	hasher.update(b"fuzzy-setup-configuration-v0");
 	for value in values {
 		hasher.update(&(value.len() as u64).to_le_bytes());
 		hasher.update(value.as_bytes());
 	}
-	format!("setup-v1:{}", hasher.finalize().to_hex())
+	format!("setup-v0:{}", hasher.finalize().to_hex())
 }
 
 pub(super) fn relative_path_within_base(path: &Path, base: &Path) -> Option<PathBuf> {
@@ -934,7 +934,7 @@ mod tests {
 			Some(1)
 		);
 		let saved = database.saved_setup_configuration().unwrap().unwrap();
-		assert!(saved.revision.starts_with("setup-v1:"));
+		assert!(saved.revision.starts_with("setup-v0:"));
 		assert_eq!(saved.saved_at, saved_at);
 		assert_eq!(
 			saved.base_folder_path,
@@ -1478,7 +1478,7 @@ mod tests {
 		assert_eq!(overridden_courses[0].0, Some(2025));
 		assert_eq!(overridden_courses[1].0, Some(2026));
 		assert!(overridden_courses.iter().all(|course| {
-			course.1.starts_with("local-scan:v2:")
+			course.1.starts_with("local-scan:v0:")
 				&& course.2 == INITIAL_COURSE_OVERRIDE_PATTERN
 				&& course.3 == INITIAL_COURSE_OVERRIDE_NOTE
 		}));
@@ -1489,7 +1489,7 @@ mod tests {
 				 FROM courses
 				 WHERE name = 'データベース'
 				   AND moodle_course_id GLOB 'local-scan:*'
-				   AND moodle_course_id NOT GLOB 'local-scan:v2:*'",
+				   AND moodle_course_id NOT GLOB 'local-scan:v0:*'",
 				[],
 				|row| row.get(0),
 			)

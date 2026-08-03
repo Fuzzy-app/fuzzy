@@ -12,7 +12,7 @@ import { ruleSegmentsToTemplate } from "../../packages/shared/src/rules";
 
 function configuration(overrides: Partial<SavedSetupConfiguration> = {}): SavedSetupConfiguration {
 	return {
-		revision: "setup-v1:test",
+		revision: "setup-v0:test",
 		savedAt: "2026-07-29T00:00:00.000Z",
 		baseFolderPath: "C:/Users/student/Documents/Fuzzy",
 		pattern: { id: "estimated-1", courseSegmentIndex: 1 },
