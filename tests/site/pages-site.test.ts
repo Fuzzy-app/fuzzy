@@ -40,6 +40,7 @@ describe("Fuzzy GitHub Pages site", () => {
 		expect(html).toContain("QA PRE-RELEASE");
 		expect(html).toContain("GitHub Pre-release・未署名");
 		expect(html).toContain("正式版ではありません");
+		expect(html).toContain("QA参加者は、上記の未署名QAプレリリースからテスト版を取得できます");
 		expect(html).toContain("Fuzzy-Setup.exe");
 		expect(html).toContain("公式ブラウザストア");
 		expect(html).toContain("Windows 11");
