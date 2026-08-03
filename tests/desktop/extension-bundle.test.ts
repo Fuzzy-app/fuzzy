@@ -159,11 +159,44 @@ describe("Tauri extension bundle", () => {
 		const hooks = await Bun.file(
 			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer-hooks.nsh"),
 		).text();
+		const template = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer.nsi"),
+		).text();
 
 		expect(hooks).toContain("--register-native-host");
 		expect(hooks).toContain("--unregister-native-host");
+		expect(hooks).toContain("$UpdateMode <> 1");
+		expect(hooks).toContain("SetRebootFlag false");
+		expect(hooks).not.toContain("REBOOTOK");
 		expect(hooks).not.toContain("taskkill");
 		expect(hooks).not.toContain("/F");
+		expect(template).toContain("MUI_UNPAGE_FINISH");
+		expect(template).not.toContain("REBOOTOK");
+		expect(template).not.toContain("DeleteAppDataCheckbox");
+	});
+
+	test("既存インストールの案内を明確にし、アンインストール後に再セットアップへ進まない", async () => {
+		const config = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/tauri.conf.json"),
+		).json();
+		const template = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer.nsi"),
+		).text();
+		const language = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer-language-ja.nsh"),
+		).text();
+
+		expect(config.bundle.windows.nsis.template).toBe("./windows/installer.nsi");
+		expect(config.bundle.windows.nsis.customLanguageFiles.Japanese).toBe(
+			"./windows/installer-language-ja.nsh",
+		);
+		expect(language).toContain('"Fuzzyを更新・修復する"');
+		expect(language).toContain('"Fuzzyをアンインストールして終了する"');
+		expect(template).toContain(
+			"単独のアンインストールを選んだ場合は、再インストールへ進まず終了する",
+		);
+		expect(template).toContain("${If} $0 = 0");
+		expect(template).toContain("Quit");
 	});
 
 	test("一般向けインストーラーとQA用成果物を分離し、古い成果物を採用しない", async () => {

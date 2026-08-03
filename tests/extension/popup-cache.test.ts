@@ -14,7 +14,7 @@ describe("popupのオフラインダッシュボード", () => {
 		expect(parseCachedDashboard({ dashboard, cachedAt: new Date().toISOString() })).toBeNull();
 		expect(
 			parseCachedDashboard({
-				formatVersion: 2,
+				formatVersion: 0,
 				source: "mock",
 				dashboard,
 				cachedAt: new Date().toISOString(),
@@ -35,7 +35,7 @@ describe("popupのオフラインダッシュボード", () => {
 
 	test("キャッシュの集計とコース一覧を表示用モデルへ変換する", () => {
 		const view = createPopupDashboardView({
-			formatVersion: 2,
+			formatVersion: 0,
 			source: "native",
 			cachedAt: "2026-07-25T03:00:00.000Z",
 			dashboard: {

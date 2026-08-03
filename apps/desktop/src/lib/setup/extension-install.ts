@@ -130,8 +130,8 @@ export function getExtensionInstallDestination(
 	return {
 		available: true,
 		kind: channel,
-		label: "Fuzzyアプリ同梱版",
-		displayTarget: "Fuzzyアプリに同梱済み",
+		label: "Fuzzy拡張機能を追加",
+		displayTarget: "Fuzzyアプリ内の拡張機能フォルダー",
 		target: {
 			kind: "bundled-resource",
 			value: bundledManifestResourcePath,
@@ -180,7 +180,7 @@ export async function openExtensionInstallDestinationClient(
 		} catch {
 			throw new ExtensionInstallError(
 				"RESOURCE_UNAVAILABLE",
-				"同梱された拡張機能フォルダーを表示できませんでした。Fuzzyを再起動してから再試行してください。",
+				"Fuzzy拡張機能のフォルダーを表示できませんでした。Fuzzyを再起動してから再試行してください。",
 			);
 		}
 	}
@@ -235,7 +235,7 @@ export function parseExtensionRuntimeObservation(
 		!/^[A-Za-z0-9.+-]{1,64}$/.test(observation.extensionVersion) ||
 		typeof observation.protocolVersion !== "number" ||
 		!Number.isInteger(observation.protocolVersion) ||
-		observation.protocolVersion <= 0 ||
+		observation.protocolVersion < 0 ||
 		typeof observation.firstSeenAt !== "string" ||
 		Number.isNaN(Date.parse(observation.firstSeenAt)) ||
 		typeof observation.lastSeenAt !== "string" ||

@@ -42,10 +42,18 @@ export function parseExtensionRecoveryStatus(value: unknown): ExtensionRecoveryS
 		return null;
 	}
 	if (candidate.state === "missing") {
-		return candidate.observation === null
+		if (candidate.observation === null) {
+			return {
+				state: "missing",
+				observation: null,
+				recentWithinSeconds: candidate.recentWithinSeconds,
+			};
+		}
+		const historicalObservation = parseExtensionRuntimeObservation(candidate.observation);
+		return historicalObservation
 			? {
 					state: "missing",
-					observation: null,
+					observation: historicalObservation,
 					recentWithinSeconds: candidate.recentWithinSeconds,
 				}
 			: null;

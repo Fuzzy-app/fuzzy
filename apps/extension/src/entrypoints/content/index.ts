@@ -12,7 +12,12 @@ import {
 	buildCourseFileReconcilePayload,
 	buildMoodleAssignmentSyncPayload,
 } from "../../lib/moodle/assignmentSync";
-import { classifyMoodlePage, resolveMoodleUiMode } from "../../lib/moodle/pageClassification";
+import {
+	classifyMoodlePage,
+	isMoodleCoursePage,
+	isMoodleDashboardPage,
+	resolveMoodleUiMode,
+} from "../../lib/moodle/pageClassification";
 import {
 	MOODLE_PAGE_SNAPSHOT_MESSAGE,
 	collectMoodlePageSnapshot,
@@ -62,9 +67,13 @@ function initializeMoodleContent(): void {
 			reportLoginAutomationError,
 		);
 		registerSnapshotMessageListener();
-		void syncCurrentCourseData();
+		if (isMoodleCoursePage(location.href)) {
+			void syncCurrentCourseData();
+		} else if (isMoodleDashboardPage(location.href)) {
+			void syncMoodleDashboardCourses();
+		}
 		mountFuzzyShell();
-		void mountSavePanel();
+		if (isMoodleCoursePage(location.href)) void mountSavePanel();
 		return;
 	}
 
@@ -132,7 +141,7 @@ async function syncCurrentCourseData(): Promise<void> {
 	const client = new BackgroundApiClient();
 	const operations: Promise<unknown>[] = [];
 	if (assignmentRequest) {
-		operations.push(syncAssignmentsWithDetails(client, snapshot));
+		operations.push(syncAssignmentsWithDetails(client, snapshot, location.href, document));
 	}
 	if (fileRequest) {
 		operations.push(
@@ -145,9 +154,75 @@ async function syncCurrentCourseData(): Promise<void> {
 	await Promise.all(operations);
 }
 
+/**
+ * ダッシュボードには課題の一覧だけが載り、提出可否や全セクションの完全性が
+ * ないことがある。ダッシュボード上の授業リンクを少数ずつ取得し、通常の
+ * 完全コースsnapshotとして同期することで、表示中の授業だけに限定した安全策を保つ。
+ */
+async function syncMoodleDashboardCourses(): Promise<void> {
+	const courseUrls = Array.from(
+		document.querySelectorAll<HTMLAnchorElement>("a[href*='/course/view.php']"),
+	)
+		.map((link) => {
+			try {
+				const url = new URL(link.href, location.href);
+				return url.origin === location.origin && /\/course\/view\.php$/i.test(url.pathname)
+					? url.toString()
+					: null;
+			} catch {
+				return null;
+			}
+		})
+		.filter((url): url is string => url !== null)
+		.filter((url, index, values) => values.indexOf(url) === index)
+		.slice(0, 12);
+	if (courseUrls.length === 0) return;
+
+	const client = new BackgroundApiClient();
+	await Promise.all(courseUrls.map((url) => syncFetchedCourse(client, url)));
+}
+
+async function syncFetchedCourse(client: BackgroundApiClient, pageUrl: string): Promise<void> {
+	const controller = new AbortController();
+	const timeout = window.setTimeout(() => controller.abort(), 8_000);
+	try {
+		const response = await fetch(pageUrl, {
+			credentials: "include",
+			signal: controller.signal,
+		});
+		if (!response.ok) return;
+		const html = await response.text();
+		const courseDocument = new DOMParser().parseFromString(html, "text/html");
+		const base = courseDocument.createElement("base");
+		base.href = pageUrl;
+		courseDocument.head.prepend(base);
+		const snapshot = collectMoodlePageSnapshot(courseDocument);
+		const assignmentRequest = buildMoodleAssignmentSyncPayload(snapshot, pageUrl, courseDocument);
+		const fileRequest = buildCourseFileReconcilePayload(snapshot, pageUrl, courseDocument);
+		const operations: Promise<unknown>[] = [];
+		if (assignmentRequest) {
+			operations.push(syncAssignmentsWithDetails(client, snapshot, pageUrl, courseDocument));
+		}
+		if (fileRequest) {
+			operations.push(
+				client.reconcileCourseFiles(fileRequest).catch((error) => {
+					console.warn("[fuzzy] 背景でのコース資料更新に失敗しました", error);
+				}),
+			);
+		}
+		await Promise.all(operations);
+	} catch (error) {
+		console.warn("[fuzzy] ダッシュボードから授業情報を更新できませんでした", error);
+	} finally {
+		window.clearTimeout(timeout);
+	}
+}
+
 async function syncAssignmentsWithDetails(
 	client: BackgroundApiClient,
 	snapshot: ReturnType<typeof collectMoodlePageSnapshot>,
+	pageUrl: string,
+	root: Document,
 ): Promise<void> {
 	let progress: AssignmentDetailProgress = {
 		completed: 0,
@@ -159,7 +234,7 @@ async function syncAssignmentsWithDetails(
 		const assignmentHints = await collectAssignmentSubmissionAvailability(
 			snapshot.assignmentHints,
 			{
-				baseUrl: location.href,
+				baseUrl: pageUrl,
 				onProgress: (value) => {
 					progress = value;
 					showAssignmentDetailProgress(value);
@@ -168,8 +243,8 @@ async function syncAssignmentsWithDetails(
 		);
 		const request = buildMoodleAssignmentSyncPayload(
 			{ ...snapshot, assignmentHints },
-			location.href,
-			document,
+			pageUrl,
+			root,
 		);
 		if (!request) return;
 		showAssignmentSyncSaving();

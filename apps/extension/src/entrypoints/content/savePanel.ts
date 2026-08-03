@@ -48,6 +48,7 @@ import {
 	saveRootFromSuggestions,
 	saveSuggestionStatus,
 } from "./savePlan";
+import { FUZZY_SHELL_VISIBILITY_EVENT } from "./shell";
 import { createBrandIcon } from "./shellElements";
 import { SHELL_NAV_BUTTON_ID, SHELL_PAGE_ID } from "./shellIds";
 import { userFacingErrorMessage } from "./userFacingError";
@@ -106,6 +107,7 @@ export async function mountSavePanel(): Promise<void> {
 	let loading = false;
 	let saving = false;
 	let isPanelOpen = false;
+	let isShellOpen = false;
 	let message: string | null = null;
 	let suggestionStatus: SaveSuggestionStatus | null = null;
 	let messageTone: PanelMessageTone = "info";
@@ -113,6 +115,13 @@ export async function mountSavePanel(): Promise<void> {
 	const savePanelOpenState = createSavePanelOpenStateWriter(browser.storage.local);
 
 	injectPanelStyle();
+	const handleShellVisibility = (event: Event): void => {
+		const open = (event as CustomEvent<{ open?: unknown }>).detail?.open === true;
+		isShellOpen = open;
+		if (open) isPanelOpen = false;
+		render();
+	};
+	window.addEventListener(FUZZY_SHELL_VISIBILITY_EVENT, handleShellVisibility);
 	isPanelOpen = await loadSavePanelOpenState(browser.storage.local);
 	// 開閉状態の読み込み中に再マウントされた場合、古いインスタンスは初期化しない。
 	if (document.getElementById(SAVE_PANEL_ID) !== panel) return;
@@ -375,6 +384,11 @@ export async function mountSavePanel(): Promise<void> {
 	}
 
 	function render() {
+		panel.hidden = isShellOpen;
+		if (isShellOpen) {
+			collapseHandle.style.display = "none";
+			return;
+		}
 		// 選択状態の更新でもパネルを再描画するため、現在位置を引き継ぐ。
 		// これがないと、下部の「すべて選択」を押した際にスクロール領域が先頭へ戻る。
 		const previousScrollTop =

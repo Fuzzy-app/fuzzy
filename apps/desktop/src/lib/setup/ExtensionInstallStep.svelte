@@ -12,11 +12,9 @@
 	} from "./extension-install";
 	import type { NativeHostInstallationStatus } from "./extension-install";
 	import { userFacingOperationError } from "./application-state";
-	import type { LibraryMaintenanceSummary } from "./library-maintenance";
 
-	export let onBack: () => void = () => undefined;
+	export let onComplete: () => void = () => undefined;
 	export let verificationStartedAt: string = new Date().toISOString();
-	export let maintenanceSummary: LibraryMaintenanceSummary | null = null;
 
 	const selectedChannel = getPreferredExtensionInstallChannel();
 	const destination = getExtensionInstallDestination(selectedChannel);
@@ -135,7 +133,7 @@
 					"このプレビューでは導入先を開きません。Fuzzyのデスクトップアプリで導入操作を確認してください。";
 			} else if (result.destination.kind === "bundled") {
 				successMessage =
-					"同梱された拡張機能フォルダーを表示しました。読み込み後、拡張機能からの応答を自動確認します。";
+					"拡張機能のフォルダーを表示しました。ブラウザに追加すると自動確認を始めます。";
 			} else {
 				successMessage =
 					"Fuzzyの公式配布ページを既定のブラウザで開きました。導入後、この画面へ戻ってください。";
@@ -156,10 +154,11 @@
 <section class="install-panel" aria-labelledby="extension-install-heading">
 	<header class="install-header">
 		<div>
-			<p class="chip">STEP 4 / 4</p>
-			<h1 id="extension-install-heading">ブラウザ拡張機能を導入</h1>
+			<h1 id="extension-install-heading" tabindex="-1">
+				ブラウザ拡張機能を導入
+			</h1>
 			<p class="intro">
-				Fuzzyは拡張機能を前提とするため、拡張機能から実際の応答を確認すると初期セットアップが完了します。ブラウザの種類を選ぶ必要はありません。
+				Fuzzyを使うには、使っているブラウザにFuzzy拡張機能を追加して設定します。追加が終わると、この画面で自動的に確認します。
 			</p>
 		</div>
 		<span class="local-badge">あなたのPC上で確認</span>
@@ -170,37 +169,10 @@
 		<div>
 			<h2 id="safety-heading">導入操作はブラウザ上で行います</h2>
 			<p>
-				Fuzzyは導入先を表示し、応答を確認するだけです。拡張機能の追加は、表示される権限を確認してユーザー自身で行います。この確認では授業資料や設定を外部へ送信しません。
+				拡張機能の追加と設定は、ブラウザの拡張機能管理画面で行います。表示される権限を確認して、ユーザー自身で追加してください。
 			</p>
 		</div>
 	</section>
-
-	{#if maintenanceSummary}
-		<section
-			class="scan-result-card"
-			aria-labelledby="initial-scan-result-heading"
-		>
-			<div>
-				<p class="section-label">既存資料の取り込み</p>
-				<h2 id="initial-scan-result-heading">
-					保存先をスキャンし、ローカル検索を準備しました
-				</h2>
-				<p>
-					{maintenanceSummary.scannedFileCount}件を確認し、新規
-					{maintenanceSummary.registeredFileCount}件、更新
-					{maintenanceSummary.updatedFileCount}件、検索準備
-					{maintenanceSummary.indexedFileCount}件、見つからない資料
-					{maintenanceSummary.missingFileCount}件を処理しました。保存済み資料の移動・削除は行っていません。
-				</p>
-				{#if maintenanceSummary.warnings.length > 0}
-					<p class="scan-warning">
-						確認が必要な項目が{maintenanceSummary.warnings
-							.length}件あります。セットアップ完了後、Fuzzyを再起動すると確認画面から資料情報を作り直せます。
-					</p>
-				{/if}
-			</div>
-		</section>
-	{/if}
 
 	<section class="distribution-card" aria-labelledby="distribution-heading">
 		<div>
@@ -210,12 +182,12 @@
 				{#if selectedChannel === "store"}
 					公式配布ページを既定のブラウザで開きます。
 				{:else}
-					拡張機能はFuzzyアプリに同梱済みです。画面の案内に沿って導入できます。
+					Fuzzy拡張機能のフォルダーはアプリに含まれています。ブラウザの管理画面から追加してください。
 				{/if}
 			</p>
 		</div>
 		<span class:store={selectedChannel === "store"} class="distribution-badge">
-			{selectedChannel === "store" ? "公式配布" : "アプリ同梱"}
+			{selectedChannel === "store" ? "公式配布" : "拡張機能のフォルダー"}
 		</span>
 	</section>
 
@@ -247,9 +219,6 @@
 				<p class="section-label">導入手順</p>
 				<h2 id="install-guide-heading">対応するブラウザへFuzzyを追加する</h2>
 			</div>
-			<span class="step-count">
-				{selectedChannel === "store" ? "2ステップ" : "3ステップ"}
-			</span>
 		</div>
 
 		{#if selectedChannel === "store"}
@@ -276,25 +245,32 @@
 				<li>
 					<span class="guide-index">1</span>
 					<div>
-						<strong>同梱フォルダーを表示する</strong>
-						<p>下のボタンを押すと、拡張機能のフォルダーを表示します。</p>
+						<strong>拡張機能のフォルダーを表示する</strong>
+						<p>
+							下のボタンを押すと、Fuzzy拡張機能が入ったフォルダーをエクスプローラーで表示します。
+						</p>
 					</div>
 				</li>
 				<li>
 					<span class="guide-index">2</span>
 					<div>
-						<strong>拡張機能の管理画面を開く</strong>
+						<strong>ブラウザの拡張機能管理画面を開く</strong>
 						<p>
-							利用するブラウザの拡張機能管理画面を開き、デベロッパーモードを有効にします。
+							ブラウザ上部の検索バーに、Chrome・Chromiumなら <code
+								class="browser-address">chrome://extensions/</code
+							>、Edgeなら
+							<code class="browser-address">edge://extensions/</code> と入力して開きます。画面右上の「デベロッパーモード」をオンにしてください。
 						</p>
 					</div>
 				</li>
 				<li>
 					<span class="guide-index">3</span>
 					<div>
-						<strong>表示したフォルダーを読み込む</strong>
+						<strong>表示したフォルダーを拡張機能として追加する</strong>
 						<p>
-							「パッケージ化されていない拡張機能を読み込む」に相当する操作で、表示したフォルダーを指定します。
+							「パッケージ化されていない拡張機能を読み込む」を押し、先ほど表示したフォルダーを選びます。<code
+								>manifest.json</code
+							>が入っているフォルダーを指定してください。追加後、ブラウザでMoodleを開くとFuzzyが接続を確認します。
 						</p>
 					</div>
 				</li>
@@ -312,14 +288,6 @@
 
 	<div class="install-actions">
 		<button
-			class="text-button"
-			type="button"
-			on:click={onBack}
-			disabled={isOpening}
-		>
-			初期ルールを確認する
-		</button>
-		<button
 			class="primary-button"
 			type="button"
 			on:click={handleOpenDestination}
@@ -330,7 +298,7 @@
 				? "導入先を開いています..."
 				: selectedChannel === "store"
 					? "Fuzzyの公式配布ページを開く"
-					: "同梱フォルダーを表示"}
+					: "拡張機能のフォルダーを表示"}
 		</button>
 	</div>
 
@@ -346,7 +314,7 @@
 				<h2>拡張機能の導入を確認しました</h2>
 				<p>
 					拡張機能バージョン {setupStatus.observation.extensionVersion}から
-					{formatDate(setupStatus.observation.lastSeenAt)} に応答がありました。初期セットアップは完了です。
+					{formatDate(setupStatus.observation.lastSeenAt)} に応答がありました。画面下の「セットアップを完了」を押してください。
 				</p>
 			</div>
 		{:else if isIncompatible && setupStatus.observation}
@@ -378,6 +346,12 @@
 			</div>
 		{/if}
 	</section>
+
+	{#if isReady}
+		<button class="complete-button" type="button" on:click={onComplete}>
+			セットアップを完了
+		</button>
+	{/if}
 </section>
 
 <style>
@@ -402,21 +376,11 @@
 		gap: 16px;
 	}
 
-	.chip,
 	.local-badge,
-	.distribution-badge,
-	.step-count {
+	.distribution-badge {
 		width: fit-content;
 		border-radius: 999px;
 		font-weight: 700;
-	}
-
-	.chip {
-		margin: 0 0 12px;
-		padding: 4px 10px;
-		background: var(--fuzzy-color-primary-overlay);
-		color: var(--fuzzy-color-primary);
-		font-size: 0.7rem;
 	}
 
 	.local-badge {
@@ -453,7 +417,6 @@
 	}
 
 	.safety-card,
-	.scan-result-card,
 	.distribution-card,
 	.host-error-card,
 	.guide-card,
@@ -472,24 +435,6 @@
 		background: var(--fuzzy-color-primary-soft);
 		border: 1px solid var(--fuzzy-color-primary-overlay);
 		color: var(--fuzzy-color-text);
-	}
-
-	.scan-result-card {
-		padding: 16px 18px;
-		background: var(--fuzzy-color-success-soft);
-		border: 1px solid var(--fuzzy-color-success);
-		color: var(--fuzzy-color-success);
-	}
-
-	.scan-result-card p:not(.section-label) {
-		margin: 5px 0 0;
-		font-size: 0.78rem;
-		line-height: 1.65;
-	}
-
-	.scan-result-card .scan-warning {
-		color: var(--fuzzy-color-warning);
-		font-weight: 700;
 	}
 
 	.host-error-card {
@@ -576,13 +521,6 @@
 		text-transform: uppercase;
 	}
 
-	.step-count {
-		padding: 5px 9px;
-		background: var(--fuzzy-color-primary-overlay);
-		color: var(--fuzzy-color-primary);
-		font-size: 0.68rem;
-	}
-
 	.guide-list {
 		margin-bottom: 0;
 		padding: 0;
@@ -666,14 +604,6 @@
 		outline-offset: 2px;
 	}
 
-	.text-button {
-		padding: 9px 4px;
-		background: transparent;
-		color: var(--fuzzy-color-primary);
-		font-size: 0.76rem;
-		font-weight: 700;
-	}
-
 	.primary-button,
 	.refresh-button {
 		padding: 12px 15px;
@@ -688,6 +618,28 @@
 		);
 		color: var(--fuzzy-color-surface);
 		box-shadow: 0 12px 24px var(--fuzzy-color-primary-overlay);
+	}
+
+	.complete-button {
+		width: 100%;
+		margin-top: 18px;
+		padding: 14px 16px;
+		border: 1px solid var(--fuzzy-color-success);
+		border-radius: 8px;
+		background: var(--fuzzy-color-surface);
+		color: var(--fuzzy-color-success);
+		font: inherit;
+		font-weight: 800;
+		cursor: pointer;
+	}
+
+	.complete-button:hover {
+		background: var(--fuzzy-color-success-soft);
+	}
+
+	.complete-button:focus-visible {
+		outline: 3px solid var(--fuzzy-focus-ring);
+		outline-offset: 2px;
 	}
 
 	.response-card {
@@ -733,6 +685,23 @@
 		background: var(--fuzzy-color-primary-soft);
 		color: var(--fuzzy-color-primary);
 		font-size: 0.76rem;
+	}
+
+	code {
+		display: inline-block;
+		padding: 2px 6px;
+		border: 1px solid var(--fuzzy-color-primary-overlay-strong);
+		border-radius: 5px;
+		background: var(--fuzzy-color-primary-soft);
+		color: var(--fuzzy-color-primary-strong);
+		font-family: Consolas, "Cascadia Mono", monospace;
+		font-size: 0.95em;
+		font-weight: 800;
+		white-space: nowrap;
+	}
+
+	.browser-address {
+		box-shadow: 0 0 0 2px var(--fuzzy-color-primary-overlay);
 	}
 
 	@keyframes spin {

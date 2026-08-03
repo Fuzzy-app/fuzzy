@@ -8,18 +8,34 @@ export function ensureShellStyle(): void {
 	style.textContent = `
 		body.fuzzy-shell-open {
 			overflow: hidden;
+			overflow-x: hidden;
+			overscroll-behavior: none;
 		}
 
+		/* 暗幕はFuzzy画面の上に置くが、通知・メッセージ本体は暗幕より
+		   さらに前へ出す。Moodle側の既定の半透明指定もここで打ち消す。 */
+		body.fuzzy-shell-open .drawer-backdrop,
+		body.fuzzy-shell-open .modal-backdrop {
+			z-index: 2147483001 !important;
+		}
+
+		body.fuzzy-shell-open .popover-region-container,
+		body.fuzzy-shell-open [data-region="message-drawer"],
+		body.fuzzy-shell-open .drawer,
+		body.fuzzy-shell-open .modal {
+			z-index: 2147483003 !important;
+			background-color: #fff !important;
+			opacity: 1 !important;
+			filter: none !important;
+		}
+
+		/* ヘッダー側に作られる通知ポップオーバーは、親のstacking contextごと
+		   Fuzzyより前へ出す。ヘッダー自体は隠さず、Moodleの操作をそのまま使う。 */
 		body.fuzzy-shell-open #page-header,
-		body.fuzzy-shell-open .page-header-headings,
-		body.fuzzy-shell-open .page-context-header,
 		body.fuzzy-shell-open #page-navbar,
-		body.fuzzy-shell-open #page-secondary-navigation,
-		body.fuzzy-shell-open .secondary-navigation,
-		body.fuzzy-shell-open .tertiary-navigation,
-		body.fuzzy-shell-open .course-navigation,
-		body.fuzzy-shell-open .course-header {
-			display: none !important;
+		body.fuzzy-shell-open .navbar {
+			position: relative;
+			z-index: 2147483002 !important;
 		}
 
 		#${SHELL_ROOT_ID} {
@@ -55,7 +71,10 @@ export function ensureShellStyle(): void {
 			left: 0;
 			right: 0;
 			bottom: 0;
+			width: 100vw;
+			max-width: 100vw;
 			z-index: 2147483000;
+			isolation: isolate;
 			display: grid;
 			grid-template-columns: 180px minmax(0, 1fr);
 			min-height: 0;
@@ -67,6 +86,7 @@ export function ensureShellStyle(): void {
 					var(--fuzzy-color-primary-soft) 0%,
 					var(--fuzzy-color-page) 100%
 				);
+			background-color: var(--fuzzy-color-page);
 			color: var(--fuzzy-color-text-strong);
 			font-family: var(--fuzzy-font-family);
 		}
@@ -144,8 +164,12 @@ export function ensureShellStyle(): void {
 			display: grid;
 			grid-template-rows: auto 1fr;
 			gap: 12px;
+			min-width: 0;
+			min-height: 0;
 			padding: 24px 28px 32px;
-			overflow: auto;
+			overflow-x: hidden;
+			overflow-y: auto;
+			overscroll-behavior: contain;
 		}
 
 		.fuzzy-topbar {
@@ -201,6 +225,7 @@ export function ensureShellStyle(): void {
 		}
 
 		.fuzzy-main {
+			min-width: 0;
 			max-width: 1320px;
 			width: 100%;
 			margin: 0 auto;
@@ -273,6 +298,121 @@ export function ensureShellStyle(): void {
 			grid-template-columns: 1fr auto;
 			gap: 12px;
 			align-items: center;
+		}
+
+		.fuzzy-search-scope {
+			display: grid;
+			grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr);
+			gap: 10px;
+			margin-top: 10px;
+		}
+
+		.fuzzy-search-scope-field {
+			display: grid;
+			gap: 4px;
+			color: var(--fuzzy-color-text-muted);
+			font-size: 0.74rem;
+		}
+
+		.fuzzy-search-scope-field select,
+		.fuzzy-search-scope-field input,
+		.fuzzy-course-tree,
+		.fuzzy-search-course-tree {
+			min-width: 0;
+			border: 1px solid var(--fuzzy-color-border);
+			border-radius: 8px;
+			padding: 8px 10px;
+			background: var(--fuzzy-color-surface);
+			color: var(--fuzzy-color-text);
+			font: inherit;
+		}
+
+		.fuzzy-course-tree,
+		.fuzzy-search-course-tree {
+			display: grid;
+			gap: 5px;
+			max-height: 180px;
+			overflow-y: auto;
+			padding: 5px;
+			border: 1px solid var(--fuzzy-color-border);
+			border-radius: 8px;
+			background: var(--fuzzy-color-surface);
+		}
+
+		.fuzzy-course-tree-hint {
+			margin: 2px 4px 4px;
+			color: var(--fuzzy-color-text-muted);
+			font-size: 0.7rem;
+			line-height: 1.5;
+		}
+
+		.fuzzy-course-tree-group {
+			border-radius: 6px;
+			background: var(--fuzzy-color-surface-muted);
+		}
+
+		.fuzzy-course-tree-group summary {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 8px;
+			padding: 6px 8px;
+			cursor: pointer;
+			font-size: 0.76rem;
+			font-weight: 800;
+			list-style: none;
+		}
+
+		.fuzzy-course-tree-group summary::before {
+			content: "▸";
+			width: 12px;
+			color: var(--fuzzy-color-primary);
+			font-size: 0.9rem;
+		}
+
+		.fuzzy-course-tree-group[open] summary::before {
+			content: "▾";
+		}
+
+		.fuzzy-course-tree-group summary::-webkit-details-marker {
+			display: none;
+		}
+
+		.fuzzy-course-tree-group summary small {
+			color: var(--fuzzy-color-text-muted);
+			font-size: 0.66rem;
+		}
+
+		.fuzzy-course-tree-items {
+			display: grid;
+			gap: 3px;
+			padding: 0 5px 5px 16px;
+		}
+
+		.fuzzy-course-tree-option {
+			display: flex;
+			align-items: center;
+			gap: 7px;
+			border: 0;
+			border-radius: 6px;
+			padding: 6px 8px;
+			background: transparent;
+			color: var(--fuzzy-color-text-secondary);
+			font: inherit;
+			font-size: 0.74rem;
+			text-align: left;
+			cursor: pointer;
+		}
+
+		.fuzzy-course-tree-option input {
+			margin: 0;
+			accent-color: var(--fuzzy-color-primary);
+		}
+
+		.fuzzy-course-tree-option.is-selected {
+			background: var(--fuzzy-color-primary-soft);
+			color: var(--fuzzy-color-primary-strong);
+			font-weight: 800;
 		}
 
 		.fuzzy-search-input-wrap {
@@ -370,7 +510,7 @@ export function ensureShellStyle(): void {
 
 		.fuzzy-result-row {
 			display: grid;
-			grid-template-columns: 48px minmax(0, 170px) minmax(0, 1fr) 86px;
+			grid-template-columns: 48px minmax(0, 170px) minmax(0, 1fr) minmax(150px, 180px);
 			gap: 14px;
 			align-items: center;
 			border: 0;
@@ -416,7 +556,15 @@ export function ensureShellStyle(): void {
 			margin: 0;
 		}
 
+		.fuzzy-result-main {
+			min-width: 0;
+		}
+
 		.fuzzy-result-title {
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
 			font-size: 0.95rem;
 			font-weight: 900;
 		}
@@ -429,6 +577,12 @@ export function ensureShellStyle(): void {
 		}
 
 		.fuzzy-result-snippet {
+			min-width: 0;
+			overflow: hidden;
+			display: -webkit-box;
+			-webkit-box-orient: vertical;
+			-webkit-line-clamp: 2;
+			text-overflow: ellipsis;
 			color: var(--fuzzy-color-text-secondary);
 			font-size: 0.84rem;
 			line-height: 1.7;
@@ -443,10 +597,30 @@ export function ensureShellStyle(): void {
 			font-weight: 900;
 		}
 
+		.fuzzy-result-match-count {
+			margin: 0;
+			color: var(--fuzzy-color-text-secondary);
+			font-size: 0.7rem;
+			line-height: 1.45;
+			text-align: right;
+		}
+
 		.fuzzy-result-side span {
 			border-radius: 10px;
 			padding: 8px 12px;
 			background: var(--fuzzy-color-surface-muted);
+		}
+
+		.fuzzy-result-detail {
+			border: 0;
+			padding: 8px 12px;
+			border-radius: 10px;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-primary);
+			font: inherit;
+			font-size: 0.78rem;
+			font-weight: 900;
+			cursor: pointer;
 		}
 
 		.fuzzy-search-note {
@@ -572,6 +746,85 @@ export function ensureShellStyle(): void {
 			display: grid;
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 14px;
+		}
+
+		.fuzzy-dashboard-course-groups {
+			display: grid;
+			gap: 14px;
+		}
+
+		.fuzzy-dashboard-course-group {
+			border-radius: 14px;
+			background: var(--fuzzy-color-surface-muted);
+			box-shadow: var(--fuzzy-shadow-card);
+		}
+
+		.fuzzy-dashboard-course-group > summary {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			padding: 14px 16px;
+			cursor: pointer;
+			font-size: 0.92rem;
+			font-weight: 900;
+			list-style: none;
+		}
+
+		.fuzzy-dashboard-course-group > summary::-webkit-details-marker {
+			display: none;
+		}
+
+		.fuzzy-dashboard-group-count {
+			border-radius: 999px;
+			padding: 5px 9px;
+			background: var(--fuzzy-color-surface);
+			color: var(--fuzzy-color-text-muted);
+			font-size: 0.72rem;
+		}
+
+		.fuzzy-dashboard-course-group .fuzzy-dashboard-course-list {
+			padding: 0 14px 14px;
+		}
+
+		.fuzzy-review-material-groups {
+			display: grid;
+			gap: 12px;
+		}
+
+		.fuzzy-review-material-group {
+			border-radius: 14px;
+			background: var(--fuzzy-color-surface-muted);
+			box-shadow: var(--fuzzy-shadow-card);
+		}
+
+		.fuzzy-review-material-group > summary {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			padding: 14px 16px;
+			cursor: pointer;
+			list-style: none;
+		}
+
+		.fuzzy-review-material-group > summary::-webkit-details-marker {
+			display: none;
+		}
+
+		.fuzzy-review-material-group > summary::before {
+			content: "▸";
+			color: var(--fuzzy-color-primary);
+		}
+
+		.fuzzy-review-material-group[open] > summary::before {
+			content: "▾";
+		}
+
+		.fuzzy-review-material-list {
+			display: grid;
+			gap: 12px;
+			padding: 0 14px 14px;
 		}
 
 		.fuzzy-dashboard-course {
@@ -971,6 +1224,14 @@ export function ensureShellStyle(): void {
 			text-underline-offset: 3px;
 		}
 
+		.fuzzy-secondary-link:is(button) {
+			border: 0;
+			padding: 0;
+			background: transparent;
+			font: inherit;
+			cursor: pointer;
+		}
+
 		.fuzzy-placeholder {
 			color: var(--fuzzy-color-text-secondary);
 			font-size: 0.95rem;
@@ -1115,6 +1376,10 @@ export function ensureShellStyle(): void {
 			}
 
 			.fuzzy-search-form {
+				grid-template-columns: 1fr;
+			}
+
+			.fuzzy-search-scope {
 				grid-template-columns: 1fr;
 			}
 

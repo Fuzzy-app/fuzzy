@@ -5,6 +5,7 @@ import {
 	getSetupStatusClient,
 	parsePatternCandidates,
 	parseSavedSetupConfiguration,
+	parseScanExistingStructureResult,
 	parseSetupStatus,
 	pickBaseFolderClient,
 	saveInitialSetupClient,
@@ -39,10 +40,14 @@ describe("desktop setup API", () => {
 		};
 		const runtime = runtimeFor({
 			pick_base_folder: "C:/Fuzzy",
-			scan_existing_structure: [candidate],
+			scan_existing_structure: {
+				candidates: [candidate],
+				scannedFileCount: 1,
+				warningCount: 0,
+			},
 			get_setup_status: { done: true, savedAt: "2026-07-25T00:00:00.000Z" },
 			get_saved_setup_configuration: {
-				revision: "setup-v1:test",
+				revision: "setup-v0:test",
 				savedAt: "2026-07-25T00:00:00.000Z",
 				baseFolderPath: "C:/Fuzzy",
 				pattern: { id: "estimated-1", courseSegmentIndex: 0 },
@@ -50,7 +55,7 @@ describe("desktop setup API", () => {
 					id: "course-assignment",
 					template: "{course}/{assignment}",
 				},
-				courseOverrides: [{ courseName: "データベース", enabled: true }],
+				courseOverrides: [{ courseName: "データベース", enabled: true, mode: "override" }],
 			},
 			save_initial_setup: {
 				ok: true,
@@ -83,13 +88,17 @@ describe("desktop setup API", () => {
 		});
 
 		expect(await pickBaseFolderClient(runtime)).toBe("C:/Fuzzy");
-		expect(await scanExistingStructureClient("C:/Fuzzy", runtime)).toEqual([candidate]);
+		expect(await scanExistingStructureClient("C:/Fuzzy", runtime)).toEqual({
+			candidates: [candidate],
+			scannedFileCount: 1,
+			warningCount: 0,
+		});
 		expect(await getSetupStatusClient(runtime)).toEqual({
 			done: true,
 			savedAt: "2026-07-25T00:00:00.000Z",
 		});
 		expect(await getSavedSetupConfigurationClient(runtime)).toEqual({
-			revision: "setup-v1:test",
+			revision: "setup-v0:test",
 			savedAt: "2026-07-25T00:00:00.000Z",
 			baseFolderPath: "C:/Fuzzy",
 			pattern: { id: "estimated-1", courseSegmentIndex: 0 },
@@ -97,7 +106,7 @@ describe("desktop setup API", () => {
 				id: "course-assignment",
 				template: "{course}/{assignment}",
 			},
-			courseOverrides: [{ courseName: "データベース", enabled: true }],
+			courseOverrides: [{ courseName: "データベース", enabled: true, mode: "override" }],
 		});
 		const payload = {
 			path: "C:/Fuzzy",
@@ -125,7 +134,7 @@ describe("desktop setup API", () => {
 			},
 		});
 		expect(
-			await saveSetupChangesClient({ ...payload, expectedRevision: "setup-v1:test" }, runtime),
+			await saveSetupChangesClient({ ...payload, expectedRevision: "setup-v0:test" }, runtime),
 		).toEqual({
 			ok: true,
 			rootChanged: false,
@@ -145,10 +154,11 @@ describe("desktop setup API", () => {
 
 	test("壊れた応答を受け入れない", () => {
 		expect(parsePatternCandidates([{ id: "missing-fields" }])).toBeNull();
+		expect(parseScanExistingStructureResult({ candidates: [] })).toBeNull();
 		expect(parseSetupStatus({ done: "yes" })).toBeNull();
 		expect(
 			parseSavedSetupConfiguration({
-				revision: "setup-v1:test",
+				revision: "setup-v0:test",
 				savedAt: "not-a-date",
 			}),
 		).toBeNull();
@@ -182,7 +192,7 @@ describe("desktop setup API", () => {
 		await expect(
 			saveSetupChangesClient(
 				{
-					expectedRevision: "setup-v1:test",
+					expectedRevision: "setup-v0:test",
 					path: "C:/Fuzzy",
 					pattern,
 					rule: {

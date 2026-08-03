@@ -22,12 +22,15 @@ import type {
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
+	OpenFileRequest,
+	OpenFileResult,
 	RebuildLibraryRequest,
 	ReconcileCourseFilesRequest,
 	RuleUpdateResult,
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SearchScope,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
@@ -46,6 +49,7 @@ const BACKGROUND_API_METHODS = [
 	"getDeadlines",
 	"updateSubmissionStatus",
 	"search",
+	"openFile",
 	"suggestSavePath",
 	"updateCourseFolderName",
 	"checkSimilarFiles",
@@ -113,7 +117,14 @@ function isRequestForMethod(method: BackgroundApiMethod, request: unknown): bool
 				isRecord(request) &&
 				typeof request.query === "string" &&
 				request.query.trim().length > 0 &&
-				request.query.length <= 256
+				request.query.length <= 256 &&
+				(request.scope === undefined || isSearchScope(request.scope))
+			);
+		case "openFile":
+			return (
+				isRecord(request) &&
+				isPositiveInteger(request.fileId) &&
+				(request.page === undefined || request.page === null || isPositiveInteger(request.page))
 			);
 		case "suggestSavePath":
 			return (
@@ -323,6 +334,18 @@ function isPositiveInteger(value: unknown): value is number {
 	return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
+function isSearchScope(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		Object.keys(value).every((key) => key === "courseId" || key === "folder") &&
+		(value.courseId === undefined || isPositiveInteger(value.courseId)) &&
+		(value.folder === undefined ||
+			(typeof value.folder === "string" &&
+				value.folder.trim().length > 0 &&
+				value.folder.length <= 512))
+	);
+}
+
 /** background経由で呼び出せるAPIの部分集合。 */
 type BackgroundApi = Pick<FuzzyApiClient, Exclude<BackgroundApiMethod, "saveFiles">> & {
 	saveFiles(request: MoodleSaveFilesRequest): Promise<SaveFilesResult>;
@@ -352,8 +375,12 @@ export class BackgroundApiClient implements BackgroundApi {
 		return this.#call("updateSubmissionStatus", { assignmentId, submitted });
 	}
 
-	search(query: string): Promise<SearchResult[]> {
-		return this.#call("search", { query });
+	search(query: string, scope?: SearchScope): Promise<SearchResult[]> {
+		return this.#call("search", { query, ...(scope ? { scope } : {}) });
+	}
+
+	openFile(request: OpenFileRequest): Promise<OpenFileResult> {
+		return this.#call("openFile", request);
 	}
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {

@@ -200,7 +200,7 @@ describe("NativeApiClientの接続ライフサイクル", () => {
 		expect(await oldClient.ping()).toBe(false);
 		oldClient.disconnect();
 
-		protocolVersion = 6;
+		protocolVersion = 0;
 		const currentClient = new NativeApiClient();
 		expect(await currentClient.ping()).toBe(true);
 		currentClient.disconnect();

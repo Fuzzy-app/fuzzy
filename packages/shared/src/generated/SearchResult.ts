@@ -7,6 +7,7 @@ export type SearchResult = {
   fileId: number;
   fileName: string;
   courseName: string | null;
+  relativePath: string;
   snippet: string;
   page: number | null;
   pageCount: number | null;

@@ -21,6 +21,7 @@
 		getSavedSetupConfigurationClient,
 		getSetupStatusClient,
 		pickBaseFolderClient,
+		pickCourseFolderClient,
 		saveInitialSetupClient,
 		saveSetupChangesClient,
 		scanExistingStructureClient,
@@ -56,39 +57,24 @@
 		type LibraryMaintenanceSummary,
 	} from "$lib/setup/library-maintenance";
 
-	type SetupStepState = "done" | "current" | "pending";
 	type SetupFlowMode = "initial" | "reconfigure" | "recovery";
-
-	const initialStepLabels = [
-		"保存先",
-		"推定結果",
-		"初期ルール",
-		"拡張機能",
-	] as const;
-	const reconfigurationStepLabels = [
-		"保存先",
-		"確認結果",
-		"整理ルール",
-		"変更完了",
-	] as const;
-	const initialSidebarItems = [
-		"保存先フォルダ",
-		"保存パターン推定",
-		"初期ルール選択",
-		"ブラウザ拡張機能",
-	] as const;
-	const reconfigurationSidebarItems = [
-		"保存先の確認",
-		"フォルダーの確認",
-		"整理ルール",
-		"変更内容の保存",
-	] as const;
+	type RuleSource = "inferred" | "preset" | "custom";
 
 	const rulePreviewExamples = [
 		{ course: "情報アーキテクチャ", assignment: "第03回レポート" },
 		{ course: "データベース", assignment: "正規化レポート" },
 	] as const;
+	const englishRulePreviewExamples = [
+		{ course: "Information Architecture", assignment: "Assignment 03" },
+		{ course: "Database", assignment: "Normalization Report" },
+	] as const;
 	const basePreviewValues = createRulePreviewValues();
+	const englishPreviewValues = {
+		...basePreviewValues,
+		term: `${basePreviewValues.year} Spring`,
+		course: "Database",
+		assignment: "Assignment",
+	};
 	let draft: SetupDraft = {
 		baseFolderPath: null,
 		selectedCandidateId: null,
@@ -103,6 +89,8 @@
 	let isPickingFolder = false;
 	let isScanning = false;
 	let isSaving = false;
+	let scanSummary = { scannedFileCount: 0, warningCount: 0 };
+	let manualCourseName = "";
 	let maintenanceProgress: LibraryMaintenanceProgress | null = null;
 	let errorMessage: string | null = null;
 	let successMessage: string | null = null;
@@ -117,19 +105,36 @@
 	let ruleSegments: RuleSegment[] = createRuleSegmentsFromTemplate(
 		RULE_PRESETS[0]?.template ?? "{course}",
 	);
-	let initialMaintenanceSummary: LibraryMaintenanceSummary | null = null;
+	let ruleSource: RuleSource = "preset";
+	let manualRuleMode = false;
+	let folderNameLanguage: "ja" | "en" = "ja";
 	let applicationRecoveryStatus: ApplicationRecoveryStatus | null = null;
 	let applicationRecoveryLoadError: string | null = null;
 	let isCheckingApplicationRecovery = true;
 	let setupPanelHeading: HTMLHeadingElement | null = null;
 	let reconfigureHeading: HTMLHeadingElement | null = null;
 	let reconfigureButton: HTMLButtonElement | null = null;
+	let maintenanceProgressCard: HTMLElement | null = null;
 	const minimumScanLoadingMs = 450;
 	const extensionVerificationStartedAt = new Date().toISOString();
 
 	onMount(() => {
 		void checkApplicationRecoveryStatus();
 	});
+
+	$: if (currentStepIndex === 3) {
+		void focusExtensionInstallScreen();
+	}
+
+	async function focusExtensionInstallScreen(): Promise<void> {
+		await tick();
+		if (typeof window !== "undefined") {
+			window.scrollTo({ top: 0, behavior: "auto" });
+		}
+		document.getElementById("extension-install-heading")?.focus({
+			preventScroll: true,
+		});
+	}
 
 	async function checkApplicationRecoveryStatus(): Promise<void> {
 		isCheckingApplicationRecovery = true;
@@ -155,7 +160,8 @@
 	): boolean {
 		return (
 			status !== null &&
-			(status.database.state !== "ready" ||
+			(status.dataResetRequired === true ||
+				status.database.state !== "ready" ||
 				status.searchIndex.state !== "ready")
 		);
 	}
@@ -238,28 +244,92 @@
 		draft = {
 			...draft,
 			selectedCandidateId: candidateId,
+			selectedRuleId: "inferred",
 			courseOverrides: createCourseOverrides(candidate, draft.courseOverrides),
 		};
+		manualRuleMode = false;
+		ruleSource = "inferred";
 		if (inferredSegments) ruleSegments = inferredSegments;
 	}
 
 	function updateRuleSegments(segments: RuleSegment[]): void {
 		ruleSegments = segments;
+		manualRuleMode = true;
+		ruleSource = "custom";
 		draft = { ...draft, selectedRuleId: "custom" };
 		if (validateRuleSegments(segments) === null) {
 			savedRuleRequiresReplacement = false;
 		}
 	}
 
-	function toggleOverride(overrideId: string): void {
+	function startCustomRule(): void {
+		manualRuleMode = true;
+		ruleSource = "custom";
+		draft = { ...draft, selectedRuleId: "custom" };
+	}
+
+	function selectPreset(presetId: string): void {
+		const preset = RULE_PRESETS.find(({ id }) => id === presetId);
+		if (!preset) return;
+		ruleSource = "preset";
+		draft = { ...draft, selectedRuleId: preset.id };
+	}
+
+	function setCourseOverrideMode(
+		overrideId: string,
+		mode: "common" | "override" | "unmanaged",
+	): void {
 		draft = {
 			...draft,
 			courseOverrides: draft.courseOverrides.map((override) =>
 				override.id === overrideId
-					? { ...override, enabled: !override.enabled }
+					? { ...override, mode, enabled: mode === "override" }
 					: override,
 			),
 		};
+	}
+
+	function addCourseName(courseName: string): void {
+		courseName = courseName.trim();
+		if (
+			!courseName ||
+			draft.courseOverrides.some((item) => item.courseName === courseName)
+		) {
+			return;
+		}
+		draft = {
+			...draft,
+			courseOverrides: [
+				...draft.courseOverrides,
+				{
+					id: `manual-course-${Date.now()}`,
+					courseName,
+					description: "利用者が追加した授業です。",
+					enabled: false,
+					mode: "common",
+				},
+			],
+		};
+	}
+
+	function addManualCourse(): void {
+		addCourseName(manualCourseName);
+		manualCourseName = "";
+	}
+
+	async function addCourseFromFolder(): Promise<void> {
+		try {
+			const path = await pickCourseFolderClient();
+			if (!path) return;
+			const courseName = displayBaseFolderName(path);
+			if (courseName === "まだ選択されていません") return;
+			addCourseName(courseName);
+		} catch (error) {
+			errorMessage =
+				error instanceof Error
+					? error.message
+					: "授業フォルダーを選択できませんでした。";
+		}
 	}
 
 	async function runScan(path: string): Promise<void> {
@@ -271,9 +341,16 @@
 		successMessage = null;
 
 		try {
-			const candidates = await scanExistingStructureClient(path);
+			const scanResult = await scanExistingStructureClient(path);
+			const candidates = scanResult.candidates;
+			scanSummary = {
+				scannedFileCount: scanResult.scannedFileCount,
+				warningCount: scanResult.warningCount,
+			};
 			const selectedCandidate =
-				candidates.find((candidate) => candidate.recommended) ?? null;
+				candidates.find((candidate) => candidate.recommended) ??
+				candidates[0] ??
+				null;
 
 			draft = {
 				...draft,
@@ -289,10 +366,18 @@
 			const inferredSegments = selectedCandidate
 				? inferredCandidateToRuleSegments(selectedCandidate)
 				: null;
-			if (inferredSegments) ruleSegments = inferredSegments;
+			manualRuleMode = inferredSegments === null;
+			ruleSource = manualRuleMode ? "custom" : "inferred";
+			draft = {
+				...draft,
+				selectedRuleId: manualRuleMode ? "custom" : "inferred",
+			};
+			if (inferredSegments) {
+				ruleSegments = inferredSegments;
+			}
 			currentStepIndex = 2;
 		} catch {
-			errorMessage = "スキャン結果の読み込みに失敗しました。";
+			errorMessage = "フォルダー全体の読み込みに失敗しました。";
 		} finally {
 			await waitForMinimumLoadingTime(startedAt);
 			isScanning = false;
@@ -314,7 +399,7 @@
 
 			await runScan(path);
 		} catch {
-			errorMessage = "フォルダ選択に失敗しました。";
+			errorMessage = "フォルダー選択に失敗しました。";
 		} finally {
 			isPickingFolder = false;
 		}
@@ -368,13 +453,19 @@
 		savedConfigurationSnapshot = configurationToSnapshot(configuration);
 		savedRuleRequiresReplacement = editableSegments === null;
 		ruleSegments = editableSegments ?? [];
+		folderNameLanguage = configuration.rule.folderNameLanguage ?? "ja";
+		manualRuleMode = false;
+		ruleSource = "preset";
 		draft = {
 			baseFolderPath: configuration.baseFolderPath,
 			selectedCandidateId: storedCandidate.id,
 			selectedRuleId: configuration.rule.id,
 			candidates: [storedCandidate],
 			courseOverrides: createSavedCourseOverrides(
-				configuration.courseOverrides.map(({ courseName }) => courseName),
+				configuration.courseOverrides.map(({ courseName, mode }) => ({
+					courseName,
+					mode,
+				})),
 			),
 			lastScannedAt: null,
 		};
@@ -396,12 +487,19 @@
 
 		const isReconfiguring = flowMode === "reconfigure";
 		isSaving = true;
-		maintenanceProgress = null;
+		maintenanceProgress = {
+			phase: "scanning",
+			state: "running",
+			completedCount: 0,
+			totalCount: null,
+			warningCount: 0,
+		};
 		errorMessage = null;
 		successMessage = null;
 		let unlistenProgress: UnlistenFn | null = null;
 
 		try {
+			await scrollMaintenanceProgressIntoView();
 			if (isTauriRuntime()) {
 				unlistenProgress = await listen<LibraryMaintenanceProgress>(
 					"library-maintenance-progress",
@@ -410,16 +508,13 @@
 					},
 				);
 			}
-			const enabledCourseOverrides = draft.courseOverrides.filter(
-				(override) => override.enabled,
-			);
 			if (isReconfiguring && savedConfiguration) {
 				const saved = await saveSetupChangesClient({
 					expectedRevision: savedConfiguration.revision,
 					path: draft.baseFolderPath,
 					pattern: selectedCandidate,
-					rule: selectedRule,
-					courseOverrides: enabledCourseOverrides,
+					rule: { ...selectedRule, folderNameLanguage },
+					courseOverrides: draft.courseOverrides,
 				});
 				maintenanceProgress = terminalProgressFromSummary(saved.maintenance);
 				setupStatus = await getSetupStatusClient();
@@ -427,7 +522,7 @@
 				savedConfigurationSnapshot =
 					configurationToSnapshot(savedConfiguration);
 				successMessage = saved.rootChanged
-					? `変更内容を保存し、${saved.rebasedFileCount.toLocaleString()}件の資料情報を新しい保存先へ引き継ぎました。資料ファイルは移動していません。`
+					? `変更内容を保存し、${saved.rebasedFileCount.toLocaleString()}件の資料情報を新しい保存先へ引き継ぎました。`
 					: "変更内容を保存しました。保存済みの資料ファイルは変更していません。";
 				currentStepIndex = 3;
 				flowMode = "recovery";
@@ -436,10 +531,9 @@
 				const saved = await saveInitialSetupClient({
 					path: draft.baseFolderPath,
 					pattern: selectedCandidate,
-					rule: selectedRule,
-					courseOverrides: enabledCourseOverrides,
+					rule: { ...selectedRule, folderNameLanguage },
+					courseOverrides: draft.courseOverrides,
 				});
-				initialMaintenanceSummary = saved.maintenance;
 				maintenanceProgress = terminalProgressFromSummary(saved.maintenance);
 				setupStatus = await getSetupStatusClient();
 				successMessage = `設定を保存し、既存資料${saved.maintenance.indexedFileCount}件の情報を準備しました。`;
@@ -457,6 +551,14 @@
 			unlistenProgress?.();
 			isSaving = false;
 		}
+	}
+
+	async function scrollMaintenanceProgressIntoView(): Promise<void> {
+		await tick();
+		maintenanceProgressCard?.scrollIntoView({
+			behavior: "smooth",
+			block: "end",
+		});
 	}
 
 	async function startReconfiguration(): Promise<void> {
@@ -535,6 +637,20 @@
 		reconfigureButton?.focus();
 	}
 
+	async function handleSetupComplete(): Promise<void> {
+		if (!isTauriRuntime()) {
+			successMessage = "セットアップを完了しました。";
+			return;
+		}
+		try {
+			const { getCurrentWindow } = await import("@tauri-apps/api/window");
+			await getCurrentWindow().close();
+		} catch {
+			successMessage =
+				"セットアップを完了しました。画面を閉じて利用を開始できます。";
+		}
+	}
+
 	$: selectedCandidate =
 		draft.candidates.find(
 			(candidate) => candidate.id === draft.selectedCandidateId,
@@ -546,24 +662,28 @@
 						ruleSegmentsToTemplate(ruleSegments),
 						savedConfiguration,
 					),
-					name: "選択したフォルダーの並び",
-					description: "利用者が組み立てた保存先の並びです。",
+					name:
+						ruleSource === "inferred"
+							? "読み込み結果から選んだルール"
+							: ruleSource === "preset"
+								? "選択した初期ルール"
+								: "自分で作成したルール",
+					description: "このセットアップで使用する保存先の並びです。",
 					template: ruleSegmentsToTemplate(ruleSegments),
-					preview: rulePreviewExamples.map(({ course, assignment }) =>
+					preview: (folderNameLanguage === "en"
+						? englishRulePreviewExamples
+						: rulePreviewExamples
+					).map(({ course, assignment }) =>
 						previewRulePattern(ruleSegmentsToTemplate(ruleSegments), {
-							...basePreviewValues,
+							...(folderNameLanguage === "en"
+								? englishPreviewValues
+								: basePreviewValues),
 							course,
 							assignment,
 						}),
 					),
 				}
 			: null;
-	$: selectedCandidateRank =
-		selectedCandidate === null
-			? null
-			: draft.candidates.findIndex(
-					(candidate) => candidate.id === draft.selectedCandidateId,
-				) + 1;
 	$: currentSelectionSnapshot =
 		draft.baseFolderPath && selectedCandidate && selectedRule
 			? {
@@ -603,20 +723,6 @@
 	$: isReconfiguration = flowMode === "reconfigure";
 	$: isShowingSavedConfiguration =
 		isReconfiguration && draft.lastScannedAt === null;
-	$: activeStepLabels = isReconfiguration
-		? reconfigurationStepLabels
-		: initialStepLabels;
-	$: activeSidebarItems = isReconfiguration
-		? reconfigurationSidebarItems
-		: initialSidebarItems;
-	$: steps = activeStepLabels.map((label, index) => ({
-		label,
-		state: (index < currentStepIndex
-			? "done"
-			: index === currentStepIndex
-				? "current"
-				: "pending") as SetupStepState,
-	}));
 </script>
 
 <svelte:head>
@@ -642,11 +748,6 @@
 								: "初期セットアップ"}
 				</span>
 			</div>
-		</div>
-		<div class="window-actions" aria-hidden="true">
-			<span></span>
-			<span></span>
-			<span></span>
 		</div>
 	</header>
 
@@ -684,458 +785,422 @@
 		<section class="workspace">
 			<aside class="sidebar">
 				<p class="sidebar-label">
-					{isRecoveryMode
-						? "現在の状態と、次にできる操作を確認できます。"
-						: isReconfiguration
-							? "保存先やフォルダーの作り方を変更できます。保存済み資料は移動・削除しません。"
-							: "保存先とフォルダーの作り方を設定します。"}
+					{currentStepIndex === 3
+						? "ブラウザ拡張機能の導入を確認します。"
+						: isRecoveryMode
+							? "現在の状態と、次にできる操作を確認できます。"
+							: isReconfiguration
+								? "保存先やフォルダーの作り方を変更できます。保存済み資料は移動・削除しません。"
+								: "保存先とフォルダーの作り方を設定します。"}
 				</p>
-				{#if isRecoveryMode}
-					<ul class="side-list">
-						<li class="active" aria-current="page">
-							<span class="side-index">✓</span>
-							<span>拡張機能の状態</span>
-						</li>
-					</ul>
-				{:else}
-					<nav aria-label="セットアップの流れ">
-						<ul class="side-list">
-							{#each activeSidebarItems as item, index}
-								<li
-									class:active={index <= currentStepIndex}
-									aria-current={index === currentStepIndex ? "step" : undefined}
-								>
-									<span class="side-index">{index + 1}</span>
-									<span>{item}</span>
-								</li>
-							{/each}
-						</ul>
-					</nav>
+				{#if currentStepIndex !== 3 && !isRecoveryMode}
+					<p class="sidebar-note">
+						選択したフォルダー全体を読み込み、保存方法に合う候補を提案します。
+					</p>
+				{:else if currentStepIndex === 3}
+					<p class="sidebar-note">
+						拡張機能をブラウザへ追加した後、この画面で接続を確認します。
+					</p>
 				{/if}
 			</aside>
 
 			<section class="content">
-				{#if !isRecoveryMode}
-					<div class="progress" aria-label="進捗">
-						{#each steps as item, index}
-							<div
-								class="progress-item"
-								aria-current={item.state === "current" ? "step" : undefined}
-							>
-								<div
-									class:current={item.state === "current"}
-									class:done={item.state === "done"}
-									class="progress-dot"
-								>
-									{#if item.state === "done"}
-										✓
-									{:else}
-										{index + 1}
-									{/if}
-								</div>
-								<span>{item.label}</span>
-							</div>
-						{/each}
-					</div>
-				{/if}
 				{#if currentStepIndex === 3 && errorMessage}
 					<p class="error-banner" role="alert">{errorMessage}</p>
 				{/if}
 				{#if currentStepIndex === 3 && successMessage}
 					<p class="success-banner" role="status">{successMessage}</p>
 				{/if}
-				{#if maintenanceProgress}
-					<section
-						class="maintenance-progress-card"
-						aria-live="polite"
-						aria-atomic="true"
-					>
-						<div class="maintenance-progress-heading">
+				{#if currentStepIndex !== 3}
+					<section class="panel">
+						<div class="panel-header">
 							<div>
-								<p class="section-label">
-									{maintenanceProgress.phase === "completed"
-										? "処理結果"
-										: isReconfiguration
-											? "変更内容を保存中"
-											: "初期設定を保存中"}
+								<h1 bind:this={setupPanelHeading} tabindex="-1">
+									{isReconfiguration
+										? "保存先と整理ルールを確認・変更する"
+										: "大学資料の保存先と整理ルールを設定する"}
+								</h1>
+								<p class="intro">
+									{isReconfiguration
+										? "資料があるフォルダーを選ぶと、現在の構成を確認できます。変更を保存するまで、設定や資料は変更しません。"
+										: "Fuzzyは大学の資料を整理し、課題や締切を見つけやすくするアプリです。大学資料が入っている最上位のフォルダーを1つ選んでください。選択したフォルダー全体を読み込み、保存方法に近い整理ルールを提案します。"}
 								</p>
-								<strong>{maintenancePresentation.title}</strong>
 							</div>
-							<span>{maintenancePresentation.countLabel}</span>
 						</div>
-						<div
-							class:indeterminate={maintenancePresentation.percent === null &&
-								maintenanceProgress.state === "running"}
-							class="maintenance-progress-track"
-							role="progressbar"
-							aria-label="資料情報の準備状況"
-							aria-valuemin="0"
-							aria-valuemax="100"
-							aria-valuenow={maintenancePresentation.percent ?? undefined}
-							aria-valuetext={maintenancePresentation.ariaValueText}
-						>
-							<span style:width={`${maintenancePresentation.percent ?? 30}%`}
-							></span>
-						</div>
-						{#if maintenanceProgress.warningCount > 0}
-							<p class="maintenance-warning">
-								確認が必要な項目:
-								{maintenanceProgress.warningCount.toLocaleString()}件
-							</p>
-						{/if}
-						<p>
-							資料ファイルは移動・削除しません。{maintenancePresentation.availabilityLabel}
-						</p>
-					</section>
-				{/if}
-
-				<section class="panel" hidden={currentStepIndex === 3}>
-					<div class="panel-header">
-						<div>
-							<p class="chip">STEP {currentStepIndex + 1} / 4</p>
-							<h1 bind:this={setupPanelHeading} tabindex="-1">
-								{currentStepIndex === 0
-									? isReconfiguration
-										? "保存先を確認・変更する"
-										: "保存先フォルダーを選ぶ"
-									: isReconfiguration
-										? "フォルダーの並びを確認する"
-										: "保存パターンを確認して、初期ルールを選ぶ"}
-							</h1>
-							<p class="intro">
-								{currentStepIndex === 0
-									? isReconfiguration
-										? "資料があるフォルダーを選ぶと、現在の構成を確認し、整理ルールの候補を表示します。変更を保存するまで、設定や資料は変更しません。"
-										: "資料を保存するフォルダーを選ぶと、既存の構成を読み取り、近い保存パターンを提案します。"
-									: isReconfiguration
-										? "確認結果を参考に、これから使うフォルダーの並びを選びます。"
-										: "スキャン結果に近い保存パターンを確認し、Fuzzyが今後使うフォルダ作成ルールを選びます。"}
-							</p>
-						</div>
-						<button
-							class="primary-button"
-							type="button"
-							on:click={handlePickFolder}
-							disabled={isPickingFolder || isScanning || isSaving}
-						>
-							{#if isPickingFolder}
-								フォルダを選択中...
-							{:else}
-								保存先フォルダを選ぶ
-							{/if}
-						</button>
-					</div>
-
-					<div class="folder-card">
-						<div>
-							<p class="section-label">選択中の保存先</p>
-							<strong>{displayBaseFolderName(draft.baseFolderPath)}</strong>
-							{#if draft.baseFolderPath}
-								<small>選択したフォルダー内だけを確認します。</small>
-							{/if}
-						</div>
-						<div class="folder-meta">
-							<span>
-								{isShowingSavedConfiguration
-									? "今回の確認: まだ実行していません"
-									: `最終スキャン: ${formatScannedAt(draft.lastScannedAt)}`}
-							</span>
+						<div class="folder-picker">
 							<button
-								class:loading={isScanning}
-								class="ghost-button"
+								class="primary-button"
 								type="button"
-								on:click={handleRescan}
-								disabled={!draft.baseFolderPath || isScanning || isSaving}
-								aria-busy={isScanning}
+								on:click={handlePickFolder}
+								disabled={isPickingFolder || isScanning || isSaving}
 							>
-								<span class="ghost-button-label">
-									{#if isScanning}
-										<span class="spinner" aria-hidden="true"></span>
-									{/if}
-									<span>
-										{#if isScanning}
-											再スキャン中...
-										{:else}
-											{isShowingSavedConfiguration
-												? "保存先を確認"
-												: "再スキャン"}
-										{/if}
-									</span>
+								{#if isPickingFolder}
+									フォルダーを選択中...
+								{:else}
+									大学資料の保存先フォルダーを選ぶ
+								{/if}
+							</button>
+						</div>
+
+						<div class="folder-card">
+							<div>
+								<p class="section-label">選択中の保存先</p>
+								<strong>{displayBaseFolderName(draft.baseFolderPath)}</strong>
+								{#if draft.baseFolderPath}
+									<small>選択したフォルダー内だけを確認します。</small>
+								{/if}
+							</div>
+							<div class="folder-meta">
+								<span>
+									{isShowingSavedConfiguration
+										? "今回の確認: まだ実行していません"
+										: `最終スキャン: ${formatScannedAt(draft.lastScannedAt)}`}
 								</span>
-							</button>
-						</div>
-					</div>
-
-					{#if setupStatus.done}
-						<p class="success-banner" role="status">
-							現在の保存先と整理ルールは保存済みです。変更を保存するまで、現在の設定を使い続けます。
-							{#if setupStatus.savedAt}
-								<span>保存日時: {formatScannedAt(setupStatus.savedAt)}</span>
-							{/if}
-						</p>
-					{/if}
-
-					{#if errorMessage}
-						<p class="error-banner" role="alert">{errorMessage}</p>
-						{#if shouldOfferConfigurationReload}
-							<button
-								class="ghost-button reload-configuration-button"
-								type="button"
-								on:click={reloadSavedConfiguration}
-								disabled={isLoadingSavedConfiguration}
-							>
-								{isLoadingSavedConfiguration
-									? "最新の設定を読み込み中..."
-									: "保存済み設定を読み直す"}
-							</button>
-						{/if}
-					{/if}
-
-					{#if successMessage}
-						<p class="success-banner" role="status">{successMessage}</p>
-					{/if}
-
-					<section class="scan-section">
-						<div class="scan-heading">
-							<div>
-								<p class="section-label">
-									{isShowingSavedConfiguration
-										? "保存済み設定"
-										: "保存パターン推定"}
-								</p>
-								<h2>
-									{isShowingSavedConfiguration
-										? "現在のフォルダーの見方"
-										: "推定結果"}
-								</h2>
+								<button
+									class:loading={isScanning}
+									class="ghost-button"
+									type="button"
+									on:click={handleRescan}
+									disabled={!draft.baseFolderPath || isScanning || isSaving}
+									aria-busy={isScanning}
+								>
+									<span class="ghost-button-label">
+										{#if isScanning}
+											<span class="spinner" aria-hidden="true"></span>
+										{/if}
+										<span>
+											{#if isScanning}
+												再スキャン中...
+											{:else}
+												{isShowingSavedConfiguration
+													? "フォルダー全体を読み込む"
+													: "再スキャン"}
+											{/if}
+										</span>
+									</span>
+								</button>
 							</div>
-							<span class="scan-count">{draft.candidates.length} 件</span>
 						</div>
 
-						{#if isShowingSavedConfiguration}
-							<p class="scan-guidance">
-								現在表示しているのは保存済みの設定です。保存先にある資料から現在の並びを確認するには、「保存先を確認」を押してください。資料が入っていないフォルダーだけでは並びを推定しません。
+						{#if isScanning}
+							<section class="scan-loading-card" aria-live="polite">
+								<div class="scan-loading-flow" aria-hidden="true">
+									<span></span>
+								</div>
+								<strong>フォルダー全体を読み込んでいます</strong>
+								<p>選択したフォルダーの中を順番に確認しています。</p>
+							</section>
+						{/if}
+
+						{#if setupStatus.done}
+							<p class="success-banner" role="status">
+								現在の保存先と整理ルールは保存済みです。変更を保存するまで、現在の設定を使い続けます。
+								{#if setupStatus.savedAt}
+									<span>保存日時: {formatScannedAt(setupStatus.savedAt)}</span>
+								{/if}
 							</p>
 						{/if}
 
-						{#if draft.candidates.length === 0}
-							<div class="empty-state">
-								<p>フォルダを選ぶと、保存パターンの候補が表示されます。</p>
-							</div>
-						{:else}
-							<div class="pattern-list">
-								{#each draft.candidates as candidate}
-									<button
-										class:selected={candidate.id === draft.selectedCandidateId}
-										class="pattern-card"
-										type="button"
-										on:click={() => selectCandidate(candidate.id)}
-										aria-pressed={candidate.id === draft.selectedCandidateId}
-									>
-										<div class="pattern-main">
-											<div class="pattern-title-row">
-												<h3>{candidate.name}</h3>
-												{#if candidate.recommended}
-													<span class="badge">
-														{isShowingSavedConfiguration
-															? "現在の設定"
-															: "おすすめ"}
-													</span>
-												{/if}
-												{#if candidate.requiresConfirmation}
-													<span class="badge warning">要確認</span>
-												{/if}
-											</div>
-											<p>{candidate.description}</p>
-											<p class="reason">{candidate.reason}</p>
-										</div>
+						{#if errorMessage}
+							<p class="error-banner" role="alert">{errorMessage}</p>
+							{#if shouldOfferConfigurationReload}
+								<button
+									class="ghost-button reload-configuration-button"
+									type="button"
+									on:click={reloadSavedConfiguration}
+									disabled={isLoadingSavedConfiguration}
+								>
+									{isLoadingSavedConfiguration
+										? "最新の設定を読み込み中..."
+										: "保存済み設定を読み直す"}
+								</button>
+							{/if}
+						{/if}
 
-										<div class="pattern-side">
-											<div class="score-box">
-												<span>
-													{isShowingSavedConfiguration
-														? "状態"
-														: candidate.matchScore === null
-															? "判定"
-															: "一致度"}
-												</span>
-												<strong>
-													{isShowingSavedConfiguration
-														? "保存済み"
-														: candidate.matchScore === null
-															? "要確認"
-															: `${candidate.matchScore}%`}
-												</strong>
-											</div>
-											{#if candidate.folders.length > 0}
-												<div
-													class="example-box"
-													aria-label={`${candidate.name} の例`}
-												>
-													<p>検出された並び</p>
-													<ul>
-														{#each candidate.folders as folder}
-															<li>{folder}</li>
-														{/each}
-													</ul>
+						{#if successMessage}
+							<p class="success-banner" role="status">{successMessage}</p>
+						{/if}
+
+						{#if draft.lastScannedAt}
+							<section class="scan-section">
+								<div class="scan-heading">
+									<div>
+										<p class="section-label">
+											{isShowingSavedConfiguration
+												? "保存済み設定"
+												: "保存パターン推定"}
+										</p>
+										<h2>
+											{isShowingSavedConfiguration
+												? "現在のフォルダーの見方"
+												: "推定結果"}
+										</h2>
+									</div>
+									<span class="scan-count"
+										>{scanSummary.scannedFileCount.toLocaleString()}件を読み込み済み</span
+									>
+								</div>
+
+								{#if isShowingSavedConfiguration}
+									<p class="scan-guidance">
+										現在表示しているのは保存済みの設定です。保存先にある資料から現在の並びを確認するには、「フォルダー全体を読み込む」を押してください。
+									</p>
+								{/if}
+
+								{#if draft.candidates.length === 0}
+									<div class="empty-state">
+										<p>
+											フォルダーを読み込むと、保存方法に近い候補が表示されます。
+										</p>
+									</div>
+								{:else}
+									<div class="pattern-list">
+										{#each draft.candidates as candidate, index}
+											<button
+												class:selected={candidate.id ===
+													draft.selectedCandidateId}
+												class="pattern-card"
+												type="button"
+												on:click={() => selectCandidate(candidate.id)}
+												aria-pressed={candidate.id ===
+													draft.selectedCandidateId}
+											>
+												<div class="pattern-main">
+													<div class="pattern-title-row">
+														<h3>推定結果 {index + 1}: {candidate.name}</h3>
+														{#if candidate.recommended}
+															<span class="badge">
+																{isShowingSavedConfiguration
+																	? "現在の設定"
+																	: "おすすめ"}
+															</span>
+														{/if}
+														{#if candidate.requiresConfirmation}
+															<span class="badge warning">要確認</span>
+														{/if}
+													</div>
+													<p>{candidate.description}</p>
+													<p class="pattern-score">
+														{candidate.matchScore === null
+															? "一致度を算出できません"
+															: `一致度 ${candidate.matchScore}%`}
+													</p>
 												</div>
+											</button>
+										{/each}
+										<button
+											class:selected={manualRuleMode}
+											class="pattern-card"
+											type="button"
+											on:click={startCustomRule}
+											aria-pressed={manualRuleMode}
+										>
+											<div class="pattern-main">
+												<div class="pattern-title-row">
+													<h3>自分でルールを設定する</h3>
+												</div>
+												<p>
+													推定結果を使わず、下のルールセットを土台にして自由に設定します。
+												</p>
+											</div>
+										</button>
+									</div>
+								{/if}
+							</section>
+
+							<section
+								class="folder-name-format"
+								aria-labelledby="folder-name-format-heading"
+							>
+								<div>
+									<p class="section-label">保存形式</p>
+									<h2 id="folder-name-format-heading">
+										フォルダー名の表記を選ぶ
+									</h2>
+								</div>
+								<label>
+									<span>保存するフォルダー名</span>
+									<select bind:value={folderNameLanguage}>
+										<option value="ja">日本語名を使う</option>
+										<option value="en">英語名を使う</option>
+									</select>
+								</label>
+							</section>
+
+							{#if manualRuleMode}
+								<section class="rule-section">
+									<div class="scan-heading">
+										<div>
+											<p class="section-label">カスタムルール</p>
+											<h2>フォルダー作成ルールを設定する</h2>
+										</div>
+									</div>
+
+									{#if savedRuleRequiresReplacement}
+										<p class="warning-banner" role="status">
+											保存済みのフォルダーの作り方は、この画面で安全に編集できる形式ではありません。科目を含む新しい並びを組み立ててから保存してください。現在の設定は、保存するまで変わりません。
+										</p>
+									{/if}
+
+									<RuleBuilder
+										segments={ruleSegments}
+										previewValues={folderNameLanguage === "en"
+											? englishPreviewValues
+											: basePreviewValues}
+										selectedRuleId={draft.selectedRuleId}
+										showPresets={true}
+										onPresetSelect={selectPreset}
+										disabled={isSaving || isScanning}
+										onChange={updateRuleSegments}
+									/>
+								</section>
+							{/if}
+
+							<details class="override-section">
+								<summary>
+									<span>
+										<p class="section-label">授業ごとの扱い</p>
+										<strong>初期例外を設定する（必要な場合）</strong>
+									</span>
+									<span class="details-hint">設定する</span>
+								</summary>
+								<div class="override-explanation">
+									<h2>授業ごとの扱いを選ぶ</h2>
+									<p class="override-help">
+										Fuzzyから提案された授業だけでなく、授業名を入力して追加できます。共通ルールから外すか、Fuzzyの管理対象外にするかを授業ごとに選べます。
+									</p>
+								</div>
+								<div class="override-list">
+									{#each draft.courseOverrides as override}
+										<div class="override-row">
+											<span>
+												<strong>{override.courseName}</strong>
+												<small>この授業に適用する扱いを選びます。</small>
+											</span>
+											<select
+												value={override.mode}
+												on:change={(event) =>
+													setCourseOverrideMode(
+														override.id,
+														event.currentTarget.value as
+															"common" | "override" | "unmanaged",
+													)}
+											>
+												<option value="common">共通ルールを使う</option>
+												<option value="override">共通ルールから外す</option>
+												<option value="unmanaged">Fuzzyで管理しない</option>
+											</select>
+										</div>
+									{/each}
+									<div class="manual-course-row">
+										<input
+											placeholder="授業名を入力"
+											bind:value={manualCourseName}
+											on:keydown={(event) => {
+												if (event.key === "Enter") addManualCourse();
+											}}
+										/>
+										<button
+											class="ghost-button"
+											type="button"
+											on:click={addManualCourse}
+											disabled={!manualCourseName.trim()}
+										>
+											授業を追加
+										</button>
+										<button
+											class="ghost-button"
+											type="button"
+											on:click={addCourseFromFolder}
+											disabled={isSaving || isScanning}
+										>
+											フォルダーから授業を追加
+										</button>
+									</div>
+								</div>
+							</details>
+
+							<section class="selection-summary">
+								<div>
+									<p class="section-label">保存内容</p>
+									<h2>現在の選択内容</h2>
+								</div>
+								<div class="summary-card">
+									<p>
+										<strong>保存先:</strong>
+										{displayBaseFolderName(draft.baseFolderPath)}
+									</p>
+									<p>
+										<strong>選択したルール:</strong>
+										{selectedRule?.name ?? "未選択"}
+									</p>
+									<p>
+										<strong>選択方法:</strong>
+										{ruleSource === "inferred"
+											? "読み込み結果から選択"
+											: ruleSource === "preset"
+												? "初期ルールから選択"
+												: "自分で作成"}
+									</p>
+									{#if selectedRule}
+										<p><strong>保存例:</strong> {selectedRule.preview[0]}</p>
+									{/if}
+									<p>
+										<strong>個別設定:</strong>
+										{draft.courseOverrides.filter(
+											({ mode }) => mode !== "common",
+										).length}件
+									</p>
+									{#if isReconfiguration}
+										<div class="change-summary" aria-live="polite">
+											<strong>今回の変更</strong>
+											{#if setupChanges.length > 0}
+												<ul>
+													{#each setupChanges as change}
+														<li>{change}</li>
+													{/each}
+												</ul>
+											{:else}
+												<p>保存が必要な変更はありません。</p>
 											{/if}
 										</div>
-									</button>
-								{/each}
-							</div>
-						{/if}
-					</section>
-
-					<section class="rule-section">
-						<div class="scan-heading">
-							<div>
-								<p class="section-label">
-									{isReconfiguration ? "整理ルール" : "初期ルール"}
-								</p>
-								<h2>フォルダー作成ルール</h2>
-							</div>
-						</div>
-
-						{#if savedRuleRequiresReplacement}
-							<p class="warning-banner" role="status">
-								保存済みのフォルダーの作り方は、この画面で安全に編集できる形式ではありません。科目を含む新しい並びを組み立ててから保存してください。現在の設定は、保存するまで変わりません。
-							</p>
-						{/if}
-
-						<RuleBuilder
-							segments={ruleSegments}
-							previewValues={basePreviewValues}
-							disabled={isSaving || isScanning}
-							onChange={updateRuleSegments}
-						/>
-					</section>
-
-					{#if draft.courseOverrides.length > 0}
-						<section class="override-section">
-							<div class="override-explanation">
-								<p class="section-label">
-									{isReconfiguration ? "授業ごとの扱い" : "初期例外"}
-								</p>
-								<h2>共通ルールから外す授業</h2>
-								<p class="override-help">
-									チェックした授業は、選択中の共通ルールから外して保存します。たとえば「年度
-									/ 科目 / 課題」を選んでいても、その授業だけ「科目 /
-									課題」のように短い並びで扱います。
-								</p>
-							</div>
-							<div class="override-list">
-								{#each draft.courseOverrides as override}
-									<label class="override-row">
-										<input
-											type="checkbox"
-											checked={override.enabled}
-											on:change={() => toggleOverride(override.id)}
-										/>
-										<span>
-											<strong>{override.courseName}</strong>
-											<small
-												>このコースだけ共通ルールから外し、科目フォルダ直下で保存します。</small
-											>
-										</span>
-									</label>
-								{/each}
-							</div>
-						</section>
-					{/if}
-
-					<section class="selection-summary">
-						<div>
-							<p class="section-label">保存内容</p>
-							<h2>現在の選択内容</h2>
-						</div>
-						<div class="summary-card">
-							<p>
-								<strong>保存先:</strong>
-								{displayBaseFolderName(draft.baseFolderPath)}
-							</p>
-							<p>
-								<strong>推定候補:</strong>
-								{selectedCandidate?.name ?? "未選択"}
-							</p>
-							{#if selectedCandidate}
-								<p>
-									<strong>候補順位:</strong>
-									{selectedCandidateRank} / {draft.candidates.length}
-								</p>
-								<p>
-									<strong>一致度:</strong>
-									{selectedCandidate.matchScore === null
-										? "要確認"
-										: `${selectedCandidate.matchScore}%`}
-								</p>
-							{/if}
-							<p>
-								<strong
-									>{isReconfiguration ? "整理ルール" : "初期ルール"}:</strong
-								>
-								{selectedRule?.name ?? "未選択"}
-							</p>
-							{#if selectedRule}
-								<p><strong>保存例:</strong> {selectedRule.preview[0]}</p>
-							{/if}
-							<p>
-								<strong
-									>{isReconfiguration
-										? "共通ルールから外す授業"
-										: "初期例外"}:</strong
-								>
-								{draft.courseOverrides.filter((override) => override.enabled)
-									.length}件
-							</p>
-							{#if isReconfiguration}
-								<div class="change-summary" aria-live="polite">
-									<strong>今回の変更</strong>
-									{#if setupChanges.length > 0}
-										<ul>
-											{#each setupChanges as change}
-												<li>{change}</li>
-											{/each}
-										</ul>
-									{:else}
-										<p>保存が必要な変更はありません。</p>
 									{/if}
 								</div>
-							{/if}
-						</div>
-					</section>
+							</section>
 
-					<div class="action-row">
-						{#if isReconfiguration}
-							<button
-								class="ghost-button"
-								type="button"
-								on:click={cancelReconfiguration}
-								disabled={isSaving || isScanning || isPickingFolder}
-							>
-								変更せず戻る
-							</button>
+							<div class="action-row">
+								{#if isReconfiguration}
+									<button
+										class="ghost-button"
+										type="button"
+										on:click={cancelReconfiguration}
+										disabled={isSaving || isScanning || isPickingFolder}
+									>
+										変更せず戻る
+									</button>
+								{/if}
+								<button
+									class="primary-button"
+									type="button"
+									on:click={handleSaveInitialSetup}
+									disabled={!canSaveSetup ||
+										isSaving ||
+										isScanning ||
+										isPickingFolder}
+									aria-busy={isSaving}
+								>
+									{#if isSaving}
+										保存中...
+									{:else}
+										{isReconfiguration
+											? "変更内容を保存"
+											: "この内容で初期設定を保存"}
+									{/if}
+								</button>
+							</div>
 						{/if}
-						<button
-							class="primary-button"
-							type="button"
-							on:click={handleSaveInitialSetup}
-							disabled={!canSaveSetup ||
-								isSaving ||
-								isScanning ||
-								isPickingFolder}
-							aria-busy={isSaving}
-						>
-							{#if isSaving}
-								保存中...
-							{:else}
-								{isReconfiguration
-									? "変更内容を保存"
-									: "この内容で初期設定を保存"}
-							{/if}
-						</button>
-					</div>
-				</section>
+					</section>
+				{/if}
 				{#if currentStepIndex === 3}
 					{#if isRecoveryMode}
 						<section
@@ -1199,10 +1264,46 @@
 					{:else}
 						<ExtensionInstallStep
 							verificationStartedAt={extensionVerificationStartedAt}
-							maintenanceSummary={initialMaintenanceSummary}
-							onBack={() => (currentStepIndex = 2)}
+							onComplete={handleSetupComplete}
 						/>
 					{/if}
+				{/if}
+				{#if maintenanceProgress && currentStepIndex !== 3}
+					<section
+						bind:this={maintenanceProgressCard}
+						class="maintenance-progress-card"
+						aria-live="polite"
+						aria-atomic="true"
+					>
+						<div class="maintenance-progress-heading">
+							<div>
+								<p class="section-label">
+									{maintenanceProgress.phase === "completed"
+										? "処理結果"
+										: isReconfiguration
+											? "変更内容を保存中"
+											: "初期設定を保存中"}
+								</p>
+								<strong>{maintenancePresentation.title}</strong>
+							</div>
+							<span>{maintenancePresentation.countLabel}</span>
+						</div>
+						<div
+							class:indeterminate={maintenancePresentation.percent === null &&
+								maintenanceProgress.state === "running"}
+							class="maintenance-progress-track"
+							role="progressbar"
+							aria-label="資料情報の準備状況"
+							aria-valuemin="0"
+							aria-valuemax="100"
+							aria-valuenow={maintenancePresentation.percent ?? undefined}
+							aria-valuetext={maintenancePresentation.ariaValueText}
+						>
+							<span style:width={`${maintenancePresentation.percent ?? 30}%`}
+							></span>
+						</div>
+						<p>{maintenancePresentation.availabilityLabel}</p>
+					</section>
 				{/if}
 			</section>
 		</section>
@@ -1212,6 +1313,9 @@
 <style>
 	:global(body) {
 		margin: 0;
+		width: 100%;
+		height: 100%;
+		overflow: hidden;
 		font-family: "BIZ UDPGothic", "Yu Gothic UI", "Segoe UI", sans-serif;
 		background:
 			linear-gradient(
@@ -1361,9 +1465,12 @@
 	}
 
 	.window {
-		min-height: 100vh;
-		padding: 10px 14px 14px;
+		width: 100%;
+		height: 100vh;
+		min-height: 0;
+		padding: 0;
 		box-sizing: border-box;
+		overflow: hidden;
 	}
 
 	.titlebar {
@@ -1380,9 +1487,6 @@
 
 	.brand,
 	.brand-copy,
-	.window-actions,
-	.progress,
-	.progress-item,
 	.panel-header,
 	.folder-card,
 	.scan-heading,
@@ -1392,6 +1496,9 @@
 	}
 
 	.maintenance-progress-card {
+		position: sticky;
+		bottom: 12px;
+		z-index: 4;
 		margin-top: 18px;
 		padding: 16px;
 		border: 1px solid var(--fuzzy-color-primary-overlay);
@@ -1434,11 +1541,13 @@
 		display: block;
 		height: 100%;
 		border-radius: inherit;
-		background: linear-gradient(
-			90deg,
-			var(--fuzzy-color-primary),
-			var(--fuzzy-color-primary)
+		background: repeating-linear-gradient(
+			-45deg,
+			var(--fuzzy-color-primary) 0 14px,
+			var(--fuzzy-color-primary-strong) 14px 28px
 		);
+		background-size: 200% 100%;
+		animation: progress-flow 1.1s linear infinite;
 		transition: width 180ms ease;
 	}
 
@@ -1452,6 +1561,15 @@
 		}
 		to {
 			transform: translateX(333%);
+		}
+	}
+
+	@keyframes progress-flow {
+		from {
+			background-position: 0 0;
+		}
+		to {
+			background-position: 56px 0;
 		}
 	}
 
@@ -1480,19 +1598,67 @@
 		font-size: 0.82rem;
 	}
 
-	.window-actions {
-		gap: 8px;
+	.folder-picker {
+		display: flex;
+		justify-content: center;
+		margin-top: 18px;
 	}
 
-	.window-actions span {
-		width: 10px;
-		height: 10px;
+	.scan-loading-card {
+		margin-top: 18px;
+		padding: 18px 20px;
+		border: 1px solid var(--fuzzy-color-primary-overlay-strong);
+		border-radius: 10px;
+		background: var(--fuzzy-color-primary-soft);
+		color: var(--fuzzy-color-primary-strong);
+	}
+
+	.scan-loading-card strong {
+		display: block;
+		margin-top: 10px;
+	}
+
+	.scan-loading-card p {
+		margin: 5px 0 0;
+		font-size: 0.78rem;
+		color: var(--fuzzy-color-text-muted);
+	}
+
+	.scan-loading-flow {
+		height: 8px;
+		overflow: hidden;
 		border-radius: 999px;
-		background: var(--fuzzy-color-border);
+		background: var(--fuzzy-color-primary-overlay);
+	}
+
+	.scan-loading-flow span {
+		display: block;
+		width: 42%;
+		height: 100%;
+		border-radius: inherit;
+		background: repeating-linear-gradient(
+			-45deg,
+			var(--fuzzy-color-primary) 0 14px,
+			var(--fuzzy-color-primary-strong) 14px 28px
+		);
+		background-size: 200% 100%;
+		animation: scan-flow 1s linear infinite;
+	}
+
+	@keyframes scan-flow {
+		from {
+			transform: translateX(-120%);
+			background-position: 0 0;
+		}
+		to {
+			transform: translateX(260%);
+			background-position: 56px 0;
+		}
 	}
 
 	.workspace {
-		min-height: calc(100vh - 56px);
+		height: calc(100vh - 42px);
+		min-height: 0;
 		display: grid;
 		grid-template-columns: 248px minmax(0, 1fr);
 		border-radius: 0 0 20px 20px;
@@ -1519,42 +1685,19 @@
 		color: var(--fuzzy-color-text-muted);
 	}
 
-	.side-list {
+	.sidebar-note {
 		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: grid;
-		gap: 10px;
-	}
-
-	.side-list li {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 10px 12px;
-		border-radius: 8px;
+		font-size: 0.76rem;
+		line-height: 1.7;
 		color: var(--fuzzy-color-text-muted);
-		font-size: 0.88rem;
-	}
-
-	.side-list li.active {
-		background: var(--fuzzy-color-primary-overlay);
-		color: var(--fuzzy-color-primary);
-		font-weight: 700;
-	}
-
-	.side-index {
-		width: 22px;
-		height: 22px;
-		display: grid;
-		place-items: center;
-		border-radius: 999px;
-		background: var(--fuzzy-color-primary-overlay);
-		font-size: 0.74rem;
 	}
 
 	.content {
+		min-width: 0;
+		min-height: 0;
 		padding: 22px 24px 28px;
+		overflow-x: hidden;
+		overflow-y: auto;
 		background:
 			radial-gradient(
 				circle at top,
@@ -1566,40 +1709,6 @@
 				var(--fuzzy-color-surface-glass),
 				var(--fuzzy-color-surface-glass)
 			);
-	}
-
-	.progress {
-		justify-content: flex-end;
-		gap: 18px;
-		font-size: 0.74rem;
-		color: var(--fuzzy-color-text-muted);
-	}
-
-	.progress-item {
-		align-items: center;
-		gap: 8px;
-	}
-
-	.progress-dot {
-		width: 18px;
-		height: 18px;
-		display: grid;
-		place-items: center;
-		border-radius: 999px;
-		font-size: 0.7rem;
-		font-weight: 700;
-		background: var(--fuzzy-color-border);
-		color: var(--fuzzy-color-text-muted);
-	}
-
-	.progress-dot.done,
-	.progress-dot.current {
-		background: var(--fuzzy-color-primary);
-		color: var(--fuzzy-color-surface);
-	}
-
-	.progress-dot.current {
-		box-shadow: 0 0 0 4px var(--fuzzy-color-primary-overlay);
 	}
 
 	.panel {
@@ -1618,17 +1727,6 @@
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 16px;
-	}
-
-	.chip {
-		width: fit-content;
-		margin: 0 0 12px;
-		padding: 4px 10px;
-		border-radius: 999px;
-		background: var(--fuzzy-color-primary-overlay);
-		color: var(--fuzzy-color-primary);
-		font-size: 0.7rem;
-		font-weight: 700;
 	}
 
 	h1,
@@ -1763,7 +1861,7 @@
 
 	.pattern-card {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) 260px;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 18px;
 	}
 
@@ -1771,6 +1869,41 @@
 		border-color: var(--fuzzy-color-primary);
 		box-shadow: 0 0 0 3px var(--fuzzy-color-primary-overlay);
 		transform: translateY(-1px);
+	}
+
+	.folder-name-format {
+		margin-top: 24px;
+		padding: 16px 18px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 18px;
+		border: 1px solid var(--fuzzy-color-border-overlay);
+		border-radius: 8px;
+		background: var(--fuzzy-color-surface-muted);
+	}
+
+	.folder-name-format h2 {
+		margin: 0;
+		font-size: 0.98rem;
+	}
+
+	.folder-name-format label {
+		display: grid;
+		gap: 6px;
+		min-width: 220px;
+		color: var(--fuzzy-color-text-muted);
+		font-size: 0.72rem;
+		font-weight: 700;
+	}
+
+	.folder-name-format select {
+		padding: 9px 11px;
+		border: 1px solid var(--fuzzy-color-border);
+		border-radius: 8px;
+		background: var(--fuzzy-color-surface);
+		color: var(--fuzzy-color-text);
+		font: inherit;
 	}
 
 	.pattern-title-row {
@@ -1792,41 +1925,11 @@
 		color: var(--fuzzy-color-text-muted);
 	}
 
-	.reason {
-		margin-top: 10px;
-		color: var(--fuzzy-color-text);
-		font-weight: 700;
-	}
-
-	.pattern-side {
-		display: grid;
-		gap: 12px;
-	}
-
-	.score-box,
-	.example-box {
-		padding: 12px 14px;
-		border-radius: 8px;
-	}
-
-	.score-box {
-		background: linear-gradient(
-			180deg,
-			var(--fuzzy-color-primary-soft) 0%,
-			var(--fuzzy-color-primary-soft) 100%
-		);
-		color: var(--fuzzy-color-primary);
-	}
-
-	.score-box span {
-		display: block;
-		margin-bottom: 4px;
-		font-size: 0.72rem;
-		font-weight: 700;
-	}
-
-	.score-box strong {
-		font-size: 1.3rem;
+	.pattern-score {
+		margin-top: 10px !important;
+		color: var(--fuzzy-color-primary) !important;
+		font-size: 0.76rem !important;
+		font-weight: 800;
 	}
 
 	.badge {
@@ -1836,24 +1939,6 @@
 		color: var(--fuzzy-color-warning);
 		font-size: 0.67rem;
 		font-weight: 700;
-	}
-
-	.example-box {
-		background: var(--fuzzy-color-background);
-		color: var(--fuzzy-color-text-muted);
-		font-size: 0.72rem;
-	}
-
-	.example-box p {
-		margin-bottom: 8px;
-		font-weight: 700;
-		color: var(--fuzzy-color-text);
-	}
-
-	.example-box ul {
-		margin: 0;
-		padding-left: 1rem;
-		line-height: 1.6;
 	}
 
 	.override-row {
@@ -1872,8 +1957,33 @@
 		display: none;
 	}
 
-	.override-row input {
-		margin-top: 2px;
+	.override-section {
+		padding: 14px 16px;
+		border: 1px solid var(--fuzzy-color-border-overlay);
+		border-radius: 10px;
+		background: var(--fuzzy-color-surface-muted);
+	}
+
+	.override-section summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		cursor: pointer;
+		list-style: none;
+	}
+
+	.override-section summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.override-section summary strong {
+		font-size: 0.92rem;
+	}
+
+	.details-hint {
+		color: var(--fuzzy-color-text-muted);
+		font-size: 0.74rem;
 	}
 
 	.override-row small {
@@ -1881,6 +1991,20 @@
 		margin-top: 3px;
 		color: var(--fuzzy-color-text-muted);
 		line-height: 1.5;
+	}
+
+	.override-row select {
+		min-width: 190px;
+		font-size: 0.76rem;
+	}
+
+	.manual-course-row {
+		display: flex;
+		gap: 8px;
+	}
+
+	.manual-course-row input {
+		flex: 1;
 	}
 
 	.override-help {
@@ -2058,11 +2182,6 @@
 			border-bottom: 1px solid var(--fuzzy-color-border-overlay);
 		}
 
-		.progress {
-			justify-content: flex-start;
-			flex-wrap: wrap;
-		}
-
 		.panel-header,
 		.folder-card,
 		.scan-heading,
@@ -2074,7 +2193,7 @@
 
 	@media (max-width: 720px) {
 		.window {
-			padding: 8px;
+			padding: 0;
 		}
 
 		.content {
@@ -2097,6 +2216,15 @@
 
 		.pattern-card {
 			grid-template-columns: 1fr;
+		}
+
+		.folder-name-format {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.folder-name-format label {
+			min-width: 0;
 		}
 
 		.folder-meta {

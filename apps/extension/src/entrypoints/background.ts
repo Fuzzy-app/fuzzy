@@ -166,7 +166,10 @@ export default defineBackground(() => {
 		void checkLatestSyncEvent();
 	};
 
+	let notificationMonitoringStarted = false;
 	const startNotificationMonitoring = () => {
+		if (notificationMonitoringStarted) return;
+		notificationMonitoringStarted = true;
 		startSyncNotificationMonitoring();
 		deadlineNotificationMonitor.start();
 		void reportExtensionRuntimeOnce();

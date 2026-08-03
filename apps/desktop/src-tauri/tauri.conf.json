@@ -13,7 +13,7 @@
 	"app": {
 		"windows": [
 			{
-				"title": "Fuzzy セットアップ・保守",
+				"title": "Fuzzy セットアップ",
 				"width": 1080,
 				"height": 760,
 				"resizable": true
@@ -39,7 +39,12 @@
 			"nsis": {
 				"installMode": "currentUser",
 				"languages": ["Japanese", "English"],
-				"installerHooks": "./windows/installer-hooks.nsh"
+				"customLanguageFiles": {
+					"Japanese": "./windows/installer-language-ja.nsh",
+					"English": "./windows/installer-language-en.nsh"
+				},
+				"installerHooks": "./windows/installer-hooks.nsh",
+				"template": "./windows/installer.nsi"
 			}
 		},
 		"icon": [

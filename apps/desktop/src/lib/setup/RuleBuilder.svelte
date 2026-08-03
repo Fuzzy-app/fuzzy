@@ -17,6 +17,13 @@
 	export let previewValues: RulePreviewValues;
 	export let disabled = false;
 	export let onChange: (segments: RuleSegment[]) => void = () => undefined;
+	export let selectedRuleId: string | null = null;
+	export let onPresetSelect: (presetId: string) => void = () => undefined;
+	export let showPresets = true;
+
+	function labelFor(kind: RuleSegmentKind): string {
+		return RULE_SEGMENT_LABELS[kind];
+	}
 
 	const segmentControls = new Map<string, HTMLSelectElement>();
 	let announcement = "";
@@ -62,7 +69,7 @@
 		[next[index], next[target]] = [next[target], next[index]];
 		const moved = next[target];
 		update(next);
-		announcement = `${RULE_SEGMENT_LABELS[moved.kind]}を${target + 1}番目へ移動しました。`;
+		announcement = `${labelFor(moved.kind)}を${target + 1}番目へ移動しました。`;
 		await tick();
 		segmentControls.get(moved.id)?.focus();
 	}
@@ -71,7 +78,7 @@
 		const removed = segments[index];
 		const focusTarget = segments[index + 1] ?? segments[index - 1] ?? null;
 		update(segments.filter((_, itemIndex) => itemIndex !== index));
-		announcement = `${RULE_SEGMENT_LABELS[removed.kind]}を削除しました。`;
+		announcement = `${labelFor(removed.kind)}を削除しました。`;
 		await tick();
 		if (focusTarget) segmentControls.get(focusTarget.id)?.focus();
 	}
@@ -79,101 +86,152 @@
 	$: validationError = validateRuleSegments(segments);
 </script>
 
-<div class="presets" aria-label="よく使う並び">
-	{#each RULE_PRESETS as preset}
-		<button
-			type="button"
-			on:click={() => update(createRuleSegmentsFromTemplate(preset.template))}
-			{disabled}
-		>
-			<strong>{preset.name}</strong>
-			<span>{preset.description}</span>
-		</button>
-	{/each}
-</div>
+{#if showPresets}
+	<section class="rule-set-card" aria-labelledby="rule-set-heading">
+		<div class="rule-set-heading">
+			<div>
+				<p class="section-label">ルールセット</p>
+				<h3 id="rule-set-heading">保存方法に近いルールを選ぶ</h3>
+			</div>
+		</div>
+		<div class="presets" aria-label="ルールセット">
+			{#each RULE_PRESETS as preset}
+				<button
+					class:selected={selectedRuleId === preset.id}
+					type="button"
+					on:click={() => {
+						update(createRuleSegmentsFromTemplate(preset.template));
+						onPresetSelect(preset.id);
+					}}
+					{disabled}
+				>
+					<strong>{preset.name}</strong>
+					<span>{preset.description}</span>
+				</button>
+			{/each}
+		</div>
+	</section>
+{/if}
 
-<div class="builder" aria-label="フォルダーの並び">
-	{#each segments as segment, index (segment.id)}
-		<div class="row">
-			<select
-				use:registerSegmentControl={segment.id}
-				aria-label={`${index + 1}番目のフォルダー`}
-				aria-invalid={validationError ? "true" : undefined}
-				aria-describedby={validationError
-					? "rule-builder-validation"
-					: undefined}
-				value={segment.kind}
-				on:change={(event) =>
-					changeKind(index, event.currentTarget.value as RuleSegmentKind)}
-				{disabled}
-			>
-				{#each RULE_SEGMENT_KINDS as kind}
-					<option value={kind}>{RULE_SEGMENT_LABELS[kind]}</option>
-				{/each}
-			</select>
-			{#if segment.kind === "fixed"}
-				<input
-					aria-label={`${index + 1}番目の固定フォルダー名`}
+<section class="custom-rule-card" aria-labelledby="custom-rule-heading">
+	<div>
+		<p class="section-label">カスタムルール</p>
+		<h3 id="custom-rule-heading">下の項目を自由に変更する</h3>
+		<p class="custom-rule-help">
+			ルールセットを選んだ後でも、項目の順番や固定フォルダー名を変更できます。
+		</p>
+	</div>
+
+	<div class="builder" aria-label="カスタムルールのフォルダーの並び">
+		{#each segments as segment, index (segment.id)}
+			<div class="row">
+				<select
+					use:registerSegmentControl={segment.id}
+					aria-label={`${index + 1}番目のフォルダー`}
 					aria-invalid={validationError ? "true" : undefined}
 					aria-describedby={validationError
 						? "rule-builder-validation"
 						: undefined}
-					placeholder="例: 配布資料"
-					value={segment.value ?? ""}
-					on:input={(event) =>
-						changeFixedName(index, event.currentTarget.value)}
+					value={segment.kind}
+					on:change={(event) =>
+						changeKind(index, event.currentTarget.value as RuleSegmentKind)}
 					{disabled}
-				/>
-			{/if}
-			<div class="actions">
-				<button
-					type="button"
-					on:click={() => move(index, -1)}
-					disabled={disabled || index === 0}
-					aria-label={`${RULE_SEGMENT_LABELS[segment.kind]}を上へ移動`}
-					>上へ</button
 				>
-				<button
-					type="button"
-					on:click={() => move(index, 1)}
-					disabled={disabled || index === segments.length - 1}
-					aria-label={`${RULE_SEGMENT_LABELS[segment.kind]}を下へ移動`}
-					>下へ</button
-				>
-				<button
-					type="button"
-					on:click={() => remove(index)}
-					{disabled}
-					aria-label={`${RULE_SEGMENT_LABELS[segment.kind]}を削除`}>削除</button
-				>
+					{#each RULE_SEGMENT_KINDS as kind}
+						<option value={kind}>{labelFor(kind)}</option>
+					{/each}
+				</select>
+				{#if segment.kind === "fixed"}
+					<input
+						aria-label={`${index + 1}番目の固定フォルダー名`}
+						aria-invalid={validationError ? "true" : undefined}
+						aria-describedby={validationError
+							? "rule-builder-validation"
+							: undefined}
+						placeholder="例: 配布資料"
+						value={segment.value ?? ""}
+						on:input={(event) =>
+							changeFixedName(index, event.currentTarget.value)}
+						{disabled}
+					/>
+				{/if}
+				<div class="actions">
+					<button
+						type="button"
+						on:click={() => move(index, -1)}
+						disabled={disabled || index === 0}
+						aria-label={`${labelFor(segment.kind)}を上へ移動`}>上へ</button
+					>
+					<button
+						type="button"
+						on:click={() => move(index, 1)}
+						disabled={disabled || index === segments.length - 1}
+						aria-label={`${labelFor(segment.kind)}を下へ移動`}>下へ</button
+					>
+					<button
+						class="danger-button"
+						type="button"
+						on:click={() => remove(index)}
+						{disabled}
+						aria-label={`${labelFor(segment.kind)}を削除`}>削除</button
+					>
+				</div>
 			</div>
-		</div>
-	{/each}
-	<button
-		class="add"
-		type="button"
-		on:click={() =>
-			update([...segments, createRuleSegment("fixed", segments.length)])}
-		{disabled}>フォルダーを追加</button
-	>
-</div>
+		{/each}
+		<button
+			class="add"
+			type="button"
+			on:click={() =>
+				update([...segments, createRuleSegment("fixed", segments.length)])}
+			{disabled}>フォルダーを追加</button
+		>
+	</div>
 
-{#if validationError}
-	<p class="validation" id="rule-builder-validation" role="alert">
-		{validationError}
-	</p>
-{/if}
-<p class="sr-only" aria-live="polite">{announcement}</p>
-<div class="preview">
-	<p>実際のフォルダー名での例</p>
-	<strong>{previewRuleSegments(segments, previewValues)}</strong>
-</div>
+	{#if validationError}
+		<p class="validation" id="rule-builder-validation" role="alert">
+			{validationError}
+		</p>
+	{/if}
+	<p class="sr-only" aria-live="polite">{announcement}</p>
+	<div class="preview">
+		<p>実際のフォルダー名での例</p>
+		<strong>{previewRuleSegments(segments, previewValues)}</strong>
+	</div>
+</section>
 
 <style>
 	.presets {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 10px;
+	}
+	.rule-set-card,
+	.custom-rule-card {
+		padding: 14px;
+		border: 1px solid var(--fuzzy-color-border);
+		border-radius: 12px;
+		background: var(--fuzzy-color-surface-muted);
+	}
+	.custom-rule-card {
+		margin-top: 14px;
+	}
+	.rule-set-heading {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 10px;
+	}
+	.rule-set-heading h3,
+	.custom-rule-card h3 {
+		margin: 0;
+		font-size: 0.92rem;
+	}
+	.custom-rule-help {
+		margin: 5px 0 0;
+		color: var(--fuzzy-color-text-muted);
+		font-size: 0.74rem;
+		line-height: 1.6;
 	}
 	.presets button,
 	.row,
@@ -188,6 +246,10 @@
 		padding: 12px;
 		color: var(--fuzzy-color-text);
 		text-align: left;
+	}
+	.presets button.selected {
+		border-color: var(--fuzzy-color-primary);
+		box-shadow: 0 0 0 3px var(--fuzzy-color-primary-overlay);
 	}
 	.presets span,
 	.preview p {
@@ -243,6 +305,10 @@
 	.add {
 		background: var(--fuzzy-color-surface-muted);
 		color: var(--fuzzy-color-text-secondary);
+	}
+	.actions .danger-button {
+		background: var(--fuzzy-color-danger-soft);
+		color: var(--fuzzy-color-danger);
 	}
 	.add {
 		justify-self: start;

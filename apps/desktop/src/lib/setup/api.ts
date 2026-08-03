@@ -6,6 +6,7 @@ import type {
 	InitialSetupPayload,
 	PatternCandidate,
 	SavedSetupConfiguration,
+	ScanExistingStructureResult,
 	SetupChangesPayload,
 	SetupStatus,
 } from "./types";
@@ -53,14 +54,14 @@ const previewCandidates: PatternCandidate[] = [
 	{
 		id: "year-course-assignment",
 		name: "年度 / 科目 / 課題",
-		description: "年度単位でまとめつつ、各科目の中に課題フォルダを配置する構成です。",
+		description: "年度単位でまとめつつ、各科目の中に課題フォルダーを配置する構成です。",
 		folders: ["2026", ...createPreviewCourseFolders("2026")],
 		directorySegments: [{ kind: "year" }, { kind: "course" }, { kind: "assignment" }],
 		courseSegmentIndex: 1,
 		fileNameTemplate: null,
 		matchScore: 92,
 		evaluatedCount: 12,
-		reason: "年度フォルダと科目名フォルダの並びが最も多く見つかりました。",
+		reason: "年度フォルダーと科目名フォルダーの並びが最も多く見つかりました。",
 		recommended: true,
 		requiresConfirmation: false,
 	},
@@ -74,13 +75,13 @@ const previewCandidates: PatternCandidate[] = [
 		fileNameTemplate: null,
 		matchScore: 76,
 		evaluatedCount: 12,
-		reason: "年度がないフォルダも一部含まれていたため候補として残しています。",
+		reason: "年度がないフォルダーも一部含まれていたため候補として残しています。",
 		recommended: false,
 		requiresConfirmation: false,
 	},
 	{
 		id: "download-flat",
-		name: "単一フォルダ保存",
+		name: "単一フォルダー保存",
 		description: "ダウンロード先を固定し、課題名だけで管理する構成です。",
 		folders: previewCourses.map(({ name, assignment }) => `${name}_${assignment}`),
 		directorySegments: null,
@@ -88,7 +89,7 @@ const previewCandidates: PatternCandidate[] = [
 		fileNameTemplate: null,
 		matchScore: 41,
 		evaluatedCount: 12,
-		reason: "課題名のみのフォルダが少数存在しました。",
+		reason: "課題名のみのフォルダーが少数存在しました。",
 		recommended: false,
 		requiresConfirmation: false,
 	},
@@ -106,8 +107,14 @@ export const previewSetupAdapter: SetupRuntime = {
 		switch (command) {
 			case "pick_base_folder":
 				return previewFolder as T;
+			case "pick_course_folder":
+				return `${previewFolder}/情報アーキテクチャ` as T;
 			case "scan_existing_structure":
-				return structuredClone(previewCandidates) as T;
+				return {
+					candidates: structuredClone(previewCandidates),
+					scannedFileCount: 12,
+					warningCount: 0,
+				} as T;
 			case "save_initial_setup": {
 				const payload = args as unknown as InitialSetupPayload;
 				previewSavedAt = new Date().toISOString();
@@ -122,10 +129,15 @@ export const previewSetupAdapter: SetupRuntime = {
 					rule: {
 						id: payload.rule.id,
 						template: payload.rule.template,
+						...(payload.rule.folderNameLanguage
+							? { folderNameLanguage: payload.rule.folderNameLanguage }
+							: {}),
 					},
-					courseOverrides: payload.courseOverrides
-						.filter(({ enabled }) => enabled)
-						.map(({ courseName }) => ({ courseName, enabled: true })),
+					courseOverrides: payload.courseOverrides.map(({ courseName, enabled, mode }) => ({
+						courseName,
+						enabled,
+						mode,
+					})),
 				};
 				return {
 					ok: true,
@@ -161,10 +173,15 @@ export const previewSetupAdapter: SetupRuntime = {
 					rule: {
 						id: payload.rule.id,
 						template: payload.rule.template,
+						...(payload.rule.folderNameLanguage
+							? { folderNameLanguage: payload.rule.folderNameLanguage }
+							: {}),
 					},
-					courseOverrides: payload.courseOverrides
-						.filter(({ enabled }) => enabled)
-						.map(({ courseName }) => ({ courseName, enabled: true })),
+					courseOverrides: payload.courseOverrides.map(({ courseName, enabled, mode }) => ({
+						courseName,
+						enabled,
+						mode,
+					})),
 				};
 				return {
 					ok: true,
@@ -280,6 +297,34 @@ export function parsePatternCandidates(value: unknown): PatternCandidate[] | nul
 	return candidates;
 }
 
+export function parseScanExistingStructureResult(
+	value: unknown,
+): ScanExistingStructureResult | null {
+	if (Array.isArray(value)) {
+		const candidates = parsePatternCandidates(value);
+		return candidates ? { candidates, scannedFileCount: 0, warningCount: 0 } : null;
+	}
+	if (!value || typeof value !== "object") return null;
+	const result = value as Record<string, unknown>;
+	const candidates = parsePatternCandidates(result.candidates);
+	if (
+		!candidates ||
+		typeof result.scannedFileCount !== "number" ||
+		!Number.isInteger(result.scannedFileCount) ||
+		result.scannedFileCount < 0 ||
+		typeof result.warningCount !== "number" ||
+		!Number.isInteger(result.warningCount) ||
+		result.warningCount < 0
+	) {
+		return null;
+	}
+	return {
+		candidates,
+		scannedFileCount: result.scannedFileCount,
+		warningCount: result.warningCount,
+	};
+}
+
 export function parseSetupStatus(value: unknown): SetupStatus | null {
 	if (!value || typeof value !== "object") return null;
 	const status = value as Record<string, unknown>;
@@ -325,6 +370,9 @@ export function parseSavedSetupConfiguration(value: unknown): SavedSetupConfigur
 		rule.id.length === 0 ||
 		typeof rule.template !== "string" ||
 		rule.template.length === 0 ||
+		(rule.folderNameLanguage !== undefined &&
+			rule.folderNameLanguage !== "ja" &&
+			rule.folderNameLanguage !== "en") ||
 		!Array.isArray(configuration.courseOverrides)
 	) {
 		return null;
@@ -337,14 +385,24 @@ export function parseSavedSetupConfiguration(value: unknown): SavedSetupConfigur
 		if (
 			typeof override.courseName !== "string" ||
 			override.courseName.trim().length === 0 ||
-			override.enabled !== true
+			(typeof override.enabled !== "boolean" && override.enabled !== undefined)
 		) {
 			return null;
 		}
 		const courseName = override.courseName.trim();
 		if (seenCourseNames.has(courseName)) continue;
 		seenCourseNames.add(courseName);
-		courseOverrides.push({ courseName, enabled: true });
+		const mode =
+			override.mode === "common" || override.mode === "override" || override.mode === "unmanaged"
+				? override.mode
+				: override.enabled === true
+					? "override"
+					: "common";
+		courseOverrides.push({
+			courseName,
+			enabled: override.enabled === true,
+			mode,
+		});
 	}
 	return {
 		revision: configuration.revision,
@@ -357,6 +415,7 @@ export function parseSavedSetupConfiguration(value: unknown): SavedSetupConfigur
 		rule: {
 			id: rule.id,
 			template: rule.template,
+			...(rule.folderNameLanguage ? { folderNameLanguage: rule.folderNameLanguage } : {}),
 		},
 		courseOverrides,
 	};
@@ -375,18 +434,31 @@ export async function pickBaseFolderClient(runtime?: SetupRuntime): Promise<stri
 	}
 }
 
+export async function pickCourseFolderClient(runtime?: SetupRuntime): Promise<string | null> {
+	const setupRuntime = runtime ?? (await createSetupRuntime());
+	try {
+		const value = await setupRuntime.invoke<unknown>("pick_course_folder", {});
+		if (value === null || typeof value === "string") return value;
+		throw new Error("invalid response");
+	} catch {
+		throw new SetupApiError(
+			"授業フォルダーを選択できませんでした。Fuzzyを再起動してから再試行してください。",
+		);
+	}
+}
+
 export async function scanExistingStructureClient(
 	path: string,
 	runtime?: SetupRuntime,
-): Promise<PatternCandidate[]> {
+): Promise<ScanExistingStructureResult> {
 	const setupRuntime = runtime ?? (await createSetupRuntime());
 	try {
 		const value = await setupRuntime.invoke<unknown>("scan_existing_structure", {
 			path,
 		});
-		const candidates = parsePatternCandidates(value);
-		if (!candidates) throw new Error("invalid response");
-		return candidates;
+		const result = parseScanExistingStructureResult(value);
+		if (!result) throw new Error("invalid response");
+		return result;
 	} catch {
 		throw new SetupApiError(
 			"既存のフォルダー構成を読み取れませんでした。保存先のアクセス権を確認してください。",

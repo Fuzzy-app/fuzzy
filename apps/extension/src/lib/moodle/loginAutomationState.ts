@@ -18,8 +18,7 @@ export async function readPersistentLogoutToken(
 		const stored = await storage.get(EXPLICIT_LOGOUT_STORAGE_KEY);
 		const value = stored[EXPLICIT_LOGOUT_STORAGE_KEY];
 		if (typeof value === "string" && value.length > 0) return value;
-		// 旧形式のtrueが残っていても安全側で抑止し、次の手動ログインで解除する。
-		return value === true ? "legacy-explicit-logout" : null;
+		return null;
 	} catch (error) {
 		onError(error);
 		return undefined;

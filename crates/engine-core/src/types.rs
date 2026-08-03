@@ -68,6 +68,10 @@ pub struct AssignmentRecord {
 	pub submitted: bool,
 	pub submission_availability: String,
 	pub moodle_url: Option<String>,
+	/// 本文から要確認と判定した資料のSQLite上のファイルID。
+	pub related_file_id: Option<i64>,
+	/// 関連資料のローカル更新日時（UNIXエポックからのナノ秒）。
+	pub source_modified_at_ns: Option<i64>,
 }
 
 /// One assignment received from the Moodle acquisition pipeline.
@@ -159,6 +163,8 @@ pub struct AssignmentChangeRecord {
 pub struct CourseDashboardRecord {
 	pub course_id: i64,
 	pub course_name: String,
+	pub academic_year: Option<i64>,
+	pub term: Option<String>,
 	pub file_count: i64,
 	pub violation_count: i64,
 	pub next_due_at: Option<String>,
@@ -203,6 +209,7 @@ pub struct SavedSetupConfigurationRecord {
 	pub course_segment_index: Option<usize>,
 	pub rule_key: String,
 	pub rule_template: String,
+	pub folder_name_language: String,
 	pub course_overrides_json: String,
 }
 
@@ -417,10 +424,16 @@ pub struct SearchDocumentMetadata {
 	pub file_id: i64,
 	/// 保存時の元ファイル名。
 	pub file_name: String,
+	/// SQLite上のコースID。範囲指定の内部照合に使う。
+	pub course_id: Option<i64>,
 	/// コース未紐付けの場合は`None`。
 	pub course_name: Option<String>,
+	/// 保存ルートからの相対パス。絶対パスはAPI境界へ出さない。
+	pub relative_path: String,
 	/// PDF等の総ページ数。本文索引と同時に検証できない形式では`None`。
 	pub page_count: Option<u32>,
+	/// ファイルシステム上の最終更新時刻。検索結果の同点順位にだけ使う。
+	pub modified_at: Option<i64>,
 }
 
 /// 重複・類似ファイルの検出結果1件。

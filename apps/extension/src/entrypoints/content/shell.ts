@@ -35,6 +35,7 @@ import { ensureShellStyle } from "./shellStyle";
 
 type ConnectionMode = FuzzyApiClient["mode"] | "checking";
 type ScreenId = FuzzyScreenId;
+export const FUZZY_SHELL_VISIBILITY_EVENT = "fuzzy:shell-visibility";
 
 const menuItems = FUZZY_SCREEN_ORDER.map((id) => ({
 	id,
@@ -299,6 +300,9 @@ export function mountFuzzyShell(): void {
 	const closeShell = () => {
 		if (!isOpen) return;
 		isOpen = false;
+		window.dispatchEvent(
+			new CustomEvent(FUZZY_SHELL_VISIBILITY_EVENT, { detail: { open: false } }),
+		);
 		renderEntryState();
 		window.removeEventListener("resize", handleShellResize);
 		page?.remove();
@@ -353,6 +357,7 @@ export function mountFuzzyShell(): void {
 	const openShell = () => {
 		if (isOpen) return;
 		isOpen = true;
+		window.dispatchEvent(new CustomEvent(FUZZY_SHELL_VISIBILITY_EVENT, { detail: { open: true } }));
 		renderEntryState();
 		// Measure Moodle's header before the shell's compacting rules hide page content.
 		const initialShellTopOffset = getShellTopOffset(navHost);

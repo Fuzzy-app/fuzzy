@@ -17,6 +17,7 @@ import sampleRules from "../sample-data/rules.json" with { type: "json" };
 import searchResults from "../sample-data/search-results.json" with { type: "json" };
 import syncEvents from "../sample-data/sync-events.json" with { type: "json" };
 import { normalizeRelativeSavePath, normalizeWindowsPath } from "../savePaths";
+import { normalizeSearchText } from "../search";
 import type {
 	Assignment,
 	AssignmentChange,
@@ -40,6 +41,8 @@ import type {
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
+	OpenFileRequest,
+	OpenFileResult,
 	RebuildLibraryRequest,
 	ReconcileCourseFilesRequest,
 	RuleSet,
@@ -49,6 +52,7 @@ import type {
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SearchScope,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
@@ -119,9 +123,33 @@ export class MockApiClient implements FuzzyApiClient {
 		return delay({ ok: true });
 	}
 
-	async search(query: string): Promise<SearchResult[]> {
+	async search(query: string, scope?: SearchScope): Promise<SearchResult[]> {
 		const table = searchResults as Record<string, SearchResult[]>;
-		return delay(table[query] ?? []);
+		const normalizedQuery = normalizeSearchText(query);
+		const candidates = Object.values(table).flat();
+		const results = candidates.filter((result) => {
+			if (
+				scope?.courseId !== undefined &&
+				this.courses.find((course) => course.name === result.courseName)?.id !== scope.courseId
+			) {
+				return false;
+			}
+			if (
+				scope?.folder &&
+				!result.relativePath.toLowerCase().startsWith(`${scope.folder.toLowerCase()}/`)
+			) {
+				return false;
+			}
+			return (
+				normalizeSearchText(result.fileName).includes(normalizedQuery) ||
+				normalizeSearchText(result.snippet).includes(normalizedQuery)
+			);
+		});
+		return delay(results);
+	}
+
+	async openFile(request: OpenFileRequest): Promise<OpenFileResult> {
+		return delay({ opened: true, page: request.page });
 	}
 
 	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {

@@ -2,12 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import {
 	classifyMoodlePage,
+	isMoodleDashboardPage,
 	resolveMoodleUiMode,
 } from "../../apps/extension/src/lib/moodle/pageClassification";
 
 const ORIGIN = "https://moodle2026.wakayama-u.ac.jp";
 
 describe("Moodleページの起動判定", () => {
+	test("年度付きのMoodleダッシュボードを背景同期の起点と判定する", () => {
+		expect(isMoodleDashboardPage(`${ORIGIN}/2026/my/`)).toBe(true);
+		expect(isMoodleDashboardPage(`${ORIGIN}/2026/dashboard/index.php`)).toBe(true);
+		expect(isMoodleDashboardPage(`${ORIGIN}/2026/course/view.php?id=1`)).toBe(false);
+	});
+
 	test("認証済みページでは全機能を起動する", () => {
 		const { document } = parseHTML('<html><body class="loggedin"></body></html>');
 		const kind = classifyMoodlePage(document, `${ORIGIN}/2026/my/`);

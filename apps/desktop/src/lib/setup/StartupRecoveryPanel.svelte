@@ -193,6 +193,7 @@
 	}
 
 	$: primaryState = deriveApplicationState(status, true);
+	$: needsDataReset = status.dataResetRequired;
 	$: needsSettingsRecovery = status.database.state !== "ready";
 	$: needsInformationRebuild =
 		!needsSettingsRecovery && status.searchIndex.state !== "ready";
@@ -228,10 +229,9 @@
 						: `${progressPresentation.percent}%`}
 				></span>
 			</div>
-			{#if progress?.warningCount}
-				<p class="warning">確認が必要な項目: {progress.warningCount}件</p>
+			{#if progress?.phase !== "completed"}
+				<p>{progressPresentation.availabilityLabel}</p>
 			{/if}
-			<p>{progressPresentation.availabilityLabel}</p>
 		{:else}
 			<h2>{primaryState.title}</h2>
 			<p>{primaryState.impact}</p>
@@ -243,7 +243,23 @@
 			{successMessage}
 		</p>{/if}
 
-	{#if needsSettingsRecovery}
+	{#if needsDataReset}
+		<section class="action-card caution">
+			<h2>設定データを初期化してください</h2>
+			<p>
+				このFuzzyでは以前の設定データをそのまま利用できないため、内部の設定・履歴・検索情報を新しく作り直します。
+				保存済みの授業資料は変更しません。
+			</p>
+			<button
+				class="primary-button"
+				type="button"
+				on:click={createFreshDatabase}
+				disabled={busyAction !== null}
+			>
+				{busyAction === "fresh" ? "初期化中…" : "初期状態に戻す"}
+			</button>
+		</section>
+	{:else if needsSettingsRecovery}
 		<section class="action-card">
 			<h2>バックアップがある場合</h2>
 			<p>Fuzzyが作成したバックアップを選ぶと、設定と履歴を復元できます。</p>
@@ -378,9 +394,6 @@
 	.success-banner {
 		background: var(--fuzzy-color-success-soft);
 		color: var(--fuzzy-color-success-strong);
-	}
-	.warning {
-		color: var(--fuzzy-color-warning);
 	}
 	.progress-track {
 		height: 10px;

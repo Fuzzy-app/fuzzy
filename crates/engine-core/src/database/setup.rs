@@ -20,6 +20,7 @@ const SCAN_PATTERN_SETTING: &str = "initial_scan_pattern_id";
 const SCAN_COURSE_SEGMENT_SETTING: &str = "initial_scan_course_segment_index";
 const COURSE_OVERRIDES_SETTING: &str = "initial_course_overrides";
 const SETUP_SAVED_AT_SETTING: &str = "initial_setup_saved_at";
+const FOLDER_NAME_LANGUAGE_SETTING: &str = "folder_name_language";
 const MAX_SETTING_VALUE_BYTES: usize = 16 * 1024;
 const MAX_COURSE_SEGMENT_INDEX: usize = 64;
 const MAX_INITIAL_COURSE_OVERRIDES: usize = 32;
@@ -40,6 +41,28 @@ impl Database {
 		course_segment_index: Option<usize>,
 		course_overrides_json: &str,
 	) -> EngineResult<String> {
+		self.save_initial_setup_with_language(
+			base_folder,
+			rule_key,
+			rule_template,
+			scan_pattern_id,
+			course_segment_index,
+			course_overrides_json,
+			"ja",
+		)
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	pub fn save_initial_setup_with_language(
+		&mut self,
+		base_folder: &Path,
+		rule_key: &str,
+		rule_template: &str,
+		scan_pattern_id: &str,
+		course_segment_index: Option<usize>,
+		course_overrides_json: &str,
+		folder_name_language: &str,
+	) -> EngineResult<String> {
 		self.save_setup_configuration(
 			base_folder,
 			rule_key,
@@ -47,6 +70,7 @@ impl Database {
 			scan_pattern_id,
 			course_segment_index,
 			course_overrides_json,
+			folder_name_language,
 			None,
 			false,
 			false,
@@ -69,6 +93,30 @@ impl Database {
 		course_segment_index: Option<usize>,
 		course_overrides_json: &str,
 	) -> EngineResult<SetupConfigurationUpdate> {
+		self.update_setup_configuration_with_language(
+			expected_revision,
+			base_folder,
+			rule_key,
+			rule_template,
+			scan_pattern_id,
+			course_segment_index,
+			course_overrides_json,
+			"ja",
+		)
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	pub fn update_setup_configuration_with_language(
+		&mut self,
+		expected_revision: &str,
+		base_folder: &Path,
+		rule_key: &str,
+		rule_template: &str,
+		scan_pattern_id: &str,
+		course_segment_index: Option<usize>,
+		course_overrides_json: &str,
+		folder_name_language: &str,
+	) -> EngineResult<SetupConfigurationUpdate> {
 		self.save_setup_configuration(
 			base_folder,
 			rule_key,
@@ -76,6 +124,7 @@ impl Database {
 			scan_pattern_id,
 			course_segment_index,
 			course_overrides_json,
+			folder_name_language,
 			Some(expected_revision),
 			true,
 			true,
@@ -96,6 +145,7 @@ impl Database {
 		scan_pattern_id: &str,
 		course_segment_index: Option<usize>,
 		course_overrides_json: &str,
+		folder_name_language: &str,
 		expected_revision: Option<&str>,
 		allow_root_change: bool,
 		require_existing_setup: bool,
@@ -103,6 +153,12 @@ impl Database {
 		let base_folder = validate_base_folder(base_folder)?;
 		validate_identifier("ruleKey", rule_key)?;
 		validate_identifier("scanPatternId", scan_pattern_id)?;
+		if !matches!(folder_name_language, "ja" | "en") {
+			return Err(EngineError::InvalidInput {
+				field: "rule.folderNameLanguage".to_string(),
+				reason: "jaまたはenを指定してください".to_string(),
+			});
+		}
 		if course_segment_index.is_some_and(|index| index > MAX_COURSE_SEGMENT_INDEX) {
 			return Err(EngineError::InvalidInput {
 				field: "pattern.courseSegmentIndex".to_string(),
@@ -225,6 +281,11 @@ impl Database {
 			&transaction,
 			COURSE_OVERRIDES_SETTING,
 			course_overrides_json,
+		)?;
+		upsert_setting(
+			&transaction,
+			FOLDER_NAME_LANGUAGE_SETTING,
+			folder_name_language,
 		)?;
 		transaction
 			.execute(
@@ -451,7 +512,8 @@ fn load_saved_setup_configuration(
 				rule.pattern_key,
 				rule.pattern_template,
 				rule.updated_at,
-				COALESCE(overrides.value, '[]')
+				COALESCE(overrides.value, '[]'),
+				COALESCE(language.value, 'ja')
 			 FROM app_settings saved
 			 JOIN app_settings base
 			   ON base.key = ?2 AND trim(base.value) <> ''
@@ -459,6 +521,7 @@ fn load_saved_setup_configuration(
 			   ON pattern.key = ?3 AND trim(pattern.value) <> ''
 			 LEFT JOIN app_settings segment ON segment.key = ?4
 			 LEFT JOIN app_settings overrides ON overrides.key = ?5
+			 LEFT JOIN app_settings language ON language.key = ?6
 			 JOIN global_rule rule ON rule.id = 1
 			 WHERE saved.key = ?1",
 			params![
@@ -466,7 +529,8 @@ fn load_saved_setup_configuration(
 				BASE_FOLDER_SETTING,
 				SCAN_PATTERN_SETTING,
 				SCAN_COURSE_SEGMENT_SETTING,
-				COURSE_OVERRIDES_SETTING
+				COURSE_OVERRIDES_SETTING,
+				FOLDER_NAME_LANGUAGE_SETTING
 			],
 			|row| {
 				Ok((
@@ -478,6 +542,7 @@ fn load_saved_setup_configuration(
 					row.get::<_, String>(5)?,
 					row.get::<_, String>(6)?,
 					row.get::<_, String>(7)?,
+					row.get::<_, String>(8)?,
 				))
 			},
 		)
@@ -492,6 +557,7 @@ fn load_saved_setup_configuration(
 		rule_template,
 		rule_updated_at,
 		course_overrides_json,
+		folder_name_language,
 	)) = record
 	else {
 		return Err(EngineError::Database {
@@ -507,6 +573,7 @@ fn load_saved_setup_configuration(
 		&rule_template,
 		&rule_updated_at,
 		&course_overrides_json,
+		&folder_name_language,
 	]);
 	let course_segment_index = course_segment_index
 		.map(|value| {
@@ -523,6 +590,11 @@ fn load_saved_setup_configuration(
 		.transpose()?;
 	validate_identifier("ruleKey", &rule_key)?;
 	validate_identifier("scanPatternId", &scan_pattern_id)?;
+	if !matches!(folder_name_language.as_str(), "ja" | "en") {
+		return Err(EngineError::Database {
+			message: "保存済み設定のフォルダー名の保存形式が不正です".to_string(),
+		});
+	}
 	if course_overrides_json.len() > MAX_SETTING_VALUE_BYTES {
 		return Err(EngineError::Database {
 			message: "保存済み設定の授業別候補が上限を超えています".to_string(),
@@ -541,21 +613,22 @@ fn load_saved_setup_configuration(
 		course_segment_index,
 		rule_key,
 		rule_template,
+		folder_name_language,
 		course_overrides_json,
 	}))
 }
 
 fn setup_configuration_revision(values: &[&str]) -> String {
 	let mut hasher = blake3::Hasher::new();
-	hasher.update(b"fuzzy-setup-configuration-v1");
+	hasher.update(b"fuzzy-setup-configuration-v0");
 	for value in values {
 		hasher.update(&(value.len() as u64).to_le_bytes());
 		hasher.update(value.as_bytes());
 	}
-	format!("setup-v1:{}", hasher.finalize().to_hex())
+	format!("setup-v0:{}", hasher.finalize().to_hex())
 }
 
-fn relative_path_within_base(path: &Path, base: &Path) -> Option<PathBuf> {
+pub(super) fn relative_path_within_base(path: &Path, base: &Path) -> Option<PathBuf> {
 	path.strip_prefix(base)
 		.ok()
 		.map(Path::to_path_buf)
@@ -861,7 +934,7 @@ mod tests {
 			Some(1)
 		);
 		let saved = database.saved_setup_configuration().unwrap().unwrap();
-		assert!(saved.revision.starts_with("setup-v1:"));
+		assert!(saved.revision.starts_with("setup-v0:"));
 		assert_eq!(saved.saved_at, saved_at);
 		assert_eq!(
 			saved.base_folder_path,
@@ -874,6 +947,33 @@ mod tests {
 		assert_eq!(
 			saved.course_overrides_json,
 			r#"[{"courseName":"情報アーキテクチャ"}]"#
+		);
+	}
+
+	#[test]
+	fn persists_the_selected_folder_name_language() {
+		let directory = TestDirectory::new();
+		let mut database = Database::open_in_memory().unwrap();
+
+		database
+			.save_initial_setup_with_language(
+				&directory.path,
+				"year-course-assignment",
+				"{year}/{course}/{assignment}",
+				"estimated-1",
+				Some(1),
+				"[]",
+				"en",
+			)
+			.unwrap();
+
+		assert_eq!(
+			database
+				.saved_setup_configuration()
+				.unwrap()
+				.unwrap()
+				.folder_name_language,
+			"en"
 		);
 	}
 
@@ -1378,7 +1478,7 @@ mod tests {
 		assert_eq!(overridden_courses[0].0, Some(2025));
 		assert_eq!(overridden_courses[1].0, Some(2026));
 		assert!(overridden_courses.iter().all(|course| {
-			course.1.starts_with("local-scan:v2:")
+			course.1.starts_with("local-scan:v0:")
 				&& course.2 == INITIAL_COURSE_OVERRIDE_PATTERN
 				&& course.3 == INITIAL_COURSE_OVERRIDE_NOTE
 		}));
@@ -1389,7 +1489,7 @@ mod tests {
 				 FROM courses
 				 WHERE name = 'データベース'
 				   AND moodle_course_id GLOB 'local-scan:*'
-				   AND moodle_course_id NOT GLOB 'local-scan:v2:*'",
+				   AND moodle_course_id NOT GLOB 'local-scan:v0:*'",
 				[],
 				|row| row.get(0),
 			)

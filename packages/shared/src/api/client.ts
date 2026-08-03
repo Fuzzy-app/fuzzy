@@ -17,6 +17,8 @@ import type {
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
+	OpenFileRequest,
+	OpenFileResult,
 	RebuildLibraryRequest,
 	ReconcileCourseFilesRequest,
 	RuleSet,
@@ -26,6 +28,7 @@ import type {
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SearchScope,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
@@ -56,7 +59,10 @@ export interface FuzzyApiClient {
 
 	updateSubmissionStatus(assignmentId: number, submitted: boolean): Promise<{ ok: boolean }>;
 
-	search(query: string): Promise<SearchResult[]>;
+	search(query: string, scope?: SearchScope): Promise<SearchResult[]>;
+
+	/** 検索結果の資料を利用者の明示操作で既定アプリへ開く */
+	openFile(request: OpenFileRequest): Promise<OpenFileResult>;
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]>;
 

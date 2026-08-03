@@ -1,4 +1,5 @@
 import type { DashboardSummary, PresentationState } from "@fuzzy/shared";
+import { groupCourses } from "./courseHierarchy";
 import { buildShellScreenHeader, shellElement as el } from "./shellElements";
 import { formatCacheDate, formatDate } from "./shellPresentation";
 
@@ -89,31 +90,47 @@ export function buildDashboardScreen(
 		metrics.append(card);
 	}
 
-	const courseList = el("section", "fuzzy-dashboard-course-list");
+	const courseList = el("section", "fuzzy-dashboard-course-groups");
 	if (dashboard.courses.length === 0) {
 		courseList.append(el("p", "fuzzy-toolbar-copy", "表示できるコースはありません。"));
 	} else {
-		for (const course of dashboard.courses) {
-			const card = el(
-				"article",
-				course.violationCount > 0 ? "fuzzy-dashboard-course is-warn" : "fuzzy-dashboard-course",
+		for (const group of groupCourses(dashboard.courses)) {
+			const groupDetails = document.createElement("details");
+			groupDetails.className = "fuzzy-dashboard-course-group";
+			groupDetails.open = true;
+			const summary = document.createElement("summary");
+			summary.append(
+				el("strong", "", group.label),
+				el("span", "fuzzy-dashboard-group-count", `${group.courses.length}授業`),
 			);
-			const head = el("div", "fuzzy-dashboard-course-head");
-			head.append(
-				el("h2", "", course.courseName),
-				el("span", "fuzzy-dashboard-file-count", `${course.fileCount}資料`),
-			);
-			const details = el("dl", "fuzzy-dashboard-course-details");
-			for (const [label, value] of [
-				["整理状況", course.violationCount > 0 ? `要整理 ${course.violationCount}件` : "整理済み"],
-				["次の締切", formatDate(course.nextDueAt)],
-			]) {
-				const row = el("div");
-				row.append(el("dt", "", label), el("dd", "", value));
-				details.append(row);
+			const cards = el("div", "fuzzy-dashboard-course-list");
+			for (const course of group.courses) {
+				const card = el(
+					"article",
+					course.violationCount > 0 ? "fuzzy-dashboard-course is-warn" : "fuzzy-dashboard-course",
+				);
+				const head = el("div", "fuzzy-dashboard-course-head");
+				head.append(
+					el("h2", "", course.courseName),
+					el("span", "fuzzy-dashboard-file-count", `${course.fileCount}資料`),
+				);
+				const details = el("dl", "fuzzy-dashboard-course-details");
+				for (const [label, value] of [
+					[
+						"整理状況",
+						course.violationCount > 0 ? `要整理 ${course.violationCount}件` : "整理済み",
+					],
+					["次の締切", formatDate(course.nextDueAt)],
+				]) {
+					const row = el("div");
+					row.append(el("dt", "", label), el("dd", "", value));
+					details.append(row);
+				}
+				card.append(head, details);
+				cards.append(card);
 			}
-			card.append(head, details);
-			courseList.append(card);
+			groupDetails.append(summary, cards);
+			courseList.append(groupDetails);
 		}
 	}
 

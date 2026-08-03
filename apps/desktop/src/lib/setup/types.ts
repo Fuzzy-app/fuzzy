@@ -2,8 +2,15 @@ import type { InitialScanPatternCandidate, RulePreset } from "@fuzzy/shared";
 
 export type PatternCandidate = InitialScanPatternCandidate;
 
+export type ScanExistingStructureResult = {
+	candidates: PatternCandidate[];
+	scannedFileCount: number;
+	warningCount: number;
+};
+
 export type InitialRuleOption = RulePreset & {
 	preview: string[];
+	folderNameLanguage?: "ja" | "en";
 };
 
 export type CourseOverride = {
@@ -11,6 +18,7 @@ export type CourseOverride = {
 	courseName: string;
 	description: string;
 	enabled: boolean;
+	mode: "common" | "override" | "unmanaged";
 };
 
 export type InitialSetupPayload = {
@@ -31,10 +39,12 @@ export type SavedSetupConfiguration = {
 	rule: {
 		id: string;
 		template: string;
+		folderNameLanguage?: "ja" | "en";
 	};
 	courseOverrides: Array<{
 		courseName: string;
-		enabled: true;
+		enabled: boolean;
+		mode: "common" | "override" | "unmanaged";
 	}>;
 };
 

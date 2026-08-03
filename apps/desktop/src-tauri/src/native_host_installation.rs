@@ -159,7 +159,6 @@ fn create_manifest(
 
 fn manifest_path(native_host_name: &str) -> Result<PathBuf, String> {
 	let local_app_data = std::env::var_os("LOCALAPPDATA")
-		.or_else(|| std::env::var_os("APPDATA"))
 		.ok_or_else(|| "Windowsのアプリデータ保存先を取得できません".to_string())?;
 	Ok(PathBuf::from(local_app_data)
 		.join(NATIVE_MESSAGING_DIRECTORY)

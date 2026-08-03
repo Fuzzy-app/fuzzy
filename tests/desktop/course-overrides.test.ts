@@ -84,8 +84,23 @@ describe("createCourseOverrides", () => {
 		expect(overrides[0]?.enabled).toBe(true);
 	});
 
+	test("Fuzzyで管理しない設定も再スキャン後に保持する", () => {
+		const candidate: PatternCandidate = {
+			...baseCandidate,
+			folders: ["2026/データベース/正規化レポート"],
+		};
+		const saved = createSavedCourseOverrides([{ courseName: "英語IIB", mode: "unmanaged" }]);
+		const overrides = createCourseOverrides(candidate, saved);
+
+		expect(overrides.find(({ courseName }) => courseName === "英語IIB")).toMatchObject({
+			mode: "unmanaged",
+			enabled: false,
+		});
+	});
+
 	test("スキャンモックの年度候補に共通サンプル6科目を含む", async () => {
-		const candidates = await scanExistingStructureClient("C:/Users/hirot/Documents/Fuzzy");
+		const candidates = (await scanExistingStructureClient("C:/Users/hirot/Documents/Fuzzy"))
+			.candidates;
 		const candidate = candidates.find(({ id }) => id === "year-course-assignment");
 
 		if (!candidate || candidate.courseSegmentIndex === null) {

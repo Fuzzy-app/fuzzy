@@ -41,7 +41,7 @@ pub(super) enum SavedFileUpsertMode {
 
 type CourseRuleOverrideState = (i64, Option<String>, Option<String>);
 const LOCAL_SCAN_PREFIX: &str = "local-scan:";
-const CONTEXTUAL_LOCAL_SCAN_PREFIX: &str = "local-scan:v2:";
+const CONTEXTUAL_LOCAL_SCAN_PREFIX: &str = "local-scan:v0:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CourseIdentityRecord {
@@ -169,7 +169,6 @@ impl Database {
 		relative_course_context: &str,
 		academic_year: Option<i64>,
 		term: Option<&str>,
-		allow_legacy_upgrade: bool,
 	) -> EngineResult<i64> {
 		let name = validate_course_name(name)?;
 		let context = relative_course_context.trim();
@@ -208,13 +207,6 @@ impl Database {
 			[real_course_id] => {
 				if let Some(local_course_id) = exact_local {
 					merge_local_course_into(&transaction, local_course_id, *real_course_id)?;
-				} else if allow_legacy_upgrade {
-					let legacy = legacy_local_courses_by_name(&transaction, name)?;
-					if let [legacy_course] = legacy.as_slice() {
-						merge_local_course_into(&transaction, legacy_course.id, *real_course_id)?;
-					} else if legacy.len() > 1 {
-						return Err(ambiguous_local_course());
-					}
 				}
 				transaction.commit().map_err(db_err)?;
 				return Ok(*real_course_id);
@@ -232,29 +224,6 @@ impl Database {
 			transaction.commit().map_err(db_err)?;
 			return Ok(course_id);
 		}
-		if allow_legacy_upgrade {
-			let legacy = legacy_local_courses_by_name(&transaction, name)?;
-			match legacy.as_slice() {
-				[legacy_course] => {
-					transaction
-						.execute(
-							"UPDATE courses
-							 SET moodle_course_id = ?1,
-							     academic_year = COALESCE(academic_year, ?2),
-							     term = COALESCE(term, ?3),
-							     updated_at = datetime('now')
-							 WHERE id = ?4",
-							params![contextual_stable_id, academic_year, term, legacy_course.id],
-						)
-						.map_err(db_err)?;
-					transaction.commit().map_err(db_err)?;
-					return Ok(legacy_course.id);
-				}
-				[] => {}
-				_ => return Err(ambiguous_local_course()),
-			}
-		}
-
 		transaction
 			.execute(
 				"INSERT INTO courses (moodle_course_id, name, academic_year, term)
@@ -907,16 +876,6 @@ fn local_courses_by_name(
 	name: &str,
 ) -> EngineResult<Vec<CourseIdentityRecord>> {
 	course_identity_records(transaction, name, true)
-}
-
-fn legacy_local_courses_by_name(
-	transaction: &Transaction<'_>,
-	name: &str,
-) -> EngineResult<Vec<CourseIdentityRecord>> {
-	Ok(local_courses_by_name(transaction, name)?
-		.into_iter()
-		.filter(|course| !course.stable_id.starts_with(CONTEXTUAL_LOCAL_SCAN_PREFIX))
-		.collect())
 }
 
 fn course_identity_records(

@@ -1,12 +1,12 @@
 import type { DashboardSummary } from "@fuzzy/shared";
 
-// Issue #59以前にcontent scriptがMoodle originへ保存したmock混在キャッシュと
-// 名前空間を分け、native-hostから取得した実データだけを表示する。
-const DATABASE_NAME = "fuzzy-native-display-cache-v2";
+// native-hostから取得した実データだけを表示用キャッシュへ保存する。
+const DATABASE_NAME = "fuzzy-native-display-cache";
+// IndexedDBのversionはWeb API上1以上が必須。Fuzzy独自の形式世代は0から開始する。
 const DATABASE_VERSION = 1;
 const STORE_NAME = "dashboard";
-const CACHE_KEY = "latest-native-v2";
-const CACHE_FORMAT_VERSION = 2;
+const CACHE_KEY = "latest-native";
+const CACHE_FORMAT_VERSION = 0;
 
 export interface CachedDashboard {
 	formatVersion: typeof CACHE_FORMAT_VERSION;

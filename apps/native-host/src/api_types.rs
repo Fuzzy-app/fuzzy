@@ -267,6 +267,10 @@ pub struct Assignment {
 	pub submitted: bool,
 	pub submission_availability: SubmissionAvailability,
 	pub moodle_url: Option<String>,
+	/// 本文から要確認と判定した資料を開くためのファイルID。
+	pub related_file_id: Option<i64>,
+	/// 要確認資料の元ファイル更新日時（UNIXエポックからのナノ秒）。
+	pub source_modified_at_ns: Option<i64>,
 }
 
 impl TryFrom<AssignmentRecord> for Assignment {
@@ -309,6 +313,8 @@ impl TryFrom<AssignmentRecord> for Assignment {
 				Some(_) => return Err(invalid_stored_value("Moodle課題URL")),
 				None => None,
 			},
+			related_file_id: value.related_file_id,
+			source_modified_at_ns: value.source_modified_at_ns,
 		})
 	}
 }
@@ -451,6 +457,8 @@ impl TryFrom<AssignmentChangeRecord> for AssignmentChange {
 pub struct CourseDashboardEntry {
 	pub course_id: i64,
 	pub course_name: String,
+	pub academic_year: Option<i64>,
+	pub term: Option<String>,
 	pub file_count: i64,
 	pub violation_count: i64,
 	pub next_due_at: Option<String>,
@@ -461,6 +469,8 @@ impl From<CourseDashboardRecord> for CourseDashboardEntry {
 		Self {
 			course_id: value.course_id,
 			course_name: value.course_name,
+			academic_year: value.academic_year,
+			term: value.term,
 			file_count: value.file_count,
 			violation_count: value.violation_count,
 			next_due_at: value.next_due_at,
@@ -809,8 +819,21 @@ impl DuplicateGroupListItem {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
+pub struct SearchScope {
+	/// SQLite上のコースIDで絞り込む。
+	pub course_id: Option<i64>,
+	/// 保存ルートからの相対フォルダーで絞り込む。
+	pub folder: Option<String>,
+}
+
+/// 全文検索要求。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct SearchRequest {
 	pub query: String,
+	#[serde(default)]
+	pub scope: Option<SearchScope>,
 }
 
 /// 全文検索のAPI結果。ファイル情報はSQLiteの正本から投影する。
@@ -821,10 +844,29 @@ pub struct SearchResult {
 	pub file_id: i64,
 	pub file_name: String,
 	pub course_name: Option<String>,
+	pub relative_path: String,
 	pub snippet: String,
 	pub page: Option<u32>,
 	pub page_count: Option<u32>,
 	pub score: f32,
+}
+
+/// 検索結果から資料を明示的に開く要求。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct OpenFileRequest {
+	pub file_id: i64,
+	pub page: Option<u32>,
+}
+
+/// OSの既定アプリで資料を開いた結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OpenFileResult {
+	pub opened: bool,
+	pub page: Option<u32>,
 }
 
 /// SQLiteバックアップの書き出し要求。
@@ -1034,6 +1076,8 @@ mod tests {
 			moodle_url: Some(
 				"https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701".to_string(),
 			),
+			related_file_id: None,
+			source_modified_at_ns: None,
 		})
 		.unwrap();
 		let value = serde_json::to_value(assignment).unwrap();
@@ -1197,6 +1241,14 @@ mod tests {
 			"unexpected": true
 		}))
 		.is_err());
+		assert!(
+			serde_json::from_value::<OpenFileRequest>(serde_json::json!({
+				"fileId": 1,
+				"page": null,
+				"unexpected": true
+			}))
+			.is_err()
+		);
 		assert!(
 			serde_json::from_value::<ExportDataRequest>(serde_json::json!({
 				"filePath": "backup.sqlite3",

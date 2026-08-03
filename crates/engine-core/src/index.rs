@@ -19,6 +19,7 @@ use tantivy::schema::{
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term};
+use unicode_normalization::UnicodeNormalization;
 
 mod extraction;
 
@@ -28,6 +29,8 @@ const INDEX_PATH_ENV: &str = "FUZZY_INDEX_PATH";
 const TOKENIZER_NAME: &str = "fuzzy_ngram";
 const INDEX_WRITER_MEMORY_BYTES: usize = 20_000_000;
 const TRANSIENT_INDEX_IO_ATTEMPTS: usize = 8;
+const ASSIGNMENT_KEYWORD_PATTERN: &str =
+	"課題 レポート 提出 締切 期限 小テスト assignment report deadline due quiz";
 const TRANSIENT_INDEX_IO_DELAY: Duration = Duration::from_millis(20);
 const MAX_EXTRACTION_WORKERS: usize = 4;
 
@@ -134,7 +137,8 @@ impl DefaultIndexEngine {
 					if let Some(page_number) = page.page {
 						document.add_u64(self.page_field, u64::from(page_number));
 					}
-					document.add_text(self.body_field, &page.text);
+					// 表記ゆれ（全角・半角、空白、句読点）を検索用本文へ正規化する。
+					document.add_text(self.body_field, normalize_search_text(&page.text));
 					writer.add_document(document)?;
 				}
 			}
@@ -155,6 +159,14 @@ impl IndexEngine for DefaultIndexEngine {
 		if let Err(error) = database.mark_search_indexed(file_id, extracted.page_count) {
 			// SQLiteを正本とするため、メタ情報を更新できなければ索引だけが残らないよう戻す。
 			let _ = self.remove_from_index(file_id);
+			return Err(error);
+		}
+		if let Err(error) = database.sync_file_content_assignment(
+			file_id,
+			extracted_document_contains_assignment_keyword(&extracted),
+		) {
+			let _ = self.remove_from_index(file_id);
+			let _ = database.remove_search_index_meta(file_id);
 			return Err(error);
 		}
 		Ok(())
@@ -190,11 +202,21 @@ impl IndexEngine for DefaultIndexEngine {
 
 		let mut cleanup_ids = Vec::new();
 		for item in &mut extracted {
-			let page_count = match item.result.as_ref() {
-				Some(Ok(document)) => document.page_count,
+			let (page_count, contains_assignment_keyword) = match item.result.as_ref() {
+				Some(Ok(document)) => (
+					document.page_count,
+					extracted_document_contains_assignment_keyword(document),
+				),
 				_ => continue,
 			};
 			if let Err(error) = database.mark_search_indexed(item.file_id, page_count) {
+				cleanup_ids.push(item.file_id);
+				item.result = Some(Err(error));
+				continue;
+			}
+			if let Err(error) =
+				database.sync_file_content_assignment(item.file_id, contains_assignment_keyword)
+			{
 				cleanup_ids.push(item.file_id);
 				item.result = Some(Err(error));
 			}
@@ -234,7 +256,7 @@ impl IndexEngine for DefaultIndexEngine {
 	}
 
 	fn search(&self, query: &str, limit: usize) -> EngineResult<Vec<SearchHit>> {
-		let query = query.trim();
+		let query = normalize_search_text(query);
 		if query.is_empty() {
 			return Err(EngineError::InvalidInput {
 				field: "query".to_string(),
@@ -250,7 +272,7 @@ impl IndexEngine for DefaultIndexEngine {
 		retry_transient_index_io(|| self.reader.reload()).map_err(index_err)?;
 		let searcher = self.reader.searcher();
 		let parser = QueryParser::for_index(&self.index, vec![self.body_field]);
-		let parsed_query = parser.parse_query(query).map_err(index_err)?;
+		let parsed_query = parser.parse_query(&query).map_err(index_err)?;
 		let top_docs = searcher
 			.search(&parsed_query, &TopDocs::with_limit(limit).order_by_score())
 			.map_err(index_err)?;
@@ -286,6 +308,15 @@ impl IndexEngine for DefaultIndexEngine {
 			})
 			.collect()
 	}
+}
+
+fn extracted_document_contains_assignment_keyword(document: &ExtractedDocument) -> bool {
+	document.pages.iter().any(|page| {
+		let normalized = normalize_search_text(&page.text);
+		ASSIGNMENT_KEYWORD_PATTERN
+			.split_whitespace()
+			.any(|keyword| normalized.contains(keyword))
+	})
 }
 
 impl DefaultIndexEngine {
@@ -407,12 +438,23 @@ fn index_schema() -> (Schema, Field, Field, Field) {
 		.set_tokenizer(TOKENIZER_NAME)
 		.set_index_option(IndexRecordOption::WithFreqsAndPositions);
 	let body = builder.add_text_field(
-		"body",
+		"body_normalized_v0",
 		TextOptions::default()
 			.set_indexing_options(indexing)
 			.set_stored(),
 	);
 	(builder.build(), file_id, page, body)
+}
+
+/// 全角・半角、大小文字、空白、句読点などを吸収する検索用文字列。
+///
+/// 文字種そのもの（日本語・英数字）は保持し、検索語と索引本文で同じ値を使う。
+pub fn normalize_search_text(value: &str) -> String {
+	value
+		.nfkc()
+		.flat_map(char::to_lowercase)
+		.filter(|character| character.is_alphanumeric())
+		.collect()
 }
 
 fn register_tokenizer(index: &Index) -> EngineResult<()> {
@@ -564,6 +606,26 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(page_count, None);
+		drop(engine);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn search_normalizes_width_whitespace_and_punctuation_variants() {
+		let directory = test_directory("search-normalization");
+		std::fs::create_dir_all(&directory).unwrap();
+		let document_path = directory.join("ＡＩ入門.txt");
+		std::fs::write(&document_path, "アラン・チューリング　ＡＩの基礎").unwrap();
+		let database = Database::open_in_memory().unwrap();
+		insert_file(&database, 71, &document_path);
+		let mut engine = DefaultIndexEngine::open(&directory.join("index")).unwrap();
+
+		engine.index_file(&database, 71, &document_path).unwrap();
+		let hits = engine.search("アラン チューリング", 10).unwrap();
+
+		assert_eq!(hits.len(), 1);
+		assert_eq!(hits[0].file_id, 71);
+		assert_eq!(normalize_search_text("ＡＩ・基礎"), "ai基礎");
 		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}
