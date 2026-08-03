@@ -166,6 +166,30 @@ describe("Tauri extension bundle", () => {
 		expect(hooks).not.toContain("/F");
 	});
 
+	test("既存インストールの案内を明確にし、アンインストール後に再セットアップへ進まない", async () => {
+		const config = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/tauri.conf.json"),
+		).json();
+		const template = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer.nsi"),
+		).text();
+		const language = await Bun.file(
+			resolve(repositoryRoot, "apps/desktop/src-tauri/windows/installer-language-ja.nsh"),
+		).text();
+
+		expect(config.bundle.windows.nsis.template).toBe("./windows/installer.nsi");
+		expect(config.bundle.windows.nsis.customLanguageFiles.Japanese).toBe(
+			"./windows/installer-language-ja.nsh",
+		);
+		expect(language).toContain('"Fuzzyを更新・修復する"');
+		expect(language).toContain('"Fuzzyをアンインストールして終了する"');
+		expect(template).toContain(
+			"単独のアンインストールを選んだ場合は、再インストールへ進まず終了する",
+		);
+		expect(template).toContain("${If} $0 = 0");
+		expect(template).toContain("Quit");
+	});
+
 	test("一般向けインストーラーとQA用成果物を分離し、古い成果物を採用しない", async () => {
 		const collector = await Bun.file(
 			resolve(repositoryRoot, "apps/desktop/scripts/collect-windows-artifacts.ts"),

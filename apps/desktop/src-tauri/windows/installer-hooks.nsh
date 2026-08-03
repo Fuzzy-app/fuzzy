@@ -1,9 +1,9 @@
 !macro NSIS_HOOK_PREINSTALL
-	; 保存処理中のnative-hostを強制終了しない。更新時だけブラウザを閉じるよう案内し、
-	; 実行ファイルが使用中ならインストーラー側の安全な再試行へ委ねる。
-	${If} ${FileExists} "$INSTDIR\resources\FuzzyNativeHost.exe"
-		MessageBox MB_ICONINFORMATION|MB_OK "Fuzzyを更新します。資料の保存が完了していることを確認し、ブラウザを閉じてから続行してください。"
-	${EndIf}
+	; セットアップは常にFuzzyの管理データを初期状態から作り直す。
+	; 利用者が選んだ大学資料の保存先はこのフォルダーの外にあるため触れない。
+	SetShellVarContext current
+	RMDir /r /REBOOTOK "$LOCALAPPDATA\Fuzzy"
+	RMDir /r /REBOOTOK "$APPDATA\Fuzzy"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -22,5 +22,14 @@
 	DeleteRegKey HKCU "Software\Chromium\NativeMessagingHosts\jp.ac.wakayama_u.fuzzy.native_host"
 	DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\jp.ac.wakayama_u.fuzzy.native_host"
 	Delete "$LOCALAPPDATA\Fuzzy\NativeMessaging\jp.ac.wakayama_u.fuzzy.native_host.json"
-	RMDir "$LOCALAPPDATA\Fuzzy\NativeMessaging"
+	; Fuzzyが管理する設定・SQLite・検索索引・キャッシュを削除する。
+	; 利用者が選択した授業資料の保存先はこの配下ではないため触れない。
+	RMDir /r /REBOOTOK "$LOCALAPPDATA\Fuzzy"
+	RMDir /r /REBOOTOK "$APPDATA\Fuzzy"
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+	; 使用中だったファイルが事前処理で残った場合も、アンインストール完了後に再度削除する。
+	RMDir /r /REBOOTOK "$LOCALAPPDATA\Fuzzy"
+	RMDir /r /REBOOTOK "$APPDATA\Fuzzy"
 !macroend

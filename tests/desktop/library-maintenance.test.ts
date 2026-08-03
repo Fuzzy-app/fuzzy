@@ -64,6 +64,18 @@ describe("desktop library maintenance client", () => {
 				searchIndex: { state: "unknown", message: "invalid" },
 			}),
 		).toBeNull();
+		expect(
+			parseApplicationRecoveryStatus({
+				...status,
+				dataResetRequired: true,
+			}),
+		).toEqual({ ...status, dataResetRequired: true });
+		expect(
+			parseApplicationRecoveryStatus({
+				...status,
+				dataResetRequired: "yes",
+			}),
+		).toBeNull();
 	});
 
 	test("再構築・書き出し・復元を専用Tauriコマンドへ配線する", async () => {

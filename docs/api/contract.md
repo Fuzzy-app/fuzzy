@@ -32,7 +32,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 ### 1.2 コマンド一覧
 
-現在のNative Messaging契約バージョンは`5`とする。検索結果へ索引作成時の総ページ数を追加し、`ping`で契約バージョンを照合するため、契約バージョン`4`以前の拡張機能またはnative-hostは互換として扱わない。
+現在のNative Messaging契約バージョンは`6`とする。検索結果へ索引作成時の総ページ数と資料を開く明示操作を追加し、`ping`で契約バージョンを照合するため、契約バージョン`5`以前の拡張機能またはnative-hostは互換として扱わない。
 
 | command                    | 用途                      | payload → data（概要）                                  |
 |----------------------------|-------------------------|-----------------------------------------------------|
@@ -46,7 +46,8 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `appendCheckSimilarFileChunk` | 類似照合用資料のBase64チャンク追加 | `{ transferId, chunkIndex, dataBase64 }` → `{ ok: true }` |
 | `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
 | `checkSimilarFiles`        | 転送済み内容による保存前の類似ファイル検知 | `{ transferId, fileMeta }` → `SimilarFileMatch[]` |
-| `search`                   | 全文検索（該当ページと総ページ数を含む） | `{ query }` → `SearchResult[]`                      |
+| `search`                   | 全文検索（表記ゆれ・授業／フォルダー範囲・該当ページと総ページ数に対応） | `{ query, scope? }` → `SearchResult[]`             |
+| `openFile`                 | 選択した検索結果をOSの既定アプリで開く明示操作 | `{ fileId, page }` → `{ opened, page }`            |
 | `getDashboard`             | コース別ダッシュボード集計           | `{}` → `DashboardSummary`                           |
 | `getDeadlines`             | 締切一覧取得（フィルタ可）           | `{ filter? }` → `Assignment[]`                      |
 | `syncMoodleAssignments`    | Moodleコースの課題完全スナップショット同期 | `{ trigger, course, assignments }` → `DataSyncEvent` |
@@ -68,6 +69,8 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 | `importData`               | バックアップからの復元             | `{ filePath }` → `{ ok, reindexRequired }`          |
 | `rebuildLibrary`           | 保存ルートの再走査・SQLite注釈と全文索引の整合 | `{ rebuildIndex? }` → `LibraryMaintenanceSummary`   |
 | `reconcileCourseFiles`     | 表示中Moodleコースに限定したファイル差分走査 | `{ course: SyncMoodleCourseRequest }` → `LibraryMaintenanceSummary` |
+
+`getDashboard`の`courses`要素には、保存資料から確定できた`academicYear`（年度）と`term`（学期）を含める。旧キャッシュとの互換性のため、クライアントはこれらが省略された場合を「学期未設定」として扱う。`fileCount`や`violationCount`など既存の集計値の意味は変更しない。
 
 `ping.protocolVersion`は現在値`6`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。
 
@@ -105,6 +108,40 @@ interface LibraryMaintenanceSummary {
 
 `updateExcludedFolders`は指定scopeの設定を受信したパス一覧へ置き換える。保存済みファイルの`excluded_at`を更新した後、除外中に変更された実ファイルを差分走査・再ハッシュ・再索引し、ルール適合注釈と重複候補を再計算してから応答する。除外設定の変更や通常の資料保存は、いずれも利用者の実ファイルを移動・削除しない。除外中の資料はダッシュボード、ルール違反、重複候補、全文検索から除外し、設定解除後は最新内容で再び表示対象になる。
 
+`search`はSQLiteの有効な索引メタデータと本文索引を照合し、NFKC・大小文字・空白・句読点を吸収した検索語で検索する。ファイル名が検索語と一致・包含する場合は本文だけの一致より関連度を高くする。`scope.courseId`はコースID、`scope.folder`は保存ルートからの相対フォルダー（`/`区切り）であり、絶対パス・`..`・空要素は拒否する。結果は`relativePath`を含めるが、絶対パスは返さない。
+
+課題一覧の`sourceModifiedAtNs`は本文から要確認と判定された資料に紐付くローカル更新日時であり、端末外へ送信しない。旧キャッシュにない場合は`null`として扱う。
+
+`openFile`は検索結果の`fileId`だけを受け取り、SQLiteに登録された有効な資料が現在も保存ルート配下に存在することをnative-host側で検証してから、利用者の明示操作としてOSの既定アプリへ渡す。`page`はPDF等で選択された該当ページをUI表示へ引き継ぐ値であり、既定アプリがページ指定に対応しない場合も資料本体を開く。保存済み資料の移動・削除や保存ルート外のパス指定は行わない。
+
+```ts
+interface SearchScope {
+	courseId: number | null;
+	folder: string | null;
+}
+
+interface SearchResult {
+	fileId: number;
+	fileName: string;
+	courseName: string | null;
+	relativePath: string;
+	snippet: string;
+	page: number | null;
+	pageCount: number | null;
+	score: number;
+}
+
+interface OpenFileRequest {
+	fileId: number;
+	page: number | null;
+}
+
+interface OpenFileResult {
+	opened: boolean;
+	page: number | null;
+}
+```
+
 `syncMoodleAssignments`は次の形式を使用する。
 
 ```ts
@@ -126,6 +163,7 @@ interface SyncMoodleAssignmentsRequest {
 		submitted: boolean;
 		submissionAvailability: "available" | "unavailable" | "unknown";
 		moodleUrl: string | null;
+		relatedFileId?: number | null;
 	}>;
 }
 ```
@@ -281,15 +319,16 @@ Moodleから課題・締切データを取得（同期）した直後、拡張�
 
 | コマンド                      | 用途                              | 引数 → 戻り値                                         |
 |---------------------------|---------------------------------|--------------------------------------------------|
-| `pick_base_folder`        | OSネイティブダイアログで保存先フォルダを選択し実パスを取得  | `()` → `string \| null`                          |
-| `scan_existing_structure` | 選択フォルダの既存構成を再帰スキャンし、近いパターン候補を提示 | `{ path }` → `PatternCandidate[]`                |
+| `pick_base_folder`        | OSネイティブダイアログで保存先フォルダーを選択し実パスを取得  | `()` → `string \| null`                          |
+| `pick_course_folder`      | OSネイティブダイアログで例外対象の授業フォルダーを選択し実パスを取得 | `()` → `string \| null`                          |
+| `scan_existing_structure` | 選択フォルダー以下を再帰スキャンし、近いパターン候補と読み込み件数を提示 | `{ path }` → `ScanExistingStructureResponse`                |
 | `save_initial_setup`      | 選んだパターン／ルールを保存し、既存資料を取り込む        | `{ path, pattern, rule, courseOverrides }` → `{ ok, maintenance: LibraryMaintenanceSummary }` |
 | `get_setup_status`        | 初期セットアップ済みかどうか確認                | `()` → `{ done: boolean, savedAt?: string }`     |
 | `get_saved_setup_configuration` | 設定済みの保存先・推定結果・整理ルールをSQLiteから取得 | `()` → `SavedSetupConfiguration \| null` |
 | `save_setup_changes` | 保存済み設定との差分を競合検知付きで保存し、必要な資料情報を更新 | `SaveSetupChangesRequest` → `SaveSetupChangesResponse` |
 | `get_extension_setup_status` | 確認開始後の拡張機能実応答をSQLiteから取得 | `{ since: string }` → `ExtensionSetupStatus` |
 | `get_extension_recovery_status` | セットアップ後の最新応答・互換性・鮮度をSQLiteから取得 | `()` → `ExtensionRecoveryStatus` |
-| `get_application_recovery_status` | 起動時のSQLite正本・検索索引の利用可否を取得 | `()` → `{ database, searchIndex }` |
+| `get_application_recovery_status` | 起動時のSQLite正本・検索索引の利用可否と初期化要否を取得 | `()` → `{ database, searchIndex, dataResetRequired }` |
 | `get_native_host_installation_status` | Native Messagingホストの自動登録結果を取得 | `()` → `{ ready, message }` |
 | `repair_native_host_installation` | 同梱ホストのmanifestとユーザー単位登録を再作成 | `()` → `{ ready, message }` |
 | `rebuild_library` | 明示操作で保存ルートを再走査し、SQLite注釈と全文索引を整合 | `{ rebuildIndex: boolean }` → `LibraryMaintenanceSummary` |
@@ -314,6 +353,12 @@ interface PatternCandidate {
 	reason: string;
 	recommended: boolean;
 	requiresConfirmation: boolean;
+}
+
+interface ScanExistingStructureResponse {
+	candidates: PatternCandidate[];
+	scannedFileCount: number;
+	warningCount: number;
 }
 ```
 
@@ -340,11 +385,13 @@ interface SetupPatternSelection {
 interface SetupRuleSelection {
 	id: string;
 	template: string;
+	folderNameLanguage?: "ja" | "en";
 }
 
 interface SetupCourseOverrideSelection {
 	courseName: string;
 	enabled: boolean;
+	mode: "common" | "override" | "unmanaged";
 }
 
 interface SavedSetupConfiguration {
@@ -371,6 +418,8 @@ interface SaveSetupChangesResponse {
 	maintenance: LibraryMaintenanceSummary;
 }
 ```
+
+`mode`は授業ごとの扱いを表す。`common`は共通ルールを使い、`override`は共通ルールから外して初期セットアップの授業別ルールを適用し、`unmanaged`はFuzzyの管理対象から外す選択である。`enabled`は旧形式との互換性のために保持し、現行クライアントでは`mode`から決定する。
 
 `get_saved_setup_configuration`は、初期設定がまだ保存されていない場合は`null`を返す。保存済み印があるのに保存ルートやグローバルルール等の必須値が欠ける場合は破損状態としてエラーにし、不完全な値を`null`や設定済み状態へ読み替えない。設定済みの場合は`app_settings`、`global_rule`、初期セットアップ管理のコース別選択を同じSQLiteスナップショットから読み取り、完全な値だけを返す。`revision`は保存日時だけに依存せず、少なくとも保存ルート、推定候補、科目位置、グローバルルール、初期セットアップ管理のコース別選択が変われば異なる値になる。これにより、再セットアップ画面を開いた後に拡張機能側でルールが更新された場合も、古い画面から黙って上書きしない。
 
@@ -406,9 +455,9 @@ interface LibraryMaintenanceProgress {
 
 `export_backup`はOSネイティブの保存ダイアログを使用し、既存ファイル、使用中DBと同じパスへの上書きを拒否する。`import_backup`はOSネイティブの選択ダイアログに続いて、SQLite正本を置き換える旨の確認ダイアログを必ず表示する。バックアップを検証して復元できた後は保存ルートを再走査して全文索引を再構築する。復元自体が成功し再構築だけに失敗した場合は`imported: true`と利用者向け`maintenanceError`を返し、復元失敗と誤表示しない。起動時にSQLiteを開けない場合も同じコマンドを使用でき、開けなかったDBと`-wal`／`-shm`／`-journal`を別名の復旧用フォルダーへ保全してから、検証済みバックアップを同じAppStateへ接続する。この場合だけ保全先を`recoveryCopyPath`で返す。
 
-起動時はSQLiteまたはTantivy索引を開けなくてもpanicせずTauri UIを開始する。`get_application_recovery_status`の各`state`は`ready`、`recoveryRequired`、検索索引のみ`needsRebuild`を使用する。SQLiteが`recoveryRequired`の場合、通常コマンドは正本未接続として拒否し、`import_backup`と`create_fresh_database`だけを復旧手段として提示する。`create_fresh_database`は確認ダイアログ後に開けないDB一式を別名で保全できた場合だけ新規DBを作り、保全失敗時は新規作成しない。検索索引は派生データなので、明示した`rebuild_library`操作で開けない索引を別名へ退避し、SQLite正本と保存先から再生成する。いずれも利用者の資料ファイルを移動・削除せず、パス入力やコマンド操作を要求しない。
+起動時はSQLiteまたはTantivy索引を開けなくてもpanicせずTauri UIを開始する。`get_application_recovery_status`の各`state`は`ready`、`recoveryRequired`、検索索引のみ`needsRebuild`を使用し、`dataResetRequired`を初期値では`false`として返す。SQLiteが旧世代・非互換形状の場合は`dataResetRequired: true`とし、移行せず`create_fresh_database`だけを初期化手段として提示する。その他のSQLite障害ではバックアップ復元も提示する。`create_fresh_database`は確認ダイアログ後に開けないDB一式を別名の復旧用フォルダーへ保全できた場合だけ新規DBを作り、保全失敗時は新規作成しない。検索索引は派生データなので、明示した`rebuild_library`操作で開けない索引を別名へ退避し、SQLite正本と保存先から再生成する。いずれも利用者の資料ファイルを移動・削除せず、パス入力やコマンド操作を要求しない。
 
-Native Messagingホストの配置、manifest生成、Chrome／Chromium／EdgeのHKCU登録はインストーラーとFuzzy起動時に自動実行する。利用者へ登録コマンドを要求しない。アンインストーラーは同じ登録とmanifestを解除するが、SQLite正本や利用者が保存した資料は削除しない。
+Native Messagingホストの配置、manifest生成、Chrome／Chromium／EdgeのHKCU登録はインストーラーとFuzzy起動時に自動実行する。利用者へ登録コマンドを要求しない。アンインストーラーは同じ登録とmanifestを解除し、Fuzzy管理下の設定・SQLite・検索索引・キャッシュも削除するが、利用者が保存した資料と書き出したバックアップは削除しない。
 
 `get_extension_setup_status`の`since`はTauriアプリが今回起動した日時（ISO 8601）とし、それより前の応答記録だけでは完了にしない。戻り値は次のいずれかとする。状態自体はSQLiteへ保存せず、応答記録、最低対応拡張機能バージョン（`0.1.0`）、現在の通信仕様バージョンから算出する。
 
@@ -433,7 +482,7 @@ interface ExtensionRecoveryStatus {
 }
 ```
 
-- `missing`：応答履歴がない。拡張機能の実応答を確認済みとは扱わず、初回導入の応答待機と導入案内を表示する
+- `missing`：今回のデスクトップ起動後の応答がない。応答履歴がある場合も前回の履歴を表示用に残すが、現在の接続状態の根拠にはしない
 - `ready`：24時間以内に、拡張機能・通信仕様の両方に互換性がある応答がある
 - `stale`：最新応答に互換性はあるが24時間より古い。削除とは断定せず、Moodleを開いて再確認する
 - `incompatible`：拡張機能バージョンまたは通信仕様バージョンに互換性がない

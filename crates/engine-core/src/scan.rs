@@ -1,5 +1,6 @@
 //! ScanEngine — フォルダの再帰走査・既存の保存パターン推定。
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -166,7 +167,15 @@ fn scan_root(root: &Path) -> EngineResult<ScanSnapshot> {
 		.map_err(|source| path_io(root, source))?;
 	let mut entries = Vec::new();
 	let mut warnings = Vec::new();
-	scan_directory(&root, &root, &mut entries, &mut warnings, true)?;
+	let mut visited_directories = BTreeSet::new();
+	scan_directory(
+		&root,
+		&root,
+		&mut entries,
+		&mut warnings,
+		true,
+		&mut visited_directories,
+	)?;
 	entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 	warnings.sort_by(|left, right| left.path.cmp(&right.path));
 	Ok(ScanSnapshot {
@@ -231,7 +240,11 @@ fn scan_directory(
 	entries: &mut Vec<FileEntry>,
 	warnings: &mut Vec<ScanWarning>,
 	fail_if_unreadable: bool,
+	visited_directories: &mut BTreeSet<PathBuf>,
 ) -> EngineResult<()> {
+	if !visited_directories.insert(directory.to_path_buf()) {
+		return Ok(());
+	}
 	let children = match fs::read_dir(directory) {
 		Ok(children) => children,
 		Err(source) if fail_if_unreadable => return Err(path_io(directory, source)),
@@ -268,7 +281,27 @@ fn scan_directory(
 			continue;
 		}
 		if file_type.is_symlink() {
-			// Windowsのジャンクションを含む名前サロゲートは追跡しない。
+			// OneDriveのプレースホルダーやWindowsのジャンクションは、
+			// 実体が走査ルート内にある場合だけ追跡する。ルート外へのリンクは
+			// 外部データの取り込みや循環を避けるため対象外にする。
+			if let Ok(metadata) = fs::metadata(&path) {
+				if metadata.is_dir() {
+					if let Ok(canonical) = path.canonicalize() {
+						if canonical.strip_prefix(root).is_ok()
+							&& !is_ignored_directory(root, &canonical, &child.file_name())
+						{
+							scan_directory(
+								root,
+								&canonical,
+								entries,
+								warnings,
+								false,
+								visited_directories,
+							)?;
+						}
+					}
+				}
+			}
 			continue;
 		}
 		if file_type.is_dir() {
@@ -277,7 +310,7 @@ fn scan_directory(
 				// 数万件規模になることがあるため正本登録と全文索引の対象外にする。
 				continue;
 			}
-			scan_directory(root, &path, entries, warnings, false)?;
+			scan_directory(root, &path, entries, warnings, false, visited_directories)?;
 			continue;
 		}
 		if !file_type.is_file() {
@@ -424,6 +457,7 @@ fn modified_at(metadata: &fs::Metadata) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+	use std::collections::BTreeSet;
 	use std::fs::{self, File};
 	use std::io::Write;
 	use std::path::PathBuf;
@@ -650,6 +684,7 @@ mod tests {
 		let missing_child = directory.path.join("走査中に消えたフォルダ");
 		let mut entries = Vec::new();
 		let mut warnings = Vec::new();
+		let mut visited_directories = BTreeSet::new();
 
 		scan_directory(
 			&directory.path,
@@ -657,6 +692,7 @@ mod tests {
 			&mut entries,
 			&mut warnings,
 			false,
+			&mut visited_directories,
 		)
 		.expect("子パスの失敗は走査全体を失敗させない");
 

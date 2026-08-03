@@ -35,6 +35,20 @@ describe("desktopの利用者向け主状態", () => {
 		expect(presentation.action).toBe("restore");
 	});
 
+	test("互換しない内部データは授業資料を残して初期化へ進める", () => {
+		const presentation = deriveApplicationState(
+			{
+				database: { state: "recoveryRequired", message: "old" },
+				searchIndex: { state: "recoveryRequired", message: "old" },
+				dataResetRequired: true,
+			},
+			true,
+		);
+		expect(presentation.title).toBe("初期状態に戻す必要があります");
+		expect(presentation.action).toBeNull();
+		expect(presentation.impact).toContain("授業資料");
+	});
+
 	test("backendの技術用語を利用者向けエラーへ露出させない", () => {
 		for (const message of [
 			"SQLite DBと検索索引を開けません",

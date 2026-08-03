@@ -3,6 +3,29 @@ const MOODLE_LOGIN_PATH = /^\/(?:\d{4}\/)?login\/index(?:_form)?\.(?:html|php)\/
 const MOODLE_LOGOUT_PATH = /^\/(?:\d{4}\/)?login\/logout\.php\/?$/i;
 const MOODLE_LANDING_PATH = /^\/(?:\d{4}\/)?$/;
 
+export function isMoodleCoursePage(pageUrl: string): boolean {
+	try {
+		const page = new URL(pageUrl);
+		return /\/course\/view\.php$/i.test(page.pathname) && page.searchParams.has("id");
+	} catch {
+		return false;
+	}
+}
+
+/** Moodleのトップ／ダッシュボード表示。授業ページの候補を背景で更新する起点に使う。 */
+export function isMoodleDashboardPage(pageUrl: string): boolean {
+	try {
+		const page = new URL(pageUrl);
+		return (
+			/^\/(?:\d{4}\/)?(?:my(?:\/index\.php)?|dashboard(?:\/index\.php)?)\/?$/i.test(
+				page.pathname,
+			) || /^\/(?:\d{4}\/)?$/i.test(page.pathname)
+		);
+	} catch {
+		return false;
+	}
+}
+
 export type MoodlePageKind =
 	| "authenticated"
 	| "login"

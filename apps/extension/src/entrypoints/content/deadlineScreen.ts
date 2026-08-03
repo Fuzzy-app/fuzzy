@@ -1,10 +1,12 @@
 import type {
 	Assignment,
 	AssignmentChange,
+	CourseDashboardEntry,
 	DataSyncEvent,
 	FuzzyApiClient,
 	PresentationState,
 } from "@fuzzy/shared";
+import { isDefinitelyOutsideCurrentTerm } from "../../lib/academicTerm";
 import { syncEventChangeCursor } from "../../lib/notifications/syncNotificationNavigation";
 import { DEADLINE_REVIEW_HELP_TEXT } from "../../lib/ui/screenCopy";
 import { createCalendarPanelController } from "./calendarPanel";
@@ -32,9 +34,11 @@ interface DeadlineScreenOptions {
 		Pick<
 			FuzzyApiClient,
 			| "getDeadlines"
+			| "getDashboard"
 			| "getLatestSyncEvent"
 			| "getAssignmentChanges"
 			| "updateSubmissionStatus"
+			| "openFile"
 			| "getNotificationRules"
 			| "updateNotificationRules"
 		> & {
@@ -50,6 +54,7 @@ export class DeadlineScreenController {
 	readonly #calendarPanel;
 	#filter: DeadlineViewFilter = "all";
 	#assignments: Assignment[] = [];
+	#courses: CourseDashboardEntry[] = [];
 	#assignmentState: PresentationState = {
 		tone: "loading",
 		title: "課題・締切を読み込んでいます…",
@@ -123,9 +128,9 @@ export class DeadlineScreenController {
 		screen.append(
 			this.#buildMetrics(),
 			this.#buildSyncSummary(),
-			this.#calendarPanel.render(this.#assignments),
 			this.#buildToolbar(),
 			this.#buildList(),
+			this.#calendarPanel.render(this.#assignments),
 		);
 		return screen;
 	}
@@ -149,7 +154,12 @@ export class DeadlineScreenController {
 	async #loadAssignments(): Promise<void> {
 		try {
 			const api = await this.#options.api;
-			this.#assignments = await api.getDeadlines({ includePast: true });
+			const [assignments, dashboard] = await Promise.all([
+				api.getDeadlines({ includePast: true }),
+				api.getDashboard().catch(() => null),
+			]);
+			this.#assignments = assignments;
+			this.#courses = dashboard?.courses ? [...dashboard.courses] : [];
 			this.#assignmentState = {
 				tone: this.#assignments.length > 0 ? "ready" : "empty",
 				title:
@@ -202,7 +212,7 @@ export class DeadlineScreenController {
 				case "overdue":
 					return isOverdue(assignment);
 				case "review":
-					return isNeedsReview(assignment);
+					return this.#isVisibleReviewMaterial(assignment);
 				default:
 					return true;
 			}
@@ -210,11 +220,29 @@ export class DeadlineScreenController {
 		return filtered.sort((left, right) => {
 			if (left.submitted !== right.submitted) return left.submitted ? 1 : -1;
 			if (isNeedsReview(left) !== isNeedsReview(right)) return isNeedsReview(left) ? -1 : 1;
+			if (isNeedsReview(left) && isNeedsReview(right)) {
+				return (
+					(right.sourceModifiedAtNs ?? Number.MIN_SAFE_INTEGER) -
+					(left.sourceModifiedAtNs ?? Number.MIN_SAFE_INTEGER)
+				);
+			}
 			return (
 				(parseDueAt(left.dueAt) ?? Number.MAX_SAFE_INTEGER) -
 				(parseDueAt(right.dueAt) ?? Number.MAX_SAFE_INTEGER)
 			);
 		});
+	}
+
+	#isVisibleReviewMaterial(assignment: Assignment): boolean {
+		if (
+			!isNeedsReview(assignment) ||
+			assignment.relatedFileId === undefined ||
+			assignment.relatedFileId === null
+		) {
+			return false;
+		}
+		const course = this.#courses.find((candidate) => candidate.courseId === assignment.courseId);
+		return !isDefinitelyOutsideCurrentTerm(course);
 	}
 
 	#buildDeadlineCard(assignment: Assignment): HTMLElement {
@@ -283,8 +311,31 @@ export class DeadlineScreenController {
 			openMoodle.rel = "noopener noreferrer";
 			actions.append(openMoodle);
 		}
+		if (assignment.relatedFileId !== undefined && assignment.relatedFileId !== null) {
+			const openFile = el("button", "fuzzy-secondary-link", "資料を確認");
+			openFile.type = "button";
+			openFile.addEventListener("click", () => {
+				void this.#openRelatedFile(assignment, openFile);
+			});
+			actions.append(openFile);
+		}
 		card.append(head, body, actions);
 		return card;
+	}
+
+	async #openRelatedFile(assignment: Assignment, button: HTMLButtonElement): Promise<void> {
+		if (assignment.relatedFileId === undefined || assignment.relatedFileId === null) return;
+		button.disabled = true;
+		try {
+			const api = await this.#options.api;
+			const result = await api.openFile({ fileId: assignment.relatedFileId, page: null });
+			if (!result.opened) throw new Error("資料を開けませんでした");
+			button.textContent = "資料を開きました";
+		} catch (error) {
+			console.warn("[fuzzy] 要確認資料を開けませんでした", error);
+			button.disabled = false;
+			button.textContent = "資料を確認（再試行）";
+		}
 	}
 
 	async #updateSubmission(assignment: Assignment, submitted: boolean): Promise<void> {
@@ -464,7 +515,8 @@ export class DeadlineScreenController {
 		const host = el("section", "fuzzy-deadline-list");
 		const visible = this.#visibleAssignments();
 		if (visible.length > 0) {
-			host.append(...visible.map((assignment) => this.#buildDeadlineCard(assignment)));
+			if (this.#filter === "review") host.append(this.#buildReviewMaterialGroups(visible));
+			else host.append(...visible.map((assignment) => this.#buildDeadlineCard(assignment)));
 			return host;
 		}
 		const empty = el("section", "fuzzy-empty");
@@ -473,6 +525,30 @@ export class DeadlineScreenController {
 			el("p", "", "この条件に合う締切は今のところ見つかっていません。"),
 		);
 		host.append(empty);
+		return host;
+	}
+
+	#buildReviewMaterialGroups(assignments: readonly Assignment[]): HTMLElement {
+		const groups = new Map<string, Assignment[]>();
+		for (const assignment of assignments) {
+			const group = groups.get(assignment.courseName) ?? [];
+			group.push(assignment);
+			groups.set(assignment.courseName, group);
+		}
+		const host = el("div", "fuzzy-review-material-groups");
+		for (const [courseName, group] of groups) {
+			const details = document.createElement("details");
+			details.className = "fuzzy-review-material-group";
+			const summary = document.createElement("summary");
+			summary.append(
+				el("strong", "", courseName),
+				el("span", "fuzzy-dashboard-group-count", `${group.length}資料・クリックして開く`),
+			);
+			const cards = el("div", "fuzzy-review-material-list");
+			cards.append(...group.map((assignment) => this.#buildDeadlineCard(assignment)));
+			details.append(summary, cards);
+			host.append(details);
+		}
 		return host;
 	}
 

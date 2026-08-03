@@ -14,6 +14,7 @@ export function ensureCalendarPanelStyle(): void {
 			border-radius: 14px;
 			background: var(--fuzzy-color-surface);
 			box-shadow: var(--fuzzy-shadow-card);
+			margin-top: 4px;
 		}
 
 		.fuzzy-calendar-export,
@@ -34,6 +35,16 @@ export function ensureCalendarPanelStyle(): void {
 			margin: 0 0 6px;
 			font-size: 1.04rem;
 			font-weight: 900;
+		}
+
+		.fuzzy-notification-settings {
+			border-left: 4px solid var(--fuzzy-color-warning);
+			padding-left: 14px;
+		}
+
+		.fuzzy-notification-settings h2 {
+			color: var(--fuzzy-color-warning);
+			font-size: 1.18rem;
 		}
 
 		.fuzzy-calendar-copy,
@@ -174,6 +185,14 @@ export function ensureCalendarPanelStyle(): void {
 		.fuzzy-calendar-button.is-secondary {
 			background: var(--fuzzy-color-surface-muted);
 			color: var(--fuzzy-color-text-secondary);
+		}
+
+		.fuzzy-calendar-button.is-compact {
+			justify-self: end;
+			padding: 6px 9px;
+			background: var(--fuzzy-color-surface-muted);
+			color: var(--fuzzy-color-text-secondary);
+			font-size: var(--fuzzy-font-size-caption);
 		}
 
 		.fuzzy-calendar-button:disabled {

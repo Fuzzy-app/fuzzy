@@ -56,6 +56,8 @@ fn load_dashboard(conn: &Connection, now: Option<&str>) -> EngineResult<Dashboar
 			"SELECT
 				c.id,
 				c.name,
+				c.academic_year,
+				c.term,
 				COUNT(f.id),
 				COUNT(CASE WHEN f.rule_compliant = 0 THEN 1 END),
 				(
@@ -71,7 +73,7 @@ fn load_dashboard(conn: &Connection, now: Option<&str>) -> EngineResult<Dashboar
 				)
 			 FROM courses c
 			 LEFT JOIN files f ON f.course_id = c.id AND f.missing_at IS NULL AND f.excluded_at IS NULL
-			 GROUP BY c.id, c.name
+			 GROUP BY c.id, c.name, c.academic_year, c.term
 			 ORDER BY c.id",
 		)
 		.map_err(db_err)?;
@@ -80,9 +82,11 @@ fn load_dashboard(conn: &Connection, now: Option<&str>) -> EngineResult<Dashboar
 			Ok(CourseDashboardRecord {
 				course_id: row.get(0)?,
 				course_name: row.get(1)?,
-				file_count: row.get(2)?,
-				violation_count: row.get(3)?,
-				next_due_at: row.get(4)?,
+				academic_year: row.get(2)?,
+				term: row.get(3)?,
+				file_count: row.get(4)?,
+				violation_count: row.get(5)?,
+				next_due_at: row.get(6)?,
 			})
 		})
 		.map_err(db_err)?
@@ -144,9 +148,12 @@ fn load_deadlines(
 				a.submission_mode,
 				a.submitted,
 				a.submission_availability,
-				a.moodle_url
+				a.moodle_url,
+				a.related_file_id,
+				related_file.scan_modified_at_ns
 			 FROM assignments a
 			 JOIN courses c ON c.id = a.course_id
+			 LEFT JOIN files related_file ON related_file.id = a.related_file_id
 			 WHERE a.removed_at IS NULL
 				AND (?1 IS NULL OR a.course_id = ?1)
 				AND (?2 = 0 OR a.due_at_status = 'needs_review')
@@ -181,6 +188,8 @@ fn load_deadlines(
 					submitted,
 					submission_availability: row.get(9)?,
 					moodle_url: row.get(10)?,
+					related_file_id: row.get(11)?,
+					source_modified_at_ns: row.get(12)?,
 				})
 			},
 		)

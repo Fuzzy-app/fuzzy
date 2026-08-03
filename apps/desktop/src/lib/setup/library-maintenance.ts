@@ -38,6 +38,8 @@ export type RecoveryComponentStatus = {
 export type ApplicationRecoveryStatus = {
 	database: RecoveryComponentStatus;
 	searchIndex: RecoveryComponentStatus;
+	/** 旧世代の内部データを移行せず初期化する必要があるか。 */
+	dataResetRequired?: boolean;
 };
 
 export type FreshDatabaseResult = {
@@ -193,7 +195,15 @@ export function parseApplicationRecoveryStatus(value: unknown): ApplicationRecov
 		"recoveryRequired",
 		"needsRebuild",
 	]);
-	return database && searchIndex ? { database, searchIndex } : null;
+	if (!database || !searchIndex) return null;
+	if (result.dataResetRequired !== undefined && typeof result.dataResetRequired !== "boolean") {
+		return null;
+	}
+	return {
+		database,
+		searchIndex,
+		...(result.dataResetRequired === true ? { dataResetRequired: true } : {}),
+	};
 }
 
 function parseFreshDatabaseResult(value: unknown): FreshDatabaseResult | null {

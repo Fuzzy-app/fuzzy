@@ -6,8 +6,10 @@ import type {
 	ExtractZipRequest,
 	FuzzyApiClient,
 	NotificationRuleInput,
+	OpenFileRequest,
 	RebuildLibraryRequest,
 	ReconcileCourseFilesRequest,
+	SearchScope,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
 	UpdateCourseFolderNameRequest,
@@ -43,7 +45,12 @@ export async function callBackgroundApi(
 			return client.updateSubmissionStatus(request.assignmentId, request.submitted);
 		}
 		case "search":
-			return client.search((message.request as { query: string }).query);
+			return client.search(
+				(message.request as { query: string; scope?: SearchScope }).query,
+				(message.request as { scope?: SearchScope }).scope,
+			);
+		case "openFile":
+			return client.openFile(message.request as OpenFileRequest);
 		case "suggestSavePath":
 			return client.suggestSavePath(message.request as SuggestSavePathRequest);
 		case "updateCourseFolderName":

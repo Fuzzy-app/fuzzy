@@ -31,7 +31,7 @@ pub mod types;
 mod folder_name_notes;
 mod windows_names;
 
-pub use database::{resolve_db_path, Database};
+pub use database::{is_incompatible_schema_error, resolve_db_path, Database};
 pub use error::{EngineError, EngineResult};
 pub use extension_runtime::{
 	is_compatible_extension_version, ExtensionRecoveryState, ExtensionRecoveryStatus,

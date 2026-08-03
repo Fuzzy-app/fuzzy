@@ -94,8 +94,6 @@ export function getShellTopOffset(navHost: HTMLElement): number {
 		document.querySelector<HTMLElement>(".tabs"),
 		document.querySelector<HTMLElement>(".moremenu"),
 		document.querySelector<HTMLElement>(".secondarymoremenu"),
-		document.querySelector<HTMLElement>("#page-header"),
-		document.querySelector<HTMLElement>(".page-header-headings"),
 	];
 
 	const bottoms = candidates

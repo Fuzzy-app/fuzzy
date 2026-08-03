@@ -21,11 +21,14 @@ export type { ImportDataRequest } from "./generated/ImportDataRequest";
 export type { ImportDataResult } from "./generated/ImportDataResult";
 export type { LibraryMaintenanceSummary } from "./generated/LibraryMaintenanceSummary";
 export type { LibraryMaintenanceWarning } from "./generated/LibraryMaintenanceWarning";
+export type { OpenFileRequest } from "./generated/OpenFileRequest";
+export type { OpenFileResult } from "./generated/OpenFileResult";
 export type { PingResult } from "./generated/PingResult";
 export type { ReconcileCourseFilesRequest } from "./generated/ReconcileCourseFilesRequest";
 export type { RebuildLibraryRequest } from "./generated/RebuildLibraryRequest";
 export type { RuleViolationListItem } from "./generated/RuleViolationListItem";
 export type { SearchRequest } from "./generated/SearchRequest";
+export type { SearchScope } from "./generated/SearchScope";
 export type { SearchResult } from "./generated/SearchResult";
 export type { SyncMoodleAssignmentRequest } from "./generated/SyncMoodleAssignmentRequest";
 export type { SyncMoodleAssignmentsRequest } from "./generated/SyncMoodleAssignmentsRequest";
@@ -208,11 +211,18 @@ export interface Assignment {
 	submissionAvailability: "available" | "unavailable" | "unknown";
 	/** 利用者が明示操作で開くMoodle課題詳細URL。 */
 	moodleUrl: string | null;
+	/** 本文から要確認と判定した資料を開くためのファイルID。 */
+	relatedFileId?: number | null;
+	/** 要確認資料の元ファイル更新日時（UNIXエポックからのナノ秒）。 */
+	sourceModifiedAtNs?: number | null;
 }
 
 export interface CourseDashboardEntry {
 	courseId: number;
 	courseName: string;
+	/** 保存資料から取得できた年度・学期。旧キャッシュでは省略される。 */
+	academicYear?: number | null;
+	term?: string | null;
 	fileCount: number;
 	violationCount: number;
 	nextDueAt: string | null;

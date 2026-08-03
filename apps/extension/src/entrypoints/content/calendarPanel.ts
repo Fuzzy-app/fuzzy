@@ -176,7 +176,11 @@ export function createCalendarPanelController(
 				"期限が確認できる課題を、Googleカレンダーなどへ読み込めるファイル（.ics）にまとめます。提出済み・期限切れの課題も含まれます。",
 			),
 		);
-		const button = element("button", "fuzzy-calendar-button", "カレンダー用ファイルを保存");
+		const button = element(
+			"button",
+			"fuzzy-calendar-button is-compact",
+			"カレンダー用ファイルを保存",
+		);
 		button.type = "button";
 		button.disabled = exportableCount === 0;
 		button.addEventListener("click", () => exportAssignments(assignments));

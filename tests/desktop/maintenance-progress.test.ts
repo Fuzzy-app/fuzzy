@@ -16,7 +16,7 @@ describe("desktopの資料情報進捗", () => {
 			countLabel: "1,200 / 4,000件",
 			availabilityLabel: "この処理は途中で中止できません。完了までお待ちください。",
 			percent: 30,
-			ariaValueText: "検索・整理情報を準備しています、1,200 / 4,000件、確認が必要な項目2件",
+			ariaValueText: "検索・整理情報を準備しています、1,200 / 4,000件",
 		});
 	});
 
@@ -30,8 +30,8 @@ describe("desktopの資料情報進捗", () => {
 		});
 
 		expect(presentation.percent).toBe(100);
-		expect(presentation.title).toBe("資料情報の準備が完了しました");
-		expect(presentation.availabilityLabel).toBe("処理は完了しました。");
+		expect(presentation.title).toBe("完了しました");
+		expect(presentation.availabilityLabel).toBe("完了しました。");
 	});
 
 	test("失敗後に再試行できることを示す", () => {

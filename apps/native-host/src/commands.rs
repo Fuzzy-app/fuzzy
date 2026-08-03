@@ -2,12 +2,14 @@
 
 use std::io::Write;
 use std::path::Path;
+#[cfg(not(windows))]
+use std::process::Command;
 
 use engine_core::database::ExtractedFileRegistration;
 use engine_core::duplicate::{
 	DefaultDuplicateDetector, DuplicateDetector, DEFAULT_SIMILARITY_THRESHOLD,
 };
-use engine_core::index::IndexEngine;
+use engine_core::index::{normalize_search_text, IndexEngine};
 use engine_core::library::{document_mime_type, is_indexable_document, LibraryMaintenance};
 use engine_core::rule::{DefaultRuleEngine, RuleEngine};
 use engine_core::section::{parse_section_file_prefix, parse_section_name};
@@ -23,19 +25,22 @@ use crate::api_types::{
 	DuplicateGroupListItem, EmptyRequest, ExcludedFolder, ExportDataRequest, ExportDataResult,
 	ExtractZipRequest, ExtractZipResult, GetAssignmentChangesRequest, GetDeadlinesRequest,
 	GetExcludedFoldersRequest, ImportDataRequest, ImportDataResult, LibraryMaintenanceSummary,
-	NotificationRule, NotificationRuleUpdateResult, OkResult, PingResult, RebuildLibraryRequest,
-	ReconcileCourseFilesRequest, RuleSet, RuleViolationListItem, SaveFilesRequest, SaveFilesResult,
-	SaveSuggestion, SearchRequest, SearchResult, SimilarFileMatch, SuggestSavePathRequest,
-	SyncMoodleAssignmentsRequest, UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult,
-	UpdateCourseRuleOverrideRequest, UpdateExcludedFoldersRequest, UpdateGlobalRuleRequest,
-	UpdateNotificationRulesRequest, UpdateSubmissionStatusRequest,
+	NotificationRule, NotificationRuleUpdateResult, OkResult, OpenFileRequest, OpenFileResult,
+	PingResult, RebuildLibraryRequest, ReconcileCourseFilesRequest, RuleSet, RuleViolationListItem,
+	SaveFilesRequest, SaveFilesResult, SaveSuggestion, SearchRequest, SearchResult, SearchScope,
+	SimilarFileMatch, SuggestSavePathRequest, SyncMoodleAssignmentsRequest,
+	UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest,
+	UpdateExcludedFoldersRequest, UpdateGlobalRuleRequest, UpdateNotificationRulesRequest,
+	UpdateSubmissionStatusRequest,
 };
 use crate::file_transfer::{extract_zip_archive, FileTransferCommitResult, FileTransferManager};
 use crate::protocol::{Request, Response};
 use engine_core::EXTENSION_RUNTIME_PROTOCOL_VERSION;
 
 const DEFAULT_SEARCH_LIMIT: usize = 50;
+const SEARCH_CANDIDATE_LIMIT: usize = 200;
 const MAX_SEARCH_QUERY_CHARS: usize = 256;
+const MAX_SEARCH_FOLDER_CHARS: usize = 512;
 
 pub fn dispatch_with_services(
 	database: &mut Database,
@@ -47,6 +52,7 @@ pub fn dispatch_with_services(
 		"getLatestSyncEvent" => get_latest_sync_event(database, request),
 		"getAssignmentChanges" => get_assignment_changes(database, request),
 		"search" => search(database, index_engine, request),
+		"openFile" => open_file(database, request),
 		"exportData" => export_data(database, request),
 		"importData" => import_data(database, index_engine, request),
 		"rebuildLibrary" => rebuild_library(database, index_engine, request),
@@ -222,31 +228,206 @@ fn search(database: &Database, index_engine: &dyn IndexEngine, request: Request)
 			},
 		);
 	}
+	let normalized_query = normalize_search_text(query);
+	if normalized_query.is_empty() {
+		return engine_error_response(
+			request.id,
+			EngineError::InvalidInput {
+				field: "query".to_string(),
+				reason: "検索できる文字を1文字以上指定してください".to_string(),
+			},
+		);
+	}
+	let scope = match normalize_search_scope(payload.scope) {
+		Ok(scope) => scope,
+		Err(error) => return engine_error_response(request.id, error),
+	};
 	let result = index_engine
-		.search(query, DEFAULT_SEARCH_LIMIT)
+		.search(query, SEARCH_CANDIDATE_LIMIT)
 		.and_then(|hits| {
-			hits.into_iter()
+			let mut results = hits
+				.into_iter()
 				.filter_map(|hit| match database.search_document_metadata(hit.file_id) {
-					Ok(Some(metadata)) => Some(Ok(SearchResult {
-						file_id: metadata.file_id,
-						file_name: metadata.file_name,
-						course_name: metadata.course_name,
-						snippet: hit.snippet,
-						page: hit.page.filter(|page| {
-							*page >= 1
-								&& metadata
-									.page_count
-									.is_none_or(|page_count| *page <= page_count)
-						}),
-						page_count: metadata.page_count,
-						score: hit.score,
-					})),
+					Ok(Some(metadata)) if search_scope_matches(scope.as_ref(), &metadata) => {
+						let file_stem = Path::new(&metadata.file_name)
+							.file_stem()
+							.and_then(|value| value.to_str())
+							.unwrap_or(&metadata.file_name);
+						let normalized_file_name = normalize_search_text(file_stem);
+						let filename_boost = if normalized_file_name == normalized_query {
+							0.5
+						} else if normalized_file_name.contains(&normalized_query) {
+							0.1
+						} else {
+							0.0
+						};
+						Some(Ok((
+							SearchResult {
+								file_id: metadata.file_id,
+								file_name: metadata.file_name,
+								course_name: metadata.course_name,
+								relative_path: metadata.relative_path,
+								snippet: hit.snippet,
+								page: hit.page.filter(|page| {
+									*page >= 1
+										&& metadata
+											.page_count
+											.is_none_or(|page_count| *page <= page_count)
+								}),
+								page_count: metadata.page_count,
+								score: hit.score + filename_boost,
+							},
+							metadata.modified_at,
+						)))
+					}
+					Ok(Some(_)) => None,
 					Ok(None) => None,
 					Err(error) => Some(Err(error)),
 				})
-				.collect::<EngineResult<Vec<_>>>()
+				.collect::<EngineResult<Vec<_>>>()?;
+			results.sort_by(|(left, left_modified), (right, right_modified)| {
+				right
+					.score
+					.total_cmp(&left.score)
+					.then_with(|| right_modified.cmp(left_modified))
+			});
+			results.truncate(DEFAULT_SEARCH_LIMIT);
+			Ok(results
+				.into_iter()
+				.map(|(result, _)| result)
+				.collect::<Vec<_>>())
 		});
 	respond(request.id, result)
+}
+
+fn normalize_search_scope(scope: Option<SearchScope>) -> EngineResult<Option<SearchScope>> {
+	let Some(mut scope) = scope else {
+		return Ok(None);
+	};
+	if scope.course_id.is_some_and(|course_id| course_id <= 0) {
+		return Err(EngineError::InvalidInput {
+			field: "scope.courseId".to_string(),
+			reason: "1以上のコースIDを指定してください".to_string(),
+		});
+	}
+	if let Some(folder) = scope.folder.take() {
+		let folder = folder.trim().replace('\\', "/");
+		if folder.len() > MAX_SEARCH_FOLDER_CHARS
+			|| folder.is_empty()
+			|| folder.starts_with('/')
+			|| folder.ends_with('/')
+			|| folder
+				.split('/')
+				.any(|part| part.is_empty() || part == "." || part == ".." || part.contains(':'))
+		{
+			return Err(EngineError::InvalidInput {
+				field: "scope.folder".to_string(),
+				reason: "保存ルートからの相対フォルダーを指定してください".to_string(),
+			});
+		}
+		scope.folder = Some(folder);
+	}
+	if scope.course_id.is_none() && scope.folder.is_none() {
+		return Ok(None);
+	}
+	Ok(Some(scope))
+}
+
+fn search_scope_matches(
+	scope: Option<&SearchScope>,
+	metadata: &engine_core::types::SearchDocumentMetadata,
+) -> bool {
+	let Some(scope) = scope else {
+		return true;
+	};
+	if scope
+		.course_id
+		.is_some_and(|course_id| metadata.course_id != Some(course_id))
+	{
+		return false;
+	}
+	scope.folder.as_ref().is_none_or(|folder| {
+		let relative_path = metadata.relative_path.replace('\\', "/");
+		relative_path == *folder || relative_path.starts_with(&format!("{folder}/"))
+	})
+}
+
+fn open_file(database: &Database, request: Request) -> Response {
+	let payload = match parse_payload::<OpenFileRequest>(&request) {
+		Ok(payload) if payload.file_id > 0 && payload.page.is_none_or(|page| page > 0) => payload,
+		Ok(_) => {
+			return Response::err(
+				Some(request.id),
+				"INVALID_REQUEST",
+				"開く資料の指定が不正です",
+			)
+		}
+		Err(response) => return response,
+	};
+	let result = (|| {
+		let path = database
+			.openable_file_path(payload.file_id)?
+			.ok_or_else(|| EngineError::InvalidInput {
+				field: "fileId".to_string(),
+				reason: "資料を開けませんでした".to_string(),
+			})?;
+		open_path_with_default_application(&path)?;
+		Ok(OpenFileResult {
+			opened: true,
+			page: payload.page,
+		})
+	})();
+	respond(request.id, result)
+}
+
+fn open_path_with_default_application(path: &Path) -> EngineResult<()> {
+	#[cfg(windows)]
+	{
+		use std::iter::once;
+		use std::os::windows::ffi::OsStrExt;
+		use windows_sys::Win32::UI::Shell::ShellExecuteW;
+		use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+		let operation = "open".encode_utf16().chain(once(0)).collect::<Vec<_>>();
+		let path = path
+			.as_os_str()
+			.encode_wide()
+			.chain(once(0))
+			.collect::<Vec<_>>();
+		let result = unsafe {
+			ShellExecuteW(
+				std::ptr::null_mut(),
+				operation.as_ptr(),
+				path.as_ptr(),
+				std::ptr::null(),
+				std::ptr::null(),
+				SW_SHOWNORMAL,
+			)
+		};
+		if result as usize <= 32 {
+			return Err(EngineError::InvalidInput {
+				field: "fileId".to_string(),
+				reason: "資料を開くアプリケーションを起動できませんでした".to_string(),
+			});
+		}
+		Ok(())
+	}
+	#[cfg(target_os = "macos")]
+	{
+		Command::new("open")
+			.arg(path)
+			.spawn()
+			.map(|_| ())
+			.map_err(EngineError::Io)
+	}
+	#[cfg(all(unix, not(target_os = "macos")))]
+	{
+		Command::new("xdg-open")
+			.arg(path)
+			.spawn()
+			.map(|_| ())
+			.map_err(EngineError::Io)
+	}
 }
 
 fn export_data(database: &Database, request: Request) -> Response {
@@ -1079,6 +1260,7 @@ mod tests {
 			"saveFiles",
 			"extractZip",
 			"search",
+			"openFile",
 			"getDashboard",
 			"getDeadlines",
 			"updateSubmissionStatus",
@@ -1109,6 +1291,21 @@ mod tests {
 				"{command} was not routed"
 			);
 		}
+	}
+
+	#[test]
+	fn open_file_rejects_invalid_ids_before_touching_the_os() {
+		let mut database = Database::open_in_memory().unwrap();
+		let mut index = TestIndexEngine::default();
+		let mut transfers = FileTransferManager::default();
+		let response = dispatch_with_services(
+			&mut database,
+			&mut index,
+			&mut transfers,
+			request("openFile", serde_json::json!({ "fileId": 0, "page": 0 })),
+		);
+		assert!(!response.ok);
+		assert_eq!(response.error.unwrap().code, "INVALID_REQUEST");
 	}
 
 	#[test]

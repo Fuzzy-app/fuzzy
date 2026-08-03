@@ -63,7 +63,11 @@ describe("browser-independent extension installation", () => {
 			resolve(import.meta.dir, "../../apps/desktop/src/lib/setup/ExtensionInstallStep.svelte"),
 		).text();
 
-		expect(componentSource).toContain("ブラウザの種類を選ぶ必要はありません");
+		expect(componentSource).toContain("ブラウザの拡張機能管理画面を開く");
+		expect(componentSource).toContain("chrome://extensions/");
+		expect(componentSource).toContain("セットアップを完了");
+		expect(componentSource).not.toContain("ブラウザの種類を選ぶ必要はありません");
+		expect(componentSource).not.toContain("初期ルールを確認する");
 		expect(componentSource).toContain("拡張機能からの応答を待っています");
 		expect(componentSource).toContain(
 			"上の導入手順から最新版を導入し、Moodleを開いて再確認してください",
@@ -122,8 +126,8 @@ describe("browser-independent extension installation", () => {
 			resolve(import.meta.dir, "../../apps/desktop/src/app.html"),
 		).text();
 
-		expect(appHtmlSource).toContain("<title>Fuzzy セットアップ・保守</title>");
-		expect(appHtmlSource).not.toContain("<title>Fuzzy 初期セットアップ</title>");
+		expect(appHtmlSource).toContain("<title>Fuzzy セットアップ</title>");
+		expect(appHtmlSource).not.toContain("<title>Fuzzy セットアップ・保守</title>");
 	});
 
 	test("再セットアップ導線を復旧カードと同じ表示幅・デザイントークンで表示する", async () => {
@@ -147,7 +151,7 @@ describe("browser-independent extension installation", () => {
 		expect(pageSource).toContain("expectedRevision: savedConfiguration.revision");
 		expect(pageSource).toContain("変更内容を保存");
 		expect(pageSource).toContain('type SetupFlowMode = "initial" | "reconfigure" | "recovery"');
-		expect(pageSource).toContain("{#if maintenanceProgress}");
+		expect(pageSource).toContain("{#if maintenanceProgress && currentStepIndex !== 3}");
 		expect(pageSource).not.toContain("変更内容の保存は準備中");
 		expect(pageSource).not.toContain("isEditingSetup");
 		expect(pageSource).toContain("変更せず戻る");
@@ -155,9 +159,11 @@ describe("browser-independent extension installation", () => {
 		expect(pageSource).not.toContain("<h1>再セットアップ</h1>");
 		expect(pageSource).toContain("今回の確認: まだ実行していません");
 		expect(pageSource).toContain("保存先にある資料から現在の並びを確認するには");
-		expect(pageSource).toContain("資料が入っていないフォルダーだけでは並びを推定しません");
-		expect(pageSource).toContain('? "現在の設定"');
-		expect(pageSource).toContain('? "保存済み"');
+		expect(pageSource).toContain("フォルダー全体を読み込む");
+		expect(pageSource).toContain("自分でルールを設定する");
+		expect(pageSource).toContain('folderNameLanguage: "ja" | "en"');
+		expect(pageSource).toContain("一致度");
+		expect(pageSource).not.toContain("STEP 1 / 4");
 	});
 
 	test("SQLiteを開けない起動時もGUI復旧でき、missing応答でも保守導線を隠さない", async () => {
@@ -201,7 +207,7 @@ describe("browser-independent extension installation", () => {
 		expect(getPreferredExtensionInstallChannel()).toBe("bundled");
 		expect(getExtensionInstallDestination("bundled")).toMatchObject({
 			available: true,
-			displayTarget: "Fuzzyアプリに同梱済み",
+			displayTarget: "Fuzzyアプリ内の拡張機能フォルダー",
 			target: {
 				kind: "bundled-resource",
 				value: "resources/extension/chrome-mv3/manifest.json",
@@ -232,7 +238,7 @@ describe("openExtensionInstallDestinationClient", () => {
 		const result = await openExtensionInstallDestinationClient("bundled", null);
 		expect(result).toMatchObject({
 			mocked: true,
-			openedTarget: "Fuzzyアプリに同梱済み",
+			openedTarget: "Fuzzyアプリ内の拡張機能フォルダー",
 		});
 	});
 
@@ -430,7 +436,7 @@ describe("SQLite-backed extension recovery status", () => {
 				...readyStatus,
 				state: "missing",
 			}),
-		).toBeNull();
+		).toEqual({ ...readyStatus, state: "missing" });
 	});
 
 	test("SQLiteの最新応答を取得するTauriコマンドだけを呼ぶ", async () => {

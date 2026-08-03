@@ -95,7 +95,7 @@ export function configurationToSnapshot(
 		courseSegmentIndex: configuration.pattern.courseSegmentIndex,
 		ruleTemplate: normalizeTemplate(configuration.rule.template),
 		courseNames: configuration.courseOverrides
-			.filter(({ enabled }) => enabled)
+			.filter(({ mode }) => mode !== "common")
 			.map(({ courseName }) => courseName)
 			.sort((left, right) => left.localeCompare(right, "ja")),
 	};

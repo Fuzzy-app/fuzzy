@@ -21,6 +21,8 @@ import type {
 	NotificationRule,
 	NotificationRuleInput,
 	NotificationRuleUpdateResult,
+	OpenFileRequest,
+	OpenFileResult,
 	PingResult,
 	RebuildLibraryRequest,
 	ReconcileCourseFilesRequest,
@@ -31,6 +33,7 @@ import type {
 	SaveFilesResult,
 	SaveSuggestion,
 	SearchResult,
+	SearchScope,
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
@@ -355,8 +358,12 @@ export class NativeApiClient implements FuzzyApiClient {
 		return this.send("updateSubmissionStatus", { assignmentId, submitted });
 	}
 
-	search(query: string): Promise<SearchResult[]> {
-		return this.send("search", { query });
+	search(query: string, scope?: SearchScope): Promise<SearchResult[]> {
+		return this.send("search", { query, ...(scope ? { scope } : {}) });
+	}
+
+	openFile(request: OpenFileRequest): Promise<OpenFileResult> {
+		return this.send("openFile", request);
 	}
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {

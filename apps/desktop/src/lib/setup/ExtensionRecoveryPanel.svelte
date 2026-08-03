@@ -363,7 +363,7 @@
 			<p class="chip">拡張機能の状態</p>
 			<h1 id="extension-recovery-heading">Fuzzyの利用状態を確認</h1>
 			<p class="intro">
-				拡張機能から最後に届いた応答とバージョンを確認します。ブラウザの種類による判定は行いません。
+				拡張機能から最後に届いた応答とバージョンを確認します。
 			</p>
 		</div>
 		<span class="local-badge">あなたのPC上で確認</span>
@@ -428,6 +428,15 @@
 				<h2>拡張機能からの最終応答が古くなっています</h2>
 				<p>
 					最後の応答は {formatDate(observation.lastSeenAt)} です。削除とは断定せず、まずMoodleを開いて新しい応答を確認します。
+				</p>
+			</div>
+		{:else if viewState === "missing" && observation}
+			<div class="status-icon error" aria-hidden="true">!</div>
+			<div>
+				<p class="section-label">今回の起動後は未確認です</p>
+				<h2>現在の拡張機能から応答がありません</h2>
+				<p>
+					前回は {formatDate(observation.lastSeenAt)} に応答がありました。今回の起動後の応答ではないため、接続中とは判定していません。Moodleを開いて再確認してください。
 				</p>
 			</div>
 		{:else}
@@ -519,10 +528,9 @@
 						style:width={`${maintenanceProgressPresentation.percent ?? 30}%`}
 					></span>
 				</div>
-				{#if maintenanceProgress?.warningCount}
-					<p>確認が必要な項目: {maintenanceProgress.warningCount}件</p>
+				{#if maintenanceProgress?.phase !== "completed"}
+					<p>{maintenanceProgressPresentation.availabilityLabel}</p>
 				{/if}
-				<p>{maintenanceProgressPresentation.availabilityLabel}</p>
 			</div>
 		{/if}
 
@@ -608,16 +616,6 @@
 					>
 				</div>
 			</div>
-			{#if maintenanceSummary.warnings.length > 0}
-				<details class="maintenance-warnings">
-					<summary>
-						確認が必要な項目 {maintenanceSummary.warnings.length} 件
-					</summary>
-					<p>
-						一部の資料を確認できませんでした。資料の保存が終わっていることと保存先を確認し、もう一度「保存先を確認して資料情報を作り直す」を実行してください。保存済み資料は移動・削除しません。
-					</p>
-				</details>
-			{/if}
 		{/if}
 
 		<p class="maintenance-note">
@@ -936,20 +934,6 @@
 	.maintenance-summary strong {
 		color: var(--fuzzy-color-primary);
 		font-size: 1.05rem;
-	}
-
-	.maintenance-warnings {
-		margin-top: 14px;
-		padding: 12px 14px;
-		border-radius: 8px;
-		background: var(--fuzzy-color-warning-soft);
-		color: var(--fuzzy-color-warning);
-		font-size: 0.75rem;
-	}
-
-	.maintenance-warnings summary {
-		cursor: pointer;
-		font-weight: 700;
 	}
 
 	.maintenance-note {

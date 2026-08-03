@@ -46,7 +46,7 @@ fn balanced_bracket_pairs(value: &str) -> Vec<BracketPair> {
 	let mut pairs = Vec::new();
 	let mut invalid_ranges = Vec::new();
 	for (index, character) in value.char_indices() {
-		if matches!(character, '(' | '[') {
+		if matches!(character, '(' | '[' | '（' | '［') {
 			stack.push(OpenBracket {
 				character,
 				start: index,
@@ -58,6 +58,8 @@ fn balanced_bracket_pairs(value: &str) -> Vec<BracketPair> {
 		let expected_open = match character {
 			')' => '(',
 			']' => '[',
+			'）' => '（',
+			'］' => '［',
 			_ => continue,
 		};
 		let Some(open) = stack.last().copied() else {
@@ -97,7 +99,29 @@ fn is_supplemental_note(value: &str) -> bool {
 	value.is_empty()
 		|| is_academic_period_note(value)
 		|| is_staff_note(value)
+		|| is_course_schedule_note(value)
 		|| value == "配布資料"
+}
+
+fn is_course_schedule_note(value: &str) -> bool {
+	let compact = value
+		.chars()
+		.filter(|character| !character.is_whitespace())
+		.collect::<String>();
+	let has_class_period =
+		compact.contains("コマ") && compact.chars().any(|character| character.is_ascii_digit());
+	let has_quarter = compact.chars().enumerate().any(|(index, character)| {
+		matches!(character, 'Q' | 'q')
+			&& index > 0
+			&& compact
+				.chars()
+				.nth(index.saturating_sub(1))
+				.is_some_and(|previous| previous.is_ascii_digit())
+	});
+	let has_room = compact.as_bytes().windows(3).any(|window| {
+		window[0].is_ascii_uppercase() && window[1].is_ascii_digit() && window[2].is_ascii_digit()
+	});
+	has_class_period || has_quarter || has_room
 }
 
 fn is_academic_period_note(value: &str) -> bool {
@@ -147,4 +171,25 @@ fn is_staff_note(value: &str) -> bool {
 				.and_then(|rest| rest.trim_start().strip_prefix(':'))
 				.is_some_and(|rest| !rest.trim().is_empty())
 		})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::remove_supplemental_notes;
+
+	#[test]
+	fn removes_full_width_course_schedule_note() {
+		assert_eq!(
+			remove_supplemental_notes("画像処理（火5コマ，2Q，A101，中村恭之）"),
+			"画像処理"
+		);
+	}
+
+	#[test]
+	fn keeps_parenthesized_course_distinction_when_it_is_not_a_note() {
+		assert_eq!(
+			remove_supplemental_notes("プログラミング（演習）"),
+			"プログラミング（演習）"
+		);
+	}
 }

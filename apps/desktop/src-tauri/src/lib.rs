@@ -13,7 +13,8 @@ use engine_core::library::{
 use engine_core::scan::{DefaultScanEngine, ScanEngine};
 use engine_core::types::FileEntry;
 use engine_core::{
-	resolve_db_path, Database, EngineError, ExtensionRecoveryStatus, ExtensionSetupStatus,
+	is_incompatible_schema_error, resolve_db_path, Database, EngineError, ExtensionRecoveryStatus,
+	ExtensionSetupStatus,
 };
 use native_host_installation::NativeHostInstallationStatus;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,7 @@ struct AppState {
 	database: Mutex<DatabaseRuntimeState>,
 	index_engine: Mutex<IndexRuntimeState>,
 	native_host_installation: Mutex<NativeHostInstallationStatus>,
+	started_at_unix_millis: i64,
 }
 
 const LIBRARY_MAINTENANCE_PROGRESS_EVENT: &str = "library-maintenance-progress";
@@ -31,6 +33,7 @@ const LIBRARY_MAINTENANCE_PROGRESS_EVENT: &str = "library-maintenance-progress";
 struct DatabaseRuntimeState {
 	database: Option<Database>,
 	path: Option<PathBuf>,
+	data_reset_required: bool,
 }
 
 impl DatabaseRuntimeState {
@@ -76,6 +79,7 @@ struct RecoveryComponentStatus {
 struct ApplicationRecoveryStatus {
 	database: RecoveryComponentStatus,
 	search_index: RecoveryComponentStatus,
+	data_reset_required: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -90,6 +94,21 @@ struct PatternSelection {
 struct RuleSelection {
 	id: String,
 	template: String,
+	#[serde(default = "default_folder_name_language")]
+	folder_name_language: String,
+}
+
+fn default_folder_name_language() -> String {
+	"ja".to_string()
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CourseOverrideMode {
+	Common,
+	#[default]
+	Override,
+	Unmanaged,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -97,6 +116,8 @@ struct RuleSelection {
 struct CourseOverrideSelection {
 	course_name: String,
 	enabled: bool,
+	#[serde(default)]
+	mode: CourseOverrideMode,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,6 +145,14 @@ struct PatternCandidate {
 	reason: String,
 	recommended: bool,
 	requires_confirmation: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanExistingStructureResponse {
+	candidates: Vec<PatternCandidate>,
+	scanned_file_count: usize,
+	warning_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -219,30 +248,35 @@ where
 
 #[tauri::command]
 async fn pick_base_folder(app: AppHandle) -> Result<Option<String>, String> {
-	run_blocking_command(move || pick_base_folder_blocking(&app)).await
+	run_blocking_command(move || pick_folder_blocking(&app, "保存先フォルダー")).await
 }
 
-fn pick_base_folder_blocking(app: &AppHandle) -> Result<Option<String>, String> {
+#[tauri::command]
+async fn pick_course_folder(app: AppHandle) -> Result<Option<String>, String> {
+	run_blocking_command(move || pick_folder_blocking(&app, "授業フォルダー")).await
+}
+
+fn pick_folder_blocking(app: &AppHandle, label: &str) -> Result<Option<String>, String> {
 	let selected = app.dialog().file().blocking_pick_folder();
 	let Some(selected) = selected else {
 		return Ok(None);
 	};
 	let path = selected.into_path().map_err(|error| {
-		eprintln!("フォルダー選択結果をローカルパスへ変換できません: {error}");
-		"選択したフォルダーの場所を読み取れませんでした。".to_string()
+		eprintln!("{label}の選択結果をローカルパスへ変換できません: {error}");
+		format!("選択した{label}の場所を読み取れませんでした。")
 	})?;
 	path.into_os_string().into_string().map(Some).map_err(|_| {
-		eprintln!("選択されたフォルダーパスをUnicode文字列へ変換できません");
-		"選択したフォルダー名を読み取れませんでした。".to_string()
+		eprintln!("選択された{label}のパスをUnicode文字列へ変換できません");
+		format!("選択した{label}名を読み取れませんでした。")
 	})
 }
 
 #[tauri::command]
-async fn scan_existing_structure(path: String) -> Result<Vec<PatternCandidate>, String> {
+async fn scan_existing_structure(path: String) -> Result<ScanExistingStructureResponse, String> {
 	run_blocking_command(move || scan_existing_structure_blocking(path)).await
 }
 
-fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate>, String> {
+fn scan_existing_structure_blocking(path: String) -> Result<ScanExistingStructureResponse, String> {
 	let scan_engine = DefaultScanEngine;
 	let root = PathBuf::from(&path);
 	let snapshot = scan_engine.scan(&root).map_err(|error| {
@@ -260,39 +294,48 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 
 	if guesses.is_empty() {
 		if !snapshot.entries.is_empty() {
-			return Ok(vec![PatternCandidate {
-				id: "manual-unclassified".to_string(),
-				name: "推定できません".to_string(),
-				description:
-					"年度・学期・科目の役割を一意に判定できないため、科目を自動登録しません。"
-						.to_string(),
-				folders: representative_folders(&snapshot.entries),
+			return Ok(ScanExistingStructureResponse {
+				candidates: vec![PatternCandidate {
+					id: "manual-unclassified".to_string(),
+					name: "推定できません".to_string(),
+					description:
+						"年度・学期・科目の役割を一意に判定できないため、科目を自動登録しません。"
+							.to_string(),
+					folders: representative_folders(&snapshot.entries),
+					directory_segments: None,
+					course_segment_index: None,
+					file_name_template: None,
+					match_score: None,
+					evaluated_count: 0,
+					reason:
+						"内容を確認してこの候補を選ぶと、既存資料は未分類のまま安全に登録されます。"
+							.to_string(),
+					recommended: false,
+					requires_confirmation: true,
+				}],
+				scanned_file_count: snapshot.entries.len(),
+				warning_count: snapshot.warnings.len(),
+			});
+		}
+		return Ok(ScanExistingStructureResponse {
+			candidates: vec![PatternCandidate {
+				id: "new-folder".to_string(),
+				name: "新しい保存先".to_string(),
+				description: "既存の並びに依存せず、選択した初期ルールで整理を始めます。"
+					.to_string(),
+				folders,
 				directory_segments: None,
 				course_segment_index: None,
 				file_name_template: None,
-				match_score: None,
+				match_score: Some(100),
 				evaluated_count: 0,
-				reason:
-					"内容を確認してこの候補を選ぶと、既存資料は未分類のまま安全に登録されます。"
-						.to_string(),
-				recommended: false,
-				requires_confirmation: true,
-			}]);
-		}
-		return Ok(vec![PatternCandidate {
-			id: "new-folder".to_string(),
-			name: "新しい保存先".to_string(),
-			description: "既存の並びに依存せず、選択した初期ルールで整理を始めます。".to_string(),
-			folders,
-			directory_segments: None,
-			course_segment_index: None,
-			file_name_template: None,
-			match_score: Some(100),
-			evaluated_count: 0,
-			reason: "既存ファイルがないため、新しい保存先として使用できます。".to_string(),
-			recommended: true,
-			requires_confirmation: false,
-		}]);
+				reason: "既存ファイルがないため、新しい保存先として使用できます。".to_string(),
+				recommended: true,
+				requires_confirmation: false,
+			}],
+			scanned_file_count: snapshot.entries.len(),
+			warning_count: snapshot.warnings.len(),
+		});
 	}
 
 	let mut candidates = guesses
@@ -349,7 +392,11 @@ fn scan_existing_structure_blocking(path: String) -> Result<Vec<PatternCandidate
 	{
 		candidate.recommended = true;
 	}
-	Ok(candidates)
+	Ok(ScanExistingStructureResponse {
+		candidates,
+		scanned_file_count: snapshot.entries.len(),
+		warning_count: snapshot.warnings.len(),
+	})
 }
 
 #[tauri::command]
@@ -395,13 +442,14 @@ fn save_initial_setup_blocking(
 	})?;
 	let database = database_state.ready_mut()?;
 	database
-		.save_initial_setup(
+		.save_initial_setup_with_language(
 			Path::new(&path),
 			&rule.id,
 			&rule.template,
 			&pattern.id,
 			pattern.course_segment_index,
 			&overrides_json,
+			&rule.folder_name_language,
 		)
 		.map_err(|error| {
 			eprintln!("初期セットアップのSQLite保存に失敗しました: {error}");
@@ -419,33 +467,44 @@ fn save_initial_setup_blocking(
 fn prepare_course_overrides(
 	course_overrides: Vec<CourseOverrideSelection>,
 ) -> Result<(Vec<String>, String), String> {
-	if course_overrides.len() > 32
-		|| course_overrides
-			.iter()
-			.any(|item| item.course_name.trim().is_empty() || item.course_name.len() > 256)
-	{
-		return Err("コース別候補の内容が不正です。".to_string());
-	}
+	let normalized = normalize_course_overrides(course_overrides)?;
 	let mut seen_course_names = BTreeSet::new();
-	let mut enabled_overrides = Vec::new();
-	for item in course_overrides.into_iter().filter(|item| item.enabled) {
-		let course_name = item.course_name.trim().to_string();
-		if seen_course_names.insert(course_name.clone()) {
-			enabled_overrides.push(CourseOverrideSelection {
-				course_name,
-				enabled: true,
-			});
+	let mut initial_override_course_names = Vec::new();
+	for item in &normalized {
+		if matches!(item.mode, CourseOverrideMode::Override) && item.enabled {
+			let course_name = item.course_name.clone();
+			if seen_course_names.insert(course_name.clone()) {
+				initial_override_course_names.push(course_name);
+			}
 		}
 	}
-	let initial_override_course_names = enabled_overrides
-		.iter()
-		.map(|item| item.course_name.clone())
-		.collect::<Vec<_>>();
-	let overrides_json = serde_json::to_string(&enabled_overrides).map_err(|error| {
+	let overrides_json = serde_json::to_string(&normalized).map_err(|error| {
 		eprintln!("初期セットアップのコース別候補を変換できません: {error}");
 		"初期設定を保存できませんでした。".to_string()
 	})?;
 	Ok((initial_override_course_names, overrides_json))
+}
+
+fn normalize_course_overrides(
+	course_overrides: Vec<CourseOverrideSelection>,
+) -> Result<Vec<CourseOverrideSelection>, String> {
+	if course_overrides.len() > 32 {
+		return Err("コース別候補の内容が不正です。".to_string());
+	}
+	let mut seen_course_names = BTreeSet::new();
+	let mut normalized = Vec::new();
+	for mut item in course_overrides {
+		let course_name = item.course_name.trim().to_string();
+		if course_name.is_empty() || course_name.len() > 256 {
+			return Err("コース別候補の内容が不正です。".to_string());
+		}
+		if seen_course_names.insert(course_name.clone()) {
+			item.course_name = course_name;
+			item.enabled = matches!(item.mode, CourseOverrideMode::Override);
+			normalized.push(item);
+		}
+	}
+	Ok(normalized)
 }
 
 fn reconcile_after_setup_save(
@@ -606,14 +665,7 @@ fn get_saved_setup_configuration_blocking(
 				eprintln!("保存済みセットアップの授業別候補を読み取れませんでした: {error}");
 				"保存済みの授業別設定を読み込めませんでした。".to_string()
 			})?;
-	let (selected_course_names, _) = prepare_course_overrides(stored_overrides)?;
-	let course_overrides = selected_course_names
-		.into_iter()
-		.map(|course_name| CourseOverrideSelection {
-			course_name,
-			enabled: true,
-		})
-		.collect();
+	let course_overrides = normalize_course_overrides(stored_overrides)?;
 
 	Ok(Some(SavedSetupConfiguration {
 		revision: record.revision,
@@ -626,6 +678,7 @@ fn get_saved_setup_configuration_blocking(
 		rule: RuleSelection {
 			id: record.rule_key,
 			template: record.rule_template,
+			folder_name_language: record.folder_name_language,
 		},
 		course_overrides,
 	}))
@@ -677,7 +730,7 @@ fn save_setup_changes_blocking(
 	})?;
 	let database = database_state.ready_mut()?;
 	let update = database
-		.update_setup_configuration(
+		.update_setup_configuration_with_language(
 			&expected_revision,
 			Path::new(&path),
 			&rule.id,
@@ -685,6 +738,7 @@ fn save_setup_changes_blocking(
 			&pattern.id,
 			pattern.course_segment_index,
 			&overrides_json,
+			&rule.folder_name_language,
 		)
 		.map_err(|error| {
 			eprintln!("再セットアップ内容をSQLiteへ保存できませんでした: {error}");
@@ -760,10 +814,12 @@ fn get_extension_recovery_status_blocking(
 		"拡張機能の状態を確認できませんでした。Fuzzyを再起動してください。".to_string()
 	})?;
 	let database = database_state.ready()?;
-	database.extension_recovery_status().map_err(|error| {
-		eprintln!("拡張機能復旧状態のSQLite取得に失敗しました: {error}");
-		"拡張機能の状態を確認できませんでした。".to_string()
-	})
+	database
+		.extension_recovery_status_since_unix_millis(state.started_at_unix_millis)
+		.map_err(|error| {
+			eprintln!("拡張機能復旧状態のSQLite取得に失敗しました: {error}");
+			"拡張機能の状態を確認できませんでした。".to_string()
+		})
 }
 
 #[tauri::command]
@@ -839,6 +895,7 @@ fn get_application_recovery_status_blocking(
 	Ok(ApplicationRecoveryStatus {
 		database,
 		search_index,
+		data_reset_required: database_state.data_reset_required,
 	})
 }
 
@@ -1438,6 +1495,7 @@ fn recover_unavailable_database_from_backup(
 		Ok(database) => {
 			state.database = Some(database);
 			state.path = Some(path);
+			state.data_reset_required = false;
 			Ok(quarantine.directory)
 		}
 		Err(error) => {
@@ -1463,6 +1521,7 @@ fn create_fresh_database_from_unavailable(
 		Ok(database) => {
 			state.database = Some(database);
 			state.path = Some(path);
+			state.data_reset_required = false;
 			Ok(quarantine.directory)
 		}
 		Err(error) => {
@@ -1783,13 +1842,13 @@ fn display_pattern_name(template: &str) -> String {
 			"{term}" => "学期".to_string(),
 			"{course}" => "科目".to_string(),
 			"{assignment}" => "課題".to_string(),
-			"{section}" | "第{section}回" => "回次".to_string(),
+			"{section}" | "第{section}回" => "授業回".to_string(),
 			other => other
 				.replace("{year}", "年度")
 				.replace("{term}", "学期")
 				.replace("{course}", "科目")
 				.replace("{assignment}", "課題")
-				.replace("{section}", "回次"),
+				.replace("{section}", "授業回"),
 		})
 		.collect::<Vec<_>>()
 		.join(" / ")
@@ -1826,6 +1885,7 @@ fn initialize_database_runtime_state() -> DatabaseRuntimeState {
 			Ok(database) => DatabaseRuntimeState {
 				database: Some(database),
 				path: Some(path),
+				data_reset_required: false,
 			},
 			Err(error) => {
 				eprintln!(
@@ -1835,6 +1895,7 @@ fn initialize_database_runtime_state() -> DatabaseRuntimeState {
 				DatabaseRuntimeState {
 					database: None,
 					path: Some(path),
+					data_reset_required: is_incompatible_schema_error(&error),
 				}
 			}
 		},
@@ -1843,6 +1904,7 @@ fn initialize_database_runtime_state() -> DatabaseRuntimeState {
 			DatabaseRuntimeState {
 				database: None,
 				path: None,
+				data_reset_required: false,
 			}
 		}
 	}
@@ -1919,17 +1981,23 @@ pub fn run() {
 	let native_host_installation = native_host_registration_status();
 	let database = initialize_database_runtime_state();
 	let index_engine = initialize_index_runtime_state(&database);
+	let started_at_unix_millis = SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+		.unwrap_or(0);
 
 	tauri::Builder::default()
 		.manage(AppState {
 			database: Mutex::new(database),
 			index_engine: Mutex::new(index_engine),
 			native_host_installation: Mutex::new(native_host_installation),
+			started_at_unix_millis,
 		})
 		.plugin(tauri_plugin_dialog::init())
 		.plugin(tauri_plugin_opener::init())
 		.invoke_handler(tauri::generate_handler![
 			pick_base_folder,
+			pick_course_folder,
 			scan_existing_structure,
 			save_initial_setup,
 			get_setup_status,
@@ -1967,8 +2035,8 @@ mod tests {
 		emit_setup_completion, index_storage_metadata_exists, prepare_course_overrides,
 		quarantine_database_files, recover_unavailable_database_from_backup, repair_index_storage,
 		run_blocking_command, scan_existing_structure_blocking, setup_save_error_code,
-		stable_pattern_candidate_id, structured_directory_segments, CourseOverrideSelection,
-		DatabaseRuntimeState, IndexRuntimeState,
+		stable_pattern_candidate_id, structured_directory_segments, CourseOverrideMode,
+		CourseOverrideSelection, DatabaseRuntimeState, IndexRuntimeState,
 	};
 
 	fn test_directory(name: &str) -> PathBuf {
@@ -1986,7 +2054,7 @@ mod tests {
 	fn displays_estimated_rule_tokens_in_japanese() {
 		assert_eq!(
 			display_pattern_name("{term}/{course}/第{section}回"),
-			"学期 / 科目 / 回次"
+			"学期 / 科目 / 授業回"
 		);
 	}
 
@@ -2017,20 +2085,26 @@ mod tests {
 			CourseOverrideSelection {
 				course_name: " データベース ".to_string(),
 				enabled: true,
+				mode: CourseOverrideMode::Override,
 			},
 			CourseOverrideSelection {
 				course_name: "データベース".to_string(),
 				enabled: true,
+				mode: CourseOverrideMode::Override,
 			},
 			CourseOverrideSelection {
 				course_name: "画像処理".to_string(),
 				enabled: false,
+				mode: CourseOverrideMode::Common,
 			},
 		])
 		.unwrap();
 
 		assert_eq!(course_names, vec!["データベース"]);
-		assert_eq!(json, r#"[{"courseName":"データベース","enabled":true}]"#);
+		assert_eq!(
+			json,
+			r#"[{"courseName":"データベース","enabled":true,"mode":"override"},{"courseName":"画像処理","enabled":false,"mode":"common"}]"#
+		);
 	}
 
 	#[test]
@@ -2091,8 +2165,9 @@ mod tests {
 		std::fs::write(&first, "image").unwrap();
 		std::fs::write(&second, "filter").unwrap();
 
-		let candidates =
+		let result =
 			scan_existing_structure_blocking(directory.to_string_lossy().into_owned()).unwrap();
+		let candidates = &result.candidates;
 
 		assert_eq!(candidates.len(), 1);
 		assert_eq!(candidates[0].course_segment_index, Some(2));
@@ -2128,8 +2203,9 @@ mod tests {
 			std::fs::write(path, "sample").unwrap();
 		}
 
-		let candidates =
+		let result =
 			scan_existing_structure_blocking(directory.to_string_lossy().into_owned()).unwrap();
+		let candidates = &result.candidates;
 
 		assert_eq!(candidates.len(), 1);
 		assert_eq!(candidates[0].course_segment_index, Some(1));
@@ -2158,8 +2234,9 @@ mod tests {
 			std::fs::write(path, "sample").unwrap();
 		}
 
-		let candidates =
+		let result =
 			scan_existing_structure_blocking(directory.to_string_lossy().into_owned()).unwrap();
+		let candidates = &result.candidates;
 
 		assert_eq!(candidates.len(), 1);
 		assert_eq!(candidates[0].id, "manual-unclassified");
@@ -2223,6 +2300,7 @@ mod tests {
 		let mut state = DatabaseRuntimeState {
 			database: None,
 			path: Some(target_path.clone()),
+			data_reset_required: false,
 		};
 		let recovery_copy =
 			recover_unavailable_database_from_backup(&mut state, &backup_path).unwrap();
@@ -2248,6 +2326,7 @@ mod tests {
 		let mut state = DatabaseRuntimeState {
 			database: None,
 			path: Some(target_path.clone()),
+			data_reset_required: false,
 		};
 
 		let error = recover_unavailable_database_from_backup(&mut state, &backup_path).unwrap_err();
@@ -2270,6 +2349,7 @@ mod tests {
 		let mut state = DatabaseRuntimeState {
 			database: None,
 			path: Some(target_path.clone()),
+			data_reset_required: false,
 		};
 
 		let recovery_copy = create_fresh_database_from_unavailable(&mut state).unwrap();
@@ -2308,6 +2388,7 @@ mod tests {
 		let restarted_desktop = DatabaseRuntimeState {
 			database: Some(Database::open(&database_path).unwrap()),
 			path: Some(database_path),
+			data_reset_required: false,
 		};
 
 		assert!(index_storage_metadata_exists(&index_path));

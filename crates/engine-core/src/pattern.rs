@@ -281,6 +281,9 @@ fn add_folder_evidence(
 
 fn section_directory_segment(section: &SectionMatch) -> Option<String> {
 	let number = section.number?.to_string();
+	if section.rule_id.starts_with("en_") {
+		return Some("第{section}回".to_string());
+	}
 	section
 		.normalized_name
 		.contains(&number)

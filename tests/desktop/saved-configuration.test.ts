@@ -20,7 +20,7 @@ function configuration(overrides: Partial<SavedSetupConfiguration> = {}): SavedS
 			id: "year-course-assignment",
 			template: "{year}/{course}/{assignment}",
 		},
-		courseOverrides: [{ courseName: "データベース", enabled: true }],
+		courseOverrides: [{ courseName: "データベース", enabled: true, mode: "override" }],
 		...overrides,
 	};
 }

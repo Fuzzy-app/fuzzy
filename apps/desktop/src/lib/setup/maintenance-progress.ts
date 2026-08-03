@@ -25,9 +25,9 @@ function phaseTitle(progress: LibraryMaintenanceProgress | null): string {
 				return "資料情報を準備できませんでした";
 			}
 			if (progress.state === "completedWithWarnings") {
-				return "確認が必要な項目を残して完了しました";
+				return "完了しました";
 			}
-			return "資料情報の準備が完了しました";
+			return "完了しました";
 	}
 }
 
@@ -51,15 +51,11 @@ export function presentMaintenanceProgress(
 ): MaintenanceProgressPresentation {
 	const title = phaseTitle(progress);
 	const countLabel = progressCountLabel(progress);
-	const warningLabel =
-		progress && progress.warningCount > 0
-			? `、確認が必要な項目${progress.warningCount.toLocaleString()}件`
-			: "";
 	const availabilityLabel =
 		progress?.phase === "completed" && progress.state === "failed"
 			? "同じ操作をもう一度実行できます。"
 			: progress?.phase === "completed"
-				? "処理は完了しました。"
+				? "完了しました。"
 				: "この処理は途中で中止できません。完了までお待ちください。";
 
 	return {
@@ -67,6 +63,6 @@ export function presentMaintenanceProgress(
 		countLabel,
 		availabilityLabel,
 		percent: progressPercent(progress),
-		ariaValueText: `${title}、${countLabel}${warningLabel}`,
+		ariaValueText: `${title}、${countLabel}`,
 	};
 }

@@ -2,7 +2,8 @@ import type { DashboardSummary } from "@fuzzy/shared";
 
 // Issue #59以前にcontent scriptがMoodle originへ保存したmock混在キャッシュと
 // 名前空間を分け、native-hostから取得した実データだけを表示する。
-const DATABASE_NAME = "fuzzy-native-display-cache-v2";
+const DATABASE_NAME = "fuzzy-native-display-cache-v3";
+const LEGACY_DATABASE_NAMES = ["fuzzy-native-display-cache-v2"];
 const DATABASE_VERSION = 1;
 const STORE_NAME = "dashboard";
 const CACHE_KEY = "latest-native-v2";
@@ -16,16 +17,37 @@ export interface CachedDashboard {
 }
 
 function openDatabase(): Promise<IDBDatabase> {
-	return new Promise((resolve, reject) => {
-		const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-		request.onupgradeneeded = () => {
-			if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-				request.result.createObjectStore(STORE_NAME);
-			}
-		};
-		request.onsuccess = () => resolve(request.result);
-		request.onerror = () => reject(request.error);
-	});
+	return clearLegacyDatabases().then(
+		() =>
+			new Promise((resolve, reject) => {
+				const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+				request.onupgradeneeded = () => {
+					if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+						request.result.createObjectStore(STORE_NAME);
+					}
+				};
+				request.onsuccess = () => resolve(request.result);
+				request.onerror = () => reject(request.error);
+			}),
+	);
+}
+
+let legacyDatabaseCleanup: Promise<void> | null = null;
+
+function clearLegacyDatabases(): Promise<void> {
+	if (legacyDatabaseCleanup) return legacyDatabaseCleanup;
+	legacyDatabaseCleanup = Promise.all(
+		LEGACY_DATABASE_NAMES.map(
+			(name) =>
+				new Promise<void>((resolve) => {
+					const request = indexedDB.deleteDatabase(name);
+					request.onsuccess = () => resolve();
+					request.onerror = () => resolve();
+					request.onblocked = () => resolve();
+				}),
+		),
+	).then(() => undefined);
+	return legacyDatabaseCleanup;
 }
 
 export async function readDashboardCache(): Promise<CachedDashboard | null> {

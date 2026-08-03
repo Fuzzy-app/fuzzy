@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::database::setup::relative_path_within_base;
 use crate::library::is_indexable_document;
 use crate::types::SearchDocumentMetadata;
 use crate::{
@@ -35,7 +36,17 @@ pub use saved_files::{ExtractedFileRegistration, SavedZipSource};
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
+/// 開発途中の旧SQLiteを移行せず、初期実装の変更時は新規作成へ戻す。
 const SCHEMA_VERSION: i64 = 2;
+type SearchDocumentRecord = (
+	i64,
+	String,
+	Option<String>,
+	Option<i64>,
+	PathBuf,
+	Option<u32>,
+	Option<i64>,
+);
 
 /// SQLite接続。接続時にFK有効化と初版スキーマの適用・検証を保証する。
 pub struct Database {
@@ -77,11 +88,7 @@ impl Database {
 		if database_is_empty(&conn)? {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		} else {
-			let mut version = schema_version(&conn)?;
-			if version < SCHEMA_VERSION {
-				migrate_schema(&mut conn, version)?;
-				version = schema_version(&conn)?;
-			}
+			let version = schema_version(&conn)?;
 			validate_schema_generation(&conn, version)?;
 			validate_foreign_key_integrity(&conn)?;
 		}
@@ -260,6 +267,98 @@ impl Database {
 		})
 	}
 
+	/// 現在のデスクトップ起動後に届いた応答だけで復旧状態を算出する。
+	///
+	/// SQLiteには過去の応答履歴を残すが、拡張機能を削除した後に過去の`ready`を
+	/// 現在の接続状態と誤認しないよう、起動境界より前の応答は現在状態の根拠にしない。
+	pub fn extension_recovery_status_since_unix_millis(
+		&self,
+		since_unix_millis: i64,
+	) -> EngineResult<ExtensionRecoveryStatus> {
+		if since_unix_millis < 0 {
+			return Err(EngineError::InvalidInput {
+				field: "since".to_string(),
+				reason: "Unix時刻は0以上で指定してください".to_string(),
+			});
+		}
+
+		let recent_modifier = format!("-{EXTENSION_RUNTIME_RECENT_SECONDS} seconds");
+		let mut statement = self
+			.conn
+			.prepare(
+				"WITH ranked_observations AS (
+					SELECT
+						installation_id,
+						extension_version,
+						protocol_version,
+						first_seen_at,
+						last_seen_at,
+						rowid AS source_rowid,
+						ROW_NUMBER() OVER (
+							PARTITION BY installation_id
+							ORDER BY julianday(last_seen_at) DESC, rowid DESC
+						) AS installation_rank
+					FROM extension_runtime_observations
+				)
+				SELECT
+					installation_id,
+					extension_version,
+					protocol_version,
+					first_seen_at,
+					last_seen_at,
+					julianday(last_seen_at) >= julianday('now', ?1),
+					julianday(last_seen_at) >= julianday(?2 / 1000.0, 'unixepoch')
+				FROM ranked_observations
+				WHERE installation_rank = 1
+				ORDER BY julianday(last_seen_at) DESC, source_rowid DESC",
+			)
+			.map_err(db_err)?;
+		let rows = statement
+			.query_map(params![recent_modifier, since_unix_millis], |row| {
+				Ok((
+					observation_from_row(row)?,
+					row.get::<_, bool>(5)?,
+					row.get::<_, bool>(6)?,
+				))
+			})
+			.map_err(db_err)?;
+		let observations = rows.collect::<Result<Vec<_>, _>>().map_err(db_err)?;
+		let Some((latest_observation, _, _)) = observations.first() else {
+			return Ok(ExtensionRecoveryStatus::missing());
+		};
+
+		if let Some((observation, _, _)) =
+			observations.iter().find(|(observation, recent, current)| {
+				*current && *recent && is_compatible_observation(observation)
+			}) {
+			return Ok(ExtensionRecoveryStatus {
+				state: ExtensionRecoveryState::Ready,
+				observation: Some(observation.clone()),
+				recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
+			});
+		}
+
+		if let Some((observation, _, _)) = observations.iter().find(|(_, _, current)| *current) {
+			let state = if is_compatible_observation(observation) {
+				ExtensionRecoveryState::Stale
+			} else {
+				ExtensionRecoveryState::Incompatible
+			};
+			return Ok(ExtensionRecoveryStatus {
+				state,
+				observation: Some(observation.clone()),
+				recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
+			});
+		}
+
+		// 履歴は表示できるように残すが、現在セッションの応答が無いのでMissingとする。
+		Ok(ExtensionRecoveryStatus {
+			state: ExtensionRecoveryState::Missing,
+			observation: Some(latest_observation.clone()),
+			recent_within_seconds: EXTENSION_RUNTIME_RECENT_SECONDS,
+		})
+	}
+
 	/// 全文索引への投入完了をSQLiteの補助メタ情報へ反映する。
 	pub fn mark_search_indexed(&self, file_id: i64, page_count: Option<u32>) -> EngineResult<()> {
 		self.conn
@@ -272,6 +371,77 @@ impl Database {
 				params![file_id, page_count.map(i64::from)],
 			)
 			.map_err(db_err)?;
+		Ok(())
+	}
+
+	/// 本文に課題・締切らしい語が含まれる資料を、確認用の課題として記録する。
+	///
+	/// 資料ファイル自体は変更せず、同じ資料に紐付く補助レコードだけを更新する。
+	pub fn sync_file_content_assignment(
+		&self,
+		file_id: i64,
+		contains_assignment_keyword: bool,
+	) -> EngineResult<()> {
+		let file: Option<(Option<i64>, String)> = self
+			.conn
+			.query_row(
+				"SELECT course_id, original_name FROM files WHERE id = ?1",
+				[file_id],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.optional()
+			.map_err(db_err)?;
+		let Some((course_id, file_name)) = file else {
+			return Ok(());
+		};
+		let existing_id: Option<i64> = self
+			.conn
+			.query_row(
+				"SELECT id FROM assignments
+				 WHERE related_file_id = ?1 AND source = 'file_content'
+				 ORDER BY id LIMIT 1",
+				[file_id],
+				|row| row.get(0),
+			)
+			.optional()
+			.map_err(db_err)?;
+
+		if contains_assignment_keyword {
+			let Some(course_id) = course_id else {
+				return Ok(());
+			};
+			let title = format!("要確認: {file_name}");
+			if let Some(assignment_id) = existing_id {
+				self.conn
+					.execute(
+						"UPDATE assignments
+						 SET course_id = ?1, title = ?2, due_at_status = 'needs_review',
+						     submission_mode = 'notify_only', submission_availability = 'unknown',
+						     removed_at = NULL, updated_at = datetime('now')
+						 WHERE id = ?3",
+						params![course_id, title, assignment_id],
+					)
+					.map_err(db_err)?;
+			} else {
+				self.conn
+					.execute(
+						"INSERT INTO assignments (
+							course_id, title, source, due_at_status, submission_mode,
+							submission_availability, related_file_id
+						 ) VALUES (?1, ?2, 'file_content', 'needs_review', 'notify_only', 'unknown', ?3)",
+						params![course_id, title, file_id],
+					)
+					.map_err(db_err)?;
+			}
+		} else if let Some(assignment_id) = existing_id {
+			self.conn
+				.execute(
+					"UPDATE assignments SET removed_at = datetime('now'), updated_at = datetime('now')
+					 WHERE id = ?1",
+					[assignment_id],
+				)
+				.map_err(db_err)?;
+		}
 		Ok(())
 	}
 
@@ -347,10 +517,12 @@ impl Database {
 		&self,
 		file_id: i64,
 	) -> EngineResult<Option<SearchDocumentMetadata>> {
-		self.conn
+		let record: Option<SearchDocumentRecord> = self
+			.conn
 			.query_row(
 				"SELECT files.id, files.original_name, courses.name,
-				        search_index_meta.page_count
+				        files.course_id, files.saved_path, search_index_meta.page_count,
+				        files.scan_modified_at_ns
 				 FROM files
 				 INNER JOIN search_index_meta ON search_index_meta.file_id = files.id
 				 LEFT JOIN courses ON courses.id = files.course_id
@@ -359,16 +531,88 @@ impl Database {
 					AND files.excluded_at IS NULL",
 				[file_id],
 				|row| {
-					Ok(SearchDocumentMetadata {
-						file_id: row.get(0)?,
-						file_name: row.get(1)?,
-						course_name: row.get(2)?,
-						page_count: row.get(3)?,
-					})
+					Ok((
+						row.get(0)?,
+						row.get(1)?,
+						row.get(2)?,
+						row.get(3)?,
+						PathBuf::from(row.get::<_, String>(4)?),
+						row.get(5)?,
+						row.get(6)?,
+					))
 				},
 			)
 			.optional()
-			.map_err(db_err)
+			.map_err(db_err)?;
+		let Some((file_id, file_name, course_name, course_id, saved_path, page_count, modified_at)) =
+			record
+		else {
+			return Ok(None);
+		};
+		let relative_path = self
+			.base_folder_path()
+			.ok()
+			.and_then(|base| relative_path_within_base(&saved_path, &base))
+			.map(|path| path.to_string_lossy().replace('\\', "/"))
+			.unwrap_or_else(|| file_name.clone());
+		Ok(Some(SearchDocumentMetadata {
+			file_id,
+			file_name,
+			course_id,
+			course_name,
+			relative_path,
+			page_count,
+			modified_at,
+		}))
+	}
+
+	/// 検索結果から明示的に開く資料の実体パスを検証して返す。
+	///
+	/// 検索結果の`file_id`だけを受け取り、SQLiteに登録された有効な資料であること、
+	/// 保存ルート配下にあること、現在も通常ファイルとして存在することを確認する。
+	/// 呼び出し側はこの値をユーザーの明示操作によるOS起動にだけ使用する。
+	pub fn openable_file_path(&self, file_id: i64) -> EngineResult<Option<PathBuf>> {
+		let stored_path: Option<PathBuf> = self
+			.conn
+			.query_row(
+				"SELECT saved_path
+				 FROM files
+				 WHERE id = ?1
+				   AND missing_at IS NULL
+				   AND excluded_at IS NULL",
+				[file_id],
+				|row| Ok(PathBuf::from(row.get::<_, String>(0)?)),
+			)
+			.optional()
+			.map_err(db_err)?;
+		let Some(stored_path) = stored_path else {
+			return Ok(None);
+		};
+		let base_folder =
+			self.base_folder_path()?
+				.canonicalize()
+				.map_err(|_| EngineError::InvalidInput {
+					field: "fileId".to_string(),
+					reason: "資料の保存先を確認できません".to_string(),
+				})?;
+		let canonical_path = stored_path
+			.canonicalize()
+			.map_err(|_| EngineError::InvalidInput {
+				field: "fileId".to_string(),
+				reason: "資料が見つかりません".to_string(),
+			})?;
+		if !canonical_path.starts_with(&base_folder)
+			|| !canonical_path
+				.metadata()
+				.map(|metadata| metadata.is_file())
+				.unwrap_or(false)
+		{
+			return Err(EngineError::InvalidInput {
+				field: "fileId".to_string(),
+				reason: "資料を開ける場所にありません".to_string(),
+			});
+		}
+		Ok(Some(canonical_path))
 	}
 
 	/// 開発・テスト用のサンプルデータを投入する。
@@ -383,32 +627,6 @@ impl Database {
 	pub(crate) fn conn(&self) -> &Connection {
 		&self.conn
 	}
-}
-
-fn migrate_schema(conn: &mut Connection, version: i64) -> EngineResult<()> {
-	if version != 1 {
-		return Err(EngineError::Database {
-			message: format!("Unsupported SQLite schema version: {version}"),
-		});
-	}
-	let transaction = conn.transaction().map_err(db_err)?;
-	transaction
-		.execute_batch(
-			"ALTER TABLE files ADD COLUMN excluded_at TEXT;
-			 CREATE TABLE excluded_folders (
-				 id INTEGER PRIMARY KEY AUTOINCREMENT,
-				 scope TEXT NOT NULL CHECK (scope IN ('root', 'course')),
-				 course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-				 relative_path TEXT NOT NULL,
-				 created_at TEXT NOT NULL DEFAULT (datetime('now')),
-				 CHECK ((scope = 'root' AND course_id IS NULL) OR (scope = 'course' AND course_id IS NOT NULL)),
-				 UNIQUE (scope, course_id, relative_path)
-			 );
-			 CREATE INDEX idx_excluded_folders_course ON excluded_folders(course_id);
-			 PRAGMA user_version = 2;",
-		)
-		.map_err(db_err)?;
-	transaction.commit().map_err(db_err)
 }
 
 fn observation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtensionRuntimeObservation> {
@@ -1131,7 +1349,7 @@ fn apply_schema(conn: &mut Connection, schema_sql: &str) -> EngineResult<()> {
 ///
 /// 1. 環境変数 `FUZZY_DB_PATH`
 /// 2. Windowsの`LOCALAPPDATA/Fuzzy/fuzzy.db`
-/// 3. 新パスがまだなく旧`APPDATA/Fuzzy/fuzzy.db`がある場合は旧パス
+/// 3. 旧`APPDATA`配下は移行せず、常に新しいローカルパスを使う
 pub fn resolve_db_path() -> EngineResult<PathBuf> {
 	#[cfg(windows)]
 	{
@@ -1161,17 +1379,21 @@ fn resolve_windows_db_path(
 		return Ok(path);
 	}
 	let preferred = local_app_data.map(|root| root.join("Fuzzy").join("fuzzy.db"));
-	let legacy = roaming_app_data.map(|root| root.join("Fuzzy").join("fuzzy.db"));
-
-	if preferred.as_deref().is_some_and(Path::exists) {
-		return Ok(preferred.expect("preferred path was checked"));
-	}
-	if legacy.as_deref().is_some_and(Path::exists) {
-		return Ok(legacy.expect("legacy path was checked"));
-	}
+	let _ = roaming_app_data;
 	preferred.ok_or_else(|| EngineError::Internal {
 		message: "アプリデータディレクトリを決定できません（LOCALAPPDATA 未設定）".to_string(),
 	})
+}
+
+/// SQLiteの世代・形状が現在の初期実装と互換しないエラーかを判定する。
+///
+/// 互換しない開発途中のDBは移行せず、デスクトップ側で初期状態へ戻す導線を表示する。
+pub fn is_incompatible_schema_error(error: &EngineError) -> bool {
+	matches!(
+		error,
+		EngineError::Database { message }
+			if message.contains("SQLiteスキーマ") || message.contains("SQLiteスキーマ世代")
+	)
 }
 
 #[cfg(not(windows))]
@@ -1254,7 +1476,7 @@ mod tests {
 
 	#[cfg(windows)]
 	#[test]
-	fn windows_default_path_prefers_local_and_preserves_legacy_without_moving_it() {
+	fn windows_default_path_ignores_legacy_roaming_data_without_moving_it() {
 		let nonce = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap()
@@ -1289,7 +1511,7 @@ mod tests {
 		assert_eq!(
 			resolve_windows_db_path(None, Some(local_root.clone()), Some(roaming_root.clone()))
 				.unwrap(),
-			legacy_path
+			local_path
 		);
 		assert!(legacy_path.exists());
 
@@ -1299,10 +1521,7 @@ mod tests {
 			resolve_windows_db_path(None, Some(local_root), Some(roaming_root.clone())).unwrap(),
 			local_path
 		);
-		assert_eq!(
-			resolve_windows_db_path(None, None, Some(roaming_root)).unwrap(),
-			legacy_path
-		);
+		assert!(resolve_windows_db_path(None, None, Some(roaming_root)).is_err());
 
 		let _ = std::fs::remove_dir_all(&directory);
 	}
@@ -1649,6 +1868,33 @@ mod tests {
 			database.extension_recovery_status().unwrap().state,
 			ExtensionRecoveryState::Stale
 		);
+	}
+
+	#[test]
+	fn recovery_status_since_start_does_not_reuse_a_previous_session_response() {
+		let database = Database::open_in_memory().unwrap();
+		database
+			.record_extension_runtime(&report("0.1.0", EXTENSION_RUNTIME_PROTOCOL_VERSION))
+			.unwrap();
+
+		let ready = database
+			.extension_recovery_status_since_unix_millis(0)
+			.unwrap();
+		assert_eq!(ready.state, ExtensionRecoveryState::Ready);
+
+		database
+			.conn()
+			.execute(
+				"UPDATE extension_runtime_observations
+				 SET last_seen_at = '2000-01-01T00:00:00.000Z'",
+				[],
+			)
+			.unwrap();
+		let current_session = database
+			.extension_recovery_status_since_unix_millis(4_102_444_800_000)
+			.unwrap();
+		assert_eq!(current_session.state, ExtensionRecoveryState::Missing);
+		assert!(current_session.observation.is_some());
 	}
 
 	#[test]

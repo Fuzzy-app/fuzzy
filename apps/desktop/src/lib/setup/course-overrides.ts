@@ -6,16 +6,31 @@ function isCourseName(value: string | undefined): value is string {
 	return Boolean(value);
 }
 
-export function createSavedCourseOverrides(courseNames: readonly string[]): CourseOverride[] {
+export function createSavedCourseOverrides(
+	courseNames: readonly string[] | SavedCourseOverrideInput[],
+): CourseOverride[] {
 	return Array.from(
-		new Set(courseNames.map((courseName) => courseName.trim()).filter(Boolean)),
-	).map((courseName, index) => ({
+		new Map(
+			courseNames
+				.map((item) => {
+					const value = typeof item === "string" ? item : item.courseName;
+					return [value.trim(), typeof item === "string" ? "override" : item.mode] as const;
+				})
+				.filter(([courseName]) => Boolean(courseName)),
+		),
+	).map(([courseName, mode], index) => ({
 		id: `saved-course-override-${index + 1}`,
 		courseName,
 		description: "保存済みの授業別設定です。",
-		enabled: true,
+		enabled: mode === "override",
+		mode,
 	}));
 }
+
+type SavedCourseOverrideInput = {
+	courseName: string;
+	mode: "common" | "override" | "unmanaged";
+};
 
 export function createCourseOverrides(
 	candidate: PatternCandidate | null,
@@ -34,10 +49,7 @@ export function createCourseOverrides(
 		),
 	).slice(0, maxCourseOverrideCandidates);
 	const courseNames = Array.from(
-		new Set([
-			...currentOverrides.filter(({ enabled }) => enabled).map(({ courseName }) => courseName),
-			...suggestedCourseNames,
-		]),
+		new Set([...currentOverrides.map(({ courseName }) => courseName), ...suggestedCourseNames]),
 	);
 
 	return courseNames.map((courseName, index) => ({
@@ -46,5 +58,6 @@ export function createCourseOverrides(
 		description: "この科目だけ初期ルールから外す候補として保持します。",
 		enabled:
 			currentOverrides.find((override) => override.courseName === courseName)?.enabled ?? false,
+		mode: currentOverrides.find((override) => override.courseName === courseName)?.mode ?? "common",
 	}));
 }

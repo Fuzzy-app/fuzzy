@@ -26,8 +26,9 @@ export function presentApplicationRecoveryDetails(
 	status: ApplicationRecoveryStatus,
 ): ApplicationRecoveryDetails {
 	return {
-		settings:
-			status.database.state === "ready"
+		settings: status.dataResetRequired
+			? "設定と履歴は初期状態へ戻す必要があります。保存済みの授業資料は変更しません。"
+			: status.database.state === "ready"
 				? "設定と履歴を読み込めます。"
 				: "設定と履歴を読み込めません。バックアップから復元するか、新しく開始してください。",
 		information:
@@ -46,6 +47,15 @@ export function deriveApplicationState(
 			state: "checking",
 			title: "状態を確認中",
 			impact: "Fuzzyを利用できるか確認しています。",
+			action: null,
+		};
+	}
+	if (status.dataResetRequired) {
+		return {
+			state: "action-required",
+			title: "初期状態に戻す必要があります",
+			impact:
+				"開発途中の設定データを移行せず初期化します。保存済みの授業資料は移動・削除されません。",
 			action: null,
 		};
 	}
