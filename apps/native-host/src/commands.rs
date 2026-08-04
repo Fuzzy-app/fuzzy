@@ -579,6 +579,19 @@ fn suggest_save_path(database: &mut Database, request: Request) -> Response {
 		Err(response) => return response,
 	};
 	let result = (|| {
+		if payload
+			.course
+			.moodle_course_id
+			.as_deref()
+			.is_some_and(|stable_id| !stable_id.trim().is_empty())
+		{
+			database.resolve_course_context(
+				payload.course.moodle_course_id.as_deref(),
+				payload.course.name.as_deref(),
+				payload.course.academic_year,
+				payload.course.term.as_deref(),
+			)?;
+		}
 		let mut course_candidates = database.suggest_course_contexts(
 			payload.course.moodle_course_id.as_deref(),
 			payload.course.name.as_deref(),
