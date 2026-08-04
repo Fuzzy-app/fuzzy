@@ -40,7 +40,7 @@
 						Fuzzyは、Moodleの授業資料と課題情報を利用者自身のWindows PCで整理するアプリです。
 						学習情報をFuzzy運営者のサーバーへ送信せず、SQLiteを正本としてローカルで取り扱います。
 					</p>
-					<p class="policy-updated">最終更新日：2026年7月25日</p>
+					<p class="policy-updated">最終更新日：2026年8月4日</p>
 				</div>
 			</section>
 
@@ -106,6 +106,15 @@
 							<div>
 								<dt>対応Moodleサイトへのアクセス</dt>
 								<dd>コース、課題、資料候補を画面から読み取り、利用者が選んだ資料を取得するために使います。</dd>
+							</div>
+							<div>
+								<dt>
+									<code>https://fuzzy-qa-2026.moodlecloud.com/*</code>
+									（ストア審査・QA専用）
+								</dt>
+								<dd>
+									実在の学生情報や授業資料を含まない合成環境で、コース名、課題名と締切、資料候補の名称とURLを画面から読み取り、審査担当者が選んだ資料だけを同一オリジンから取得するために使います。読み取った情報と取得した資料をFuzzy運営者や第三者のサーバーへ送信せず、審査に使用するPC内だけで処理します。
+								</dd>
 							</div>
 							<div>
 								<dt>Native Messaging</dt>

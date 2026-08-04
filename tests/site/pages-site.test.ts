@@ -85,6 +85,11 @@ describe("Fuzzy GitHub Pages site", () => {
 		expect(privacyHtml).toContain("Native Messaging");
 		expect(privacyHtml).toContain("Cookieや認証情報をNative Messaging Hostへ渡さず");
 		expect(privacyHtml).toContain("資料を自動で移動・削除しません");
+		expect(privacyHtml).toContain("最終更新日：2026年8月4日");
+		expect(privacyHtml).toContain("https://fuzzy-qa-2026.moodlecloud.com/*");
+		expect(privacyHtml).toContain("コース名、課題名と締切、資料候補の名称とURLを画面から読み取り");
+		expect(privacyHtml).toContain("審査担当者が選んだ資料だけを同一オリジンから取得");
+		expect(privacyHtml).toContain("審査に使用するPC内だけで処理します");
 		expect(privacyHtml).toContain("FuzzyのGitHub Issues");
 	});
 
