@@ -31,6 +31,7 @@ import {
 	createSyncNotificationId,
 	navigateFromSyncNotification,
 	parseSyncNotificationId,
+	rememberMoodleHomeUrl,
 } from "../lib/notifications/syncNotificationNavigation";
 import {
 	isRuleManagementRequestMessage,
@@ -220,12 +221,17 @@ export default defineBackground(() => {
 		}
 		if (!isFuzzyApiRequestMessage(message)) return false;
 
-		void respondToApiRequest(
-			getClient(),
-			message,
-			sender.tab?.url ?? sender.url ?? "",
-			handleClientError,
-		).then(sendResponse);
+		const senderUrl = sender.tab?.url ?? sender.url ?? "";
+		const rememberSender =
+			message.method === "syncMoodleAssignments"
+				? rememberMoodleHomeUrl(browser.storage.local, senderUrl).catch((error) => {
+						console.warn("[fuzzy] 同期元Moodleの記録に失敗しました", error);
+						return false;
+					})
+				: Promise.resolve(false);
+		void rememberSender
+			.then(() => respondToApiRequest(getClient(), message, senderUrl, handleClientError))
+			.then(sendResponse);
 		return true; // sendResponse を非同期に呼ぶため、メッセージチャネルを維持する
 	});
 });

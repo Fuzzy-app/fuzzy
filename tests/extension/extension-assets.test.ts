@@ -1,15 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
-import wxtConfig, {
+import { MOODLE_HTTPS_MATCH_PATTERNS } from "../../apps/extension/moodleSite";
+
+// Manifest設定の単体テストではWXT本体を起動せず、設定オブジェクトだけを検証する。
+mock.module("wxt", () => ({ defineConfig: <T>(config: T): T => config }));
+
+const {
+	default: wxtConfig,
 	FUZZY_EXTENSION_ID,
 	FUZZY_EXTENSION_PUBLIC_KEY,
-} from "../../apps/extension/wxt.config";
+} = await import("../../apps/extension/wxt.config");
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
-const MOODLE_HTTPS_MATCH_PATTERN = "https://*.wakayama-u.ac.jp/*";
 
 type ManifestConfig = {
 	key?: string;
+	host_permissions?: string[];
 	web_accessible_resources?: Array<{
 		resources?: string[];
 		matches?: string[];
@@ -47,17 +53,19 @@ describe("Moodle向け公開範囲", () => {
 	test("Manifest V3でSVGとContent Scriptを同じHTTPS originだけに公開する", async () => {
 		expect(wxtConfig.manifestVersion).toBe(3);
 		const manifest = (wxtConfig as { manifest?: ManifestConfig }).manifest;
+		expect(manifest?.host_permissions).toEqual(MOODLE_HTTPS_MATCH_PATTERNS);
 		expect(manifest?.web_accessible_resources).toEqual([
 			{
 				resources: ["icon/fuzzy.svg"],
-				matches: [MOODLE_HTTPS_MATCH_PATTERN],
+				matches: MOODLE_HTTPS_MATCH_PATTERNS,
 			},
 		]);
 
 		const contentScriptSource = await Bun.file(
 			new URL("../../apps/extension/src/entrypoints/content/index.ts", import.meta.url),
 		).text();
-		expect(contentScriptSource).toContain(`matches: ["${MOODLE_HTTPS_MATCH_PATTERN}"]`);
+		expect(contentScriptSource).toContain("matches: [...MOODLE_HTTPS_MATCH_PATTERNS]");
+		expect(contentScriptSource).toContain("isSupportedMoodleHostname(location.hostname)");
 		expect(contentScriptSource).not.toContain("*://*.wakayama-u.ac.jp/*");
 
 		const shellElementsSource = await Bun.file(
@@ -92,5 +100,22 @@ describe("Moodle向け公開範囲", () => {
 		expect(shellSource).toContain("readDashboardCacheFromBackground()");
 		expect(shellSource).not.toContain('from "../../lib/cache/dashboardCache"');
 		expect(shellSource).not.toContain("writeDashboardCache(");
+	});
+
+	test("MoodleCloud実機QAはFuzzy本体の初期設定と接続修復を前提にする", async () => {
+		const guide = await Bun.file(
+			new URL("../../docs/公開ガイド/MoodleCloud-QA環境.md", import.meta.url),
+		).text();
+
+		expect(guide).toContain("拡張機能だけをEdgeへ読み込んでも");
+		expect(guide).toContain("QA専用フォルダー");
+		expect(guide).toContain("接続を自動修復");
+		expect(guide).toContain("表示された場合だけ実行する");
+		expect(guide).toContain("このPCのデータを表示中");
+		expect(guide).toContain("Native HostとSQLiteへ接続できたことを示します");
+		expect(guide).toContain("fuzzy-local-scan-check.txt");
+		expect(guide).toContain("保存先の確認と資料情報の作り直しが完了しました。");
+		expect(guide).toContain("Guest login button");
+		expect(guide).toContain("ダッシュボードの「コース概要」には表示されません");
 	});
 });

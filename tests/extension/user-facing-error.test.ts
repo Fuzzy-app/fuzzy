@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { userFacingErrorMessage } from "../../apps/extension/src/entrypoints/content/userFacingError";
+import { ApiError } from "@fuzzy/shared";
+import {
+	nativeConnectionIssuePresentation,
+	userFacingErrorMessage,
+} from "../../apps/extension/src/entrypoints/content/userFacingError";
 
 describe("extensionの利用者向けエラー", () => {
 	test.each([
@@ -38,5 +42,35 @@ describe("extensionの利用者向けエラー", () => {
 				prefixFallback: true,
 			}),
 		).toBe("保存できませんでした。 保存先を選び直してください。");
+	});
+
+	test("Native Messaging接続失敗は対応バージョンと復旧手順へ案内する", () => {
+		expect(
+			nativeConnectionIssuePresentation(
+				new ApiError("NO_NATIVE_HOST", "native-hostとの接続が切れました"),
+			),
+		).toEqual({
+			statusLabel: "Fuzzy本体に接続できません",
+			title: "Fuzzy本体と接続できませんでした。",
+			impact:
+				"同じ対応バージョンのFuzzyを起動して初期設定を確認してください。「接続を自動修復」が表示された場合は実行し、ブラウザとMoodleを開き直してください。解消しない場合はFuzzyの復旧画面または再インストールを利用してください。",
+		});
+	});
+
+	test("内部エラーはNative Messagingの復旧案内と誤認しない", () => {
+		expect(nativeConnectionIssuePresentation(new Error("通信に失敗しました"))).toBeNull();
+		expect(
+			nativeConnectionIssuePresentation(new ApiError("DB_ERROR", "DBを開けません")),
+		).toBeNull();
+	});
+
+	test("Native Messagingの応答待ち超過は本体の起動へ案内する", () => {
+		expect(
+			nativeConnectionIssuePresentation(new ApiError("TIMEOUT", "pingが応答しません")),
+		).toEqual({
+			statusLabel: "Fuzzy本体から応答がありません",
+			title: "Fuzzy本体から応答がありませんでした。",
+			impact: "同じ対応バージョンのFuzzyを一度起動してから、ブラウザとMoodleを開き直してください。",
+		});
 	});
 });

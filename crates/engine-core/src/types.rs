@@ -123,9 +123,10 @@ pub fn is_supported_moodle_assignment_url(value: &str) -> bool {
 	let moodle_suffix = host
 		.strip_prefix("moodle")
 		.and_then(|value| value.strip_suffix(".wakayama-u.ac.jp"));
-	let supported_host = moodle_suffix.is_some_and(|year| {
-		year.is_empty() || year.chars().all(|character| character.is_ascii_digit())
-	});
+	let supported_host = host == "fuzzy-qa-2026.moodlecloud.com"
+		|| moodle_suffix.is_some_and(|year| {
+			year.is_empty() || year.chars().all(|character| character.is_ascii_digit())
+		});
 	let assignment_id = url
 		.query_pairs()
 		.find_map(|(key, value)| (key == "id").then_some(value));
@@ -142,6 +143,41 @@ pub fn is_supported_moodle_assignment_url(value: &str) -> bool {
 					character.is_ascii_alphanumeric() || "._:-".contains(character)
 				})
 		})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::is_supported_moodle_assignment_url;
+
+	#[test]
+	fn supported_moodle_assignment_urls_include_the_exact_qa_review_host() {
+		for value in [
+			"https://moodle.wakayama-u.ac.jp/mod/assign/view.php?id=cm-1",
+			"https://moodle2026.wakayama-u.ac.jp/mod/quiz/view.php?id=quiz_2",
+			"https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=cm-3",
+			"https://fuzzy-qa-2026.moodlecloud.com/mod/quiz/view.php?id=quiz:4",
+		] {
+			assert!(is_supported_moodle_assignment_url(value), "{value}");
+		}
+	}
+
+	#[test]
+	fn qa_review_host_does_not_relax_assignment_url_safety() {
+		for value in [
+			"http://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=cm-1",
+			"https://fuzzy-qa-2026.moodlecloud.com.evil.example/mod/assign/view.php?id=cm-1",
+			"https://sub.fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=cm-1",
+			"https://fuzzy-qa-2027.moodlecloud.com/mod/assign/view.php?id=cm-1",
+			"https://other.moodlecloud.com/mod/assign/view.php?id=cm-1",
+			"https://reviewer@fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=cm-1",
+			"https://fuzzy-qa-2026.moodlecloud.com/mod/forum/view.php?id=cm-1",
+			"https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php",
+			"https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=unsafe%2Fid",
+			"https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=cm-1#submission",
+		] {
+			assert!(!is_supported_moodle_assignment_url(value), "{value}");
+		}
+	}
 }
 
 /// Aggregate result of one assignment synchronization.

@@ -1,4 +1,5 @@
 import type { AssignmentDetailProgress } from "../../lib/moodle/assignmentDetail";
+import { nativeConnectionIssuePresentation } from "./userFacingError";
 
 const STATUS_ID = "fuzzy-assignment-sync-status";
 const STYLE_ID = "fuzzy-assignment-sync-status-style";
@@ -28,26 +29,24 @@ export function showAssignmentSyncSaving(): void {
 export function showAssignmentSyncComplete(progress: AssignmentDetailProgress): void {
 	const unresolved = progress.unknown + progress.skipped;
 	if (unresolved > 0) {
+		renderStatus("warning", "課題・締切を更新しました", "確認できない課題があります。");
+	} else {
 		renderStatus(
-			"warning",
+			"success",
 			"課題・締切を更新しました",
-			`${unresolved}件は提出可否を確認できませんでした。必要な課題はMoodleで確認してください。`,
+			`${progress.completed}件の提出可否を確認しました。`,
 		);
-		return;
 	}
-	renderStatus(
-		"success",
-		"課題・締切を更新しました",
-		`${progress.completed}件の提出可否を確認しました。`,
-	);
 	scheduleDismiss();
 }
 
-export function showAssignmentSyncFailure(): void {
+export function showAssignmentSyncFailure(error?: unknown): void {
+	const connectionIssue = nativeConnectionIssuePresentation(error);
 	renderStatus(
 		"error",
-		"課題・締切を更新できませんでした",
-		"ほかのFuzzy機能は利用できます。Moodleを再読み込みして、もう一度お試しください。",
+		connectionIssue?.title ?? "課題・締切を更新できませんでした",
+		connectionIssue?.impact ??
+			"Moodle上の閲覧は続けられます。ページを再読み込みして、もう一度お試しください。",
 	);
 }
 
