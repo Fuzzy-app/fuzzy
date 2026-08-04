@@ -102,7 +102,7 @@ interface LibraryMaintenanceSummary {
 
 `rebuildIndex`の省略時は`false`とし、新規・本文変更・索引メタデータ欠落の資料だけを索引へ反映する。`true`では既存の全文索引と索引メタデータを空にしてから、走査時点で実在する対応資料を再構築する。通常再走査では、パス・サイズ・ファイルシステム更新日時が前回観測と一致する資料のBLAKE3／SimHashを再利用し、その件数を`reusedFingerprintCount`で返す。いずれもSQLiteに設定済みの保存ルートを走査し、新規資料の登録、既存資料の注釈更新、ルール適合状況と重複候補の再計算を行うが、利用者のファイルを移動・削除しない。`warnings.path`は保存ルートからの相対パスだけとし、絶対パスを返さない。native-hostへ接続できない場合はモックで成功を偽装せず`NO_NATIVE_HOST`を返す。
 
-`reconcileCourseFiles`は、認証済みの完全な`course/view.php`を表示したときに拡張機能から非同期で呼ぶ。現在の保存ルールとコースフォルダー名から探索起点を決め、新規ファイルの再帰探索、登録済みファイルのサイズ・ナノ秒更新日時の比較、変更時だけの再ハッシュ・再索引、指定コースに属する欠損確認を行う。ルール変更前の場所に残る登録済みファイルも個別に確認し、対象外コースのフォルダーは探索しない。同一コースの同時要求は共有し、成功後5分間の再要求はbackgroundで抑制する。常時監視は行わず、利用者ファイルの移動・削除もしない。
+`reconcileCourseFiles`は、認証済みの完全な`course/view.php`を表示したときに拡張機能から非同期で呼ぶ。Edge Add-ons審査用の`fuzzy-qa-2026.moodlecloud.com`だけは、完全なコースURL・コースDOM・ゲスト表示を全て確認できたゲストコースも対象にする。この例外を他ホストの未ログインページへ広げない。現在の保存ルールとコースフォルダー名から探索起点を決め、新規ファイルの再帰探索、登録済みファイルのサイズ・ナノ秒更新日時の比較、変更時だけの再ハッシュ・再索引、指定コースに属する欠損確認を行う。ルール変更前の場所に残る登録済みファイルも個別に確認し、対象外コースのフォルダーは探索しない。同一コースの同時要求は共有し、成功後5分間の再要求はbackgroundで抑制する。常時監視は行わず、利用者ファイルの移動・削除もしない。
 
 コースページから送る`moodleCourseId`は、年度をまたいだMoodle IDの衝突を防ぐため、取得できる場合は`moodle:<hostname>:<academicYear>:<rawCourseId>`形式のコンテキスト付き安定キーにする。ホストまたは年度を確定できない場合は同期を保留し、raw IDへ自動的に戻さない。native-hostは移行期間に限り、年度が一致する旧raw IDの行をこの形式へ引き継ぐ。`moodleAssignmentId`はcourse-module由来の安定IDとし、SQLite内部IDをクライアントから受け取らない。
 
@@ -294,7 +294,7 @@ Googleカレンダー／Google Tasks連携用コマンドは将来の専用Issue
 
 ### 1.3 起動・接続方針
 
-`docs/仕様書.md` 3.4節のとおり、認証済みMoodleタブが存在する間だけbackgroundから`connectNative`で接続を維持し、最後の対象タブが閉じた時点で切断する。content scriptはNative Messagingへ直接接続せず、全画面のAPIをbackgroundへ中継する。拡張機能側は`ping`にタイムアウト（既定5秒）を設定し、応答がなければ`NO_NATIVE_HOST`を返して一定時間後または次の操作時に疎通を再判定する。本番でサンプルデータへ暗黙に切り替えない。ダッシュボードだけは、native-hostから過去に取得してIndexedDBへ保存した実データのキャッシュがある場合に限り、最終更新日時を明示して表示できる。
+`docs/仕様書.md` 3.4節のとおり、認証済みMoodleタブ、または上記の審査用QAゲストコースが存在する間だけbackgroundから`connectNative`で接続を維持し、最後の対象タブが閉じた時点で切断する。content scriptはNative Messagingへ直接接続せず、全画面のAPIをbackgroundへ中継する。拡張機能側は`ping`にタイムアウト（既定5秒）を設定し、応答がなければ`NO_NATIVE_HOST`を返して一定時間後または次の操作時に疎通を再判定する。本番でサンプルデータへ暗黙に切り替えない。ダッシュボードだけは、native-hostから過去に取得してIndexedDBへ保存した実データのキャッシュがある場合に限り、最終更新日時を明示して表示できる。
 
 ダッシュボードの実データはbackgroundが拡張機能originのIndexedDBへ表示用キャッシュとして保存する。content scriptからWeb Storage／IndexedDBを直接使用するとMoodleページoriginへ保存されるため、キャッシュの読み書きはbackground経由に限定する。popupは同じ拡張機能originのキャッシュを読み取り、native-hostやMoodleへ接続できない場合も前回情報だけを表示できる。
 

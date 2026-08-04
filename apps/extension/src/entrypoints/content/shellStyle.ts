@@ -211,6 +211,11 @@ export function ensureShellStyle(): void {
 			color: var(--fuzzy-color-success-strong);
 		}
 
+		.fuzzy-top-status[data-mode="unavailable"] {
+			background: var(--fuzzy-color-danger-soft);
+			color: var(--fuzzy-color-danger);
+		}
+
 		.fuzzy-close-button {
 			border: 0;
 			border-radius: 10px;

@@ -147,6 +147,9 @@ export function parseMoodleDueAt(
 		}
 	}
 
+	const englishDate = parseEnglishMoodleDueAt(normalized);
+	if (englishDate) return { dueAt: englishDate, dueAtStatus: "normal" };
+
 	const match = normalized.match(
 		/(?:(\d{4})\s*[年/-]\s*)?(\d{1,2})\s*[月/-]\s*(\d{1,2})\s*日?(?:\s*(?:\([^)]+\)|（[^）]+）))?(?:\s*(\d{1,2})[:：](\d{2}))?/,
 	);
@@ -177,6 +180,59 @@ export function parseMoodleDueAt(
 		)}:00+09:00`,
 		dueAtStatus: explicitYear !== null && match[4] !== undefined ? "normal" : "needs_review",
 	};
+}
+
+const ENGLISH_MONTHS: Readonly<Record<string, number>> = {
+	jan: 1,
+	feb: 2,
+	mar: 3,
+	apr: 4,
+	may: 5,
+	jun: 6,
+	jul: 7,
+	aug: 8,
+	sep: 9,
+	oct: 10,
+	nov: 11,
+	dec: 12,
+};
+
+/** Moodle英語表示の長い日時（例: Tuesday, 11 August 2026, 11:59 PM）をJSTで読む。 */
+function parseEnglishMoodleDueAt(value: string): string | null {
+	const monthName =
+		"January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec";
+	const dayFirst = value.match(
+		new RegExp(
+			`\\b(\\d{1,2})\\s+(${monthName})\\s+(\\d{4})(?:,\\s*|\\s+)(\\d{1,2}):(\\d{2})(?:\\s*(AM|PM))?\\b`,
+			"i",
+		),
+	);
+	const monthFirst = value.match(
+		new RegExp(
+			`\\b(${monthName})\\s+(\\d{1,2}),?\\s+(\\d{4})(?:,\\s*|\\s+)(\\d{1,2}):(\\d{2})(?:\\s*(AM|PM))?\\b`,
+			"i",
+		),
+	);
+	const match = dayFirst ?? monthFirst;
+	if (!match) return null;
+
+	const day = Number(dayFirst ? match[1] : match[2]);
+	const monthToken = (dayFirst ? match[2] : match[1]) ?? "";
+	const month = ENGLISH_MONTHS[monthToken.slice(0, 3).toLowerCase()] ?? 0;
+	const year = Number(match[3]);
+	let hour = Number(match[4]);
+	const minute = Number(match[5]);
+	const meridiem = match[6]?.toUpperCase() ?? null;
+	if (meridiem) {
+		if (hour < 1 || hour > 12) return null;
+		hour = (hour % 12) + (meridiem === "PM" ? 12 : 0);
+	}
+	if (!isValidJstDate(year, month, day, hour, minute)) return null;
+
+	return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(
+		2,
+		"0",
+	)}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+09:00`;
 }
 
 export function isCompleteCoursePage(pageUrl: string, root: Document | Element): boolean {

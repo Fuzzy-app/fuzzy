@@ -101,4 +101,21 @@ describe("Moodle向け公開範囲", () => {
 		expect(shellSource).not.toContain('from "../../lib/cache/dashboardCache"');
 		expect(shellSource).not.toContain("writeDashboardCache(");
 	});
+
+	test("MoodleCloud実機QAはFuzzy本体の初期設定と接続修復を前提にする", async () => {
+		const guide = await Bun.file(
+			new URL("../../docs/公開ガイド/MoodleCloud-QA環境.md", import.meta.url),
+		).text();
+
+		expect(guide).toContain("拡張機能だけをEdgeへ読み込んでも");
+		expect(guide).toContain("QA専用フォルダー");
+		expect(guide).toContain("接続を自動修復");
+		expect(guide).toContain("表示された場合だけ実行する");
+		expect(guide).toContain("このPCのデータを表示中");
+		expect(guide).toContain("Native HostとSQLiteへ接続できたことを示します");
+		expect(guide).toContain("fuzzy-local-scan-check.txt");
+		expect(guide).toContain("保存先の確認と資料情報の作り直しが完了しました。");
+		expect(guide).toContain("Guest login button");
+		expect(guide).toContain("ダッシュボードの「コース概要」には表示されません");
+	});
 });

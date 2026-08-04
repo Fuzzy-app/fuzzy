@@ -158,6 +158,47 @@ describe("Moodle課題の実データ同期", () => {
 		});
 	});
 
+	test("MoodleCloud 5.2の英語表示から2件の課題とJST締切を同期する", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="9"><body>
+				<main class="course-content">
+					<section class="course-section" data-sectionid="0">
+						<h1>Fuzzy 動作確認コース</h1>
+						<div class="activity activity-wrapper" data-activityname="第1回レポート">
+							<a href="https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=41">第1回レポート</a>
+							<span>Due: Tuesday, 11 August 2026, 11:59 PM</span>
+						</div>
+						<div class="activity activity-wrapper" data-activityname="第2回レポート">
+							<a href="https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=42">第2回レポート</a>
+							<span>Due: Tuesday, 18 August 2026, 11:59 PM</span>
+						</div>
+					</section>
+				</main>
+			</body></html>
+		`);
+		const pageUrl = "https://fuzzy-qa-2026.moodlecloud.com/course/view.php?id=9";
+		const payload = buildMoodleAssignmentSyncPayload(
+			collectMoodlePageSnapshot(document),
+			pageUrl,
+			document,
+		);
+
+		expect(payload?.assignments).toMatchObject([
+			{
+				moodleAssignmentId: "assign:41",
+				title: "第1回レポート",
+				dueAt: "2026-08-11T23:59:00+09:00",
+				dueAtStatus: "normal",
+			},
+			{
+				moodleAssignmentId: "assign:42",
+				title: "第2回レポート",
+				dueAt: "2026-08-18T23:59:00+09:00",
+				dueAtStatus: "normal",
+			},
+		]);
+	});
+
 	test("安定IDがない文面候補は同期対象へ混ぜない", () => {
 		const { document } = parseHTML(`
 			<html data-courseid="412"><body>
@@ -315,6 +356,15 @@ describe("Moodle課題の実データ同期", () => {
 			dueAt: null,
 			dueAtStatus: "needs_review",
 		});
+	});
+
+	test("英語表示の12時間制締切をJSTとして解釈する", () => {
+		expect(
+			parseMoodleDueAt("Due: Tuesday, 11 August 2026, 11:59 PM", 2026, "2026-08-04T00:00:00Z"),
+		).toEqual({ dueAt: "2026-08-11T23:59:00+09:00", dueAtStatus: "normal" });
+		expect(
+			parseMoodleDueAt("Due: August 12, 2026, 12:05 AM", 2026, "2026-08-04T00:00:00Z"),
+		).toEqual({ dueAt: "2026-08-12T00:05:00+09:00", dueAtStatus: "normal" });
 	});
 
 	test("提出可否はMoodleの明示文言だけから判定する", () => {

@@ -1,7 +1,10 @@
+import { FUZZY_QA_MOODLE_HTTPS_MATCH_PATTERN } from "../../../moodleSite";
+
 const UNIVERSITY_LOGIN_PATH = /^\/(?:\d{4}\/)?auth\/oidc\/?$/i;
 const MOODLE_LOGIN_PATH = /^\/(?:\d{4}\/)?login\/index(?:_form)?\.(?:html|php)\/?$/i;
 const MOODLE_LOGOUT_PATH = /^\/(?:\d{4}\/)?login\/logout\.php\/?$/i;
 const MOODLE_LANDING_PATH = /^\/(?:\d{4}\/)?$/;
+const FUZZY_QA_MOODLE_ORIGIN = FUZZY_QA_MOODLE_HTTPS_MATCH_PATTERN.slice(0, -2);
 
 export function isMoodleCoursePage(pageUrl: string): boolean {
 	try {
@@ -28,6 +31,7 @@ export function isMoodleDashboardPage(pageUrl: string): boolean {
 
 export type MoodlePageKind =
 	| "authenticated"
+	| "guest"
 	| "login"
 	| "authentication-transition"
 	| "logout-transition"
@@ -42,6 +46,7 @@ export function classifyMoodlePage(document: Document, pageUrl: string): MoodleP
 	if (page && MOODLE_LOGOUT_PATH.test(page.pathname)) return "logout-transition";
 	if (page && UNIVERSITY_LOGIN_PATH.test(page.pathname)) return "authentication-transition";
 	if (isAuthenticatedMoodleDocument(document, pageUrl)) return "authenticated";
+	if (isGuestMoodleCourseDocument(document, pageUrl)) return "guest";
 
 	const loginLinks = findUniversityLoginLinks(document, pageUrl);
 	if (isMoodleLoginDocument(document, pageUrl, loginLinks.length > 0)) return "login";
@@ -51,9 +56,37 @@ export function classifyMoodlePage(document: Document, pageUrl: string): MoodleP
 
 /** 認証済み画面は全機能、Moodle障害HTMLはキャッシュ表示用シェルだけを起動する。 */
 export function resolveMoodleUiMode(pageKind: MoodlePageKind): MoodleUiMode {
-	if (pageKind === "authenticated") return "full";
+	if (pageKind === "authenticated" || pageKind === "guest") return "full";
 	if (pageKind === "unavailable") return "shell-only";
 	return "none";
+}
+
+/**
+ * 審査用MoodleCloudのゲストは通常ログインと異なりloggedinクラスやログアウトリンクを持たない。
+ * QA origin以外の公開ページへ広げないよう、origin・コースURL・コースDOM・ゲスト表示を全て必須にする。
+ */
+export function isGuestMoodleCourseDocument(document: Document, pageUrl: string): boolean {
+	if (!isMoodleCoursePage(pageUrl)) return false;
+	const page = safeUrl(pageUrl);
+	if (page?.origin !== FUZZY_QA_MOODLE_ORIGIN || page.username !== "" || page.password !== "") {
+		return false;
+	}
+	const courseContent = document.querySelector(
+		".course-content, [data-region='course-content'], [data-course-content]",
+	);
+	if (!courseContent) return false;
+
+	const loginInformation = Array.from(
+		document.querySelectorAll<HTMLElement>(
+			".logininfo, [data-region='login-info'], [data-region='user-menu'], .usermenu",
+		),
+	)
+		.map((element) => element.textContent ?? "")
+		.join(" ")
+		.normalize("NFKC")
+		.replace(/\s+/g, " ")
+		.trim();
+	return /(?:ゲストアクセス|guest\s+access)/i.test(loginInformation);
 }
 
 export function isMoodleLoginDocument(

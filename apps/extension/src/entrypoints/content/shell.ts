@@ -32,8 +32,9 @@ import {
 } from "./shellHost";
 import { SHELL_NAV_BUTTON_ID, SHELL_PAGE_ID, SHELL_ROOT_ID, SHELL_STASH_ID } from "./shellIds";
 import { ensureShellStyle } from "./shellStyle";
+import { nativeConnectionIssuePresentation } from "./userFacingError";
 
-type ConnectionMode = FuzzyApiClient["mode"] | "checking";
+type ConnectionMode = FuzzyApiClient["mode"] | "checking" | "unavailable";
 type ScreenId = FuzzyScreenId;
 export const FUZZY_SHELL_VISIBILITY_EVENT = "fuzzy:shell-visibility";
 
@@ -90,6 +91,7 @@ export function mountFuzzyShell(): void {
 	let isOpen = false;
 	let activeScreen: ScreenId = "search";
 	let mode: ConnectionMode = "checking";
+	let unavailableStatusLabel = "Fuzzy本体に接続できません";
 	let shellTopOffset = 0;
 	let dashboard: DashboardSummary | null = null;
 	let dashboardCachedAt: string | null = null;
@@ -108,16 +110,19 @@ export function mountFuzzyShell(): void {
 		while (stash.firstChild) mainHost.append(stash.firstChild);
 	};
 
-	const setTopMode = (nextMode: ConnectionMode) => {
+	const setTopMode = (nextMode: ConnectionMode, statusLabel?: string) => {
 		mode = nextMode;
+		if (nextMode === "unavailable" && statusLabel) unavailableStatusLabel = statusLabel;
 		if (!statusBadge) return;
 		statusBadge.dataset.mode = mode;
 		statusBadge.textContent =
 			mode === "native"
 				? "このPCのデータを表示中"
-				: mode === "mock"
-					? "サンプルデータを表示中"
-					: "表示する情報を確認中";
+				: mode === "unavailable"
+					? unavailableStatusLabel
+					: mode === "mock"
+						? "サンプルデータを表示中"
+						: "表示する情報を確認中";
 	};
 
 	const setTopModeFromApi = (api: {
@@ -226,6 +231,8 @@ export function mountFuzzyShell(): void {
 			dashboardPresentation = { tone: "ready", title: "最新の整理状況です" };
 		} catch (error) {
 			console.warn("[fuzzy] 整理状況の取得に失敗しました", error);
+			const connectionIssue = nativeConnectionIssuePresentation(error);
+			if (connectionIssue) setTopMode("unavailable", connectionIssue.statusLabel);
 			if (cached) {
 				dashboard = cached.dashboard;
 				dashboardCachedAt = cached.cachedAt;
@@ -233,7 +240,7 @@ export function mountFuzzyShell(): void {
 				dashboardPresentation = {
 					tone: "warning",
 					title: "前回保存した整理状況を表示しています",
-					impact: "最新情報は取得できませんでした。",
+					impact: connectionIssue?.impact ?? "最新情報は取得できませんでした。",
 					technicalDetails: error instanceof Error ? error.message : String(error),
 				};
 				return;
@@ -241,8 +248,8 @@ export function mountFuzzyShell(): void {
 			dashboard = null;
 			dashboardPresentation = {
 				tone: "error",
-				title: "整理状況を読み込めませんでした。",
-				impact: "時間をおいて再度お試しください。",
+				title: connectionIssue?.title ?? "整理状況を読み込めませんでした。",
+				impact: connectionIssue?.impact ?? "時間をおいて再度お試しください。",
 				technicalDetails: error instanceof Error ? error.message : String(error),
 			};
 		}
@@ -277,6 +284,7 @@ export function mountFuzzyShell(): void {
 					},
 					{
 						reload: () => {
+							setTopMode("checking");
 							dashboardPresentation = {
 								tone: "loading",
 								title: "整理状況を読み込んでいます…",
@@ -341,6 +349,9 @@ export function mountFuzzyShell(): void {
 		const content = el("div", "fuzzy-content");
 		const topbar = el("header", "fuzzy-topbar");
 		statusBadge = el("p", "fuzzy-top-status");
+		statusBadge.setAttribute("role", "status");
+		statusBadge.setAttribute("aria-live", "polite");
+		statusBadge.setAttribute("aria-atomic", "true");
 		setTopMode(mode);
 		const closeButton = el("button", "fuzzy-close-button", "Moodleに戻る");
 		closeButton.type = "button";

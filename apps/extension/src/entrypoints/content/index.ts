@@ -251,7 +251,7 @@ async function syncAssignmentsWithDetails(
 		showAssignmentSyncComplete(progress);
 	} catch (error) {
 		console.warn("[fuzzy] Moodle課題の同期に失敗しました", error);
-		showAssignmentSyncFailure();
+		showAssignmentSyncFailure(error);
 	}
 }
 
