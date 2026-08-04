@@ -29,18 +29,14 @@ export function showAssignmentSyncSaving(): void {
 export function showAssignmentSyncComplete(progress: AssignmentDetailProgress): void {
 	const unresolved = progress.unknown + progress.skipped;
 	if (unresolved > 0) {
+		renderStatus("warning", "課題・締切を更新しました", "確認できない課題があります。");
+	} else {
 		renderStatus(
-			"warning",
+			"success",
 			"課題・締切を更新しました",
-			`${unresolved}件は提出可否を確認できませんでした。必要な課題はMoodleで確認してください。`,
+			`${progress.completed}件の提出可否を確認しました。`,
 		);
-		return;
 	}
-	renderStatus(
-		"success",
-		"課題・締切を更新しました",
-		`${progress.completed}件の提出可否を確認しました。`,
-	);
 	scheduleDismiss();
 }
 
