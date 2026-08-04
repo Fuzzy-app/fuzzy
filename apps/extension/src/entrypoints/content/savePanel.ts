@@ -5,6 +5,7 @@
 import {
 	type SaveFileFailure,
 	type SimilarFileMatch,
+	canonicalWindowsPath,
 	normalizeRelativeSavePath,
 	relativeSavePath,
 	resolveSavePathUnderRoot,
