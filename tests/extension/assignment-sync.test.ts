@@ -112,6 +112,52 @@ describe("Moodle課題の実データ同期", () => {
 		]);
 	});
 
+	test("年度表示のない審査専用QAコースは2026年度として同期する", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="136">
+				<body>
+					<main class="course-content">
+						<section class="course-section" data-sectionid="0">
+							<h1>Fuzzy 動作確認コース</h1>
+							<div class="activity" data-activityname="第1回レポート">
+								<a href="https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=701">
+									第1回レポート
+								</a>
+								<span>提出期限: 8月11日 23:59</span>
+							</div>
+						</section>
+					</main>
+				</body>
+			</html>
+		`);
+		const snapshot = collectMoodlePageSnapshot(document);
+		const pageUrl = "https://fuzzy-qa-2026.moodlecloud.com/course/view.php?id=136";
+
+		expect(snapshot.academicYear).toBeNull();
+		expect(buildMoodleAssignmentSyncPayload(snapshot, pageUrl, document)).toMatchObject({
+			course: {
+				moodleCourseId: "moodle:fuzzy-qa-2026.moodlecloud.com:2026:136",
+				name: "Fuzzy 動作確認コース",
+				academicYear: 2026,
+			},
+			assignments: [
+				{
+					moodleAssignmentId: "assign:701",
+					dueAt: "2026-08-11T23:59:00+09:00",
+					moodleUrl: "https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=701",
+				},
+			],
+		});
+		expect(buildCourseFileReconcilePayload(snapshot, pageUrl, document)).toEqual({
+			course: {
+				moodleCourseId: "moodle:fuzzy-qa-2026.moodlecloud.com:2026:136",
+				name: "Fuzzy 動作確認コース",
+				academicYear: 2026,
+				term: null,
+			},
+		});
+	});
+
 	test("安定IDがない文面候補は同期対象へ混ぜない", () => {
 		const { document } = parseHTML(`
 			<html data-courseid="412"><body>
@@ -300,11 +346,17 @@ describe("Moodle course identity isolation", () => {
 	});
 
 	test("does not create a contextual course id when the academic year is unknown", () => {
-		expect(
-			contextualMoodleCourseId(
-				{ moodleCourseId: "412", academicYear: null } as never,
-				"https://moodle.example/course/view.php?id=412",
-			),
-		).toBeNull();
+		for (const pageUrl of [
+			"https://moodle.example/course/view.php?id=412",
+			"https://fuzzy-qa-2027.moodlecloud.com/course/view.php?id=412",
+			"http://fuzzy-qa-2026.moodlecloud.com/course/view.php?id=412",
+			"https://reviewer@fuzzy-qa-2026.moodlecloud.com/course/view.php?id=412",
+			"https://fuzzy-qa-2026.moodlecloud.com:444/course/view.php?id=412",
+			"https://moodle2026.wakayama-u.ac.jp/course/view.php?id=412",
+		]) {
+			expect(
+				contextualMoodleCourseId({ moodleCourseId: "412", academicYear: null } as never, pageUrl),
+			).toBeNull();
+		}
 	});
 });

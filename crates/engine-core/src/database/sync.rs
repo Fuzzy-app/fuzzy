@@ -1392,6 +1392,37 @@ mod tests {
 	}
 
 	#[test]
+	fn course_snapshot_accepts_exact_qa_review_moodle_url() {
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.conn()
+			.execute(
+				"INSERT INTO courses (id, moodle_course_id, name)
+				 VALUES (1, 'moodle:fuzzy-qa-2026.moodlecloud.com:2026:136', 'Fuzzy 動作確認コース')",
+				[],
+			)
+			.unwrap();
+		let mut assignment = moodle_assignment(
+			"assign:701",
+			"第1回レポート",
+			Some("2026-08-11T23:59:00+09:00"),
+		);
+		assignment.moodle_url =
+			Some("https://fuzzy-qa-2026.moodlecloud.com/mod/assign/view.php?id=701".to_string());
+
+		let event = database
+			.sync_moodle_assignments("auto", 1, std::slice::from_ref(&assignment))
+			.unwrap();
+		assert_eq!(event.new_assignment_count, 1);
+		assert_eq!(
+			database.deadlines(Default::default()).unwrap()[0]
+				.moodle_url
+				.as_deref(),
+			assignment.moodle_url.as_deref()
+		);
+	}
+
+	#[test]
 	fn explicit_iso_timestamp_validates_calendar_days_and_leap_years() {
 		assert!(has_explicit_iso_offset("2028-02-29T23:59:00+09:00"));
 		assert!(has_explicit_iso_offset("2026-07-31T14:59:00Z"));

@@ -1,6 +1,12 @@
 import type { ReconcileCourseFilesRequest, SyncMoodleAssignmentsRequest } from "@fuzzy/shared";
-import { isSupportedMoodleAssignmentUrl } from "../../../moodleSite";
+import {
+	FUZZY_QA_MOODLE_HTTPS_MATCH_PATTERN,
+	isSupportedMoodleAssignmentUrl,
+} from "../../../moodleSite";
 import { type MoodlePageSnapshot, hasCompleteAssignmentHintExtraction } from "./pageSnapshot";
+
+const FUZZY_QA_MOODLE_ORIGIN = FUZZY_QA_MOODLE_HTTPS_MATCH_PATTERN.slice(0, -2);
+const FUZZY_QA_ACADEMIC_YEAR = 2026;
 
 /** Moodleのホスト・年度・コースIDを組み合わせ、年度をまたいだ同一IDの衝突を防ぐ。 */
 export function contextualMoodleCourseId(
@@ -13,8 +19,8 @@ export function contextualMoodleCourseId(
 	try {
 		const hostname = new URL(pageUrl).hostname.toLowerCase();
 		if (!hostname) return null;
-		if (snapshot.academicYear === null) return null;
-		const year = snapshot.academicYear;
+		const year = resolveMoodleAcademicYear(snapshot, pageUrl);
+		if (year === null) return null;
 		const contextualId = `moodle:${hostname}:${year}:${rawId}`;
 		return contextualId.length <= 128 ? contextualId : null;
 	} catch {
@@ -33,6 +39,7 @@ export function buildMoodleAssignmentSyncPayload(
 ): SyncMoodleAssignmentsRequest | null {
 	if (!isCompleteCoursePage(pageUrl, root)) return null;
 	if (!hasCompleteAssignmentHintExtraction(root, snapshot.assignmentHints)) return null;
+	const academicYear = resolveMoodleAcademicYear(snapshot, pageUrl);
 	const moodleCourseId = contextualMoodleCourseId(snapshot, pageUrl) ?? "";
 	const courseName = snapshot.courseName?.trim() ?? "";
 	if (
@@ -57,7 +64,7 @@ export function buildMoodleAssignmentSyncPayload(
 		if (!title || title.length > 512) return null;
 
 		seen.add(moodleAssignmentId);
-		const parsedDue = parseMoodleDueAt(hint.dueText, snapshot.academicYear, snapshot.collectedAt);
+		const parsedDue = parseMoodleDueAt(hint.dueText, academicYear, snapshot.collectedAt);
 		assignments.push({
 			moodleAssignmentId,
 			title,
@@ -79,7 +86,7 @@ export function buildMoodleAssignmentSyncPayload(
 		course: {
 			moodleCourseId,
 			name: courseName,
-			academicYear: snapshot.academicYear,
+			academicYear,
 			term: snapshot.term,
 		},
 		assignments,
@@ -93,6 +100,7 @@ export function buildCourseFileReconcilePayload(
 	root: Document | Element = document,
 ): ReconcileCourseFilesRequest | null {
 	if (!isCompleteCoursePage(pageUrl, root)) return null;
+	const academicYear = resolveMoodleAcademicYear(snapshot, pageUrl);
 	const moodleCourseId = contextualMoodleCourseId(snapshot, pageUrl) ?? "";
 	const name = snapshot.courseName?.trim() ?? "";
 	if (!/^[A-Za-z0-9._:-]{1,128}$/.test(moodleCourseId) || !name || name.length > 1_000) {
@@ -102,10 +110,23 @@ export function buildCourseFileReconcilePayload(
 		course: {
 			moodleCourseId,
 			name,
-			academicYear: snapshot.academicYear,
+			academicYear,
 			term: snapshot.term,
 		},
 	};
+}
+
+/** 審査専用QAサイトでは、DOMに年度がなくてもサイト名で固定された年度を補う。 */
+function resolveMoodleAcademicYear(snapshot: MoodlePageSnapshot, pageUrl: string): number | null {
+	if (snapshot.academicYear !== null) return snapshot.academicYear;
+	try {
+		const url = new URL(pageUrl);
+		return url.origin === FUZZY_QA_MOODLE_ORIGIN && url.username === "" && url.password === ""
+			? FUZZY_QA_ACADEMIC_YEAR
+			: null;
+	} catch {
+		return null;
+	}
 }
 
 export function parseMoodleDueAt(

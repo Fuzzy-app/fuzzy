@@ -1,9 +1,14 @@
 import type { FuzzyApiClient } from "@fuzzy/shared";
-import { MOODLE_HOME_URL, MOODLE_HTTPS_MATCH_PATTERNS } from "../../../moodleSite";
+import {
+	MOODLE_HOME_URL,
+	MOODLE_HTTPS_MATCH_PATTERNS,
+	isSupportedMoodleHostname,
+} from "../../../moodleSite";
 
 export const SYNC_NOTIFICATION_ID_PREFIX = "fuzzy-sync-";
 export const SYNC_SCREEN_NAVIGATION_MESSAGE = "fuzzy:open-screen";
 export const PENDING_SYNC_SCREEN_NAVIGATION_KEY = "fuzzy-pending-sync-screen-navigation";
+export const LAST_MOODLE_HOME_URL_KEY = "fuzzy-last-moodle-home-url";
 
 export interface SyncNotificationReference {
 	mode: Exclude<FuzzyApiClient["mode"], "mock">;
@@ -23,11 +28,13 @@ export interface ScreenNavigationResponse {
 interface MoodleTab {
 	id?: number;
 	active?: boolean;
+	url?: string;
 }
 
 export interface SyncNavigationBrowser {
 	storage: {
 		local: {
+			get(key: string): Promise<Record<string, unknown>>;
 			set(items: Record<string, unknown>): Promise<void>;
 			remove(key: string): Promise<void>;
 		};
@@ -38,6 +45,39 @@ export interface SyncNavigationBrowser {
 		update(tabId: number, properties: { active: boolean }): Promise<unknown>;
 		sendMessage(tabId: number, message: unknown): Promise<unknown>;
 	};
+}
+
+interface MoodleHomeStorage {
+	set(items: Record<string, unknown>): Promise<void>;
+}
+
+export function supportedMoodleHomeUrl(value: unknown): string | null {
+	if (typeof value !== "string" || value.length > 2_048) return null;
+	try {
+		const url = new URL(value);
+		if (
+			url.protocol !== "https:" ||
+			!isSupportedMoodleHostname(url.hostname) ||
+			url.username !== "" ||
+			url.password !== "" ||
+			url.port !== ""
+		) {
+			return null;
+		}
+		return `${url.origin}/`;
+	} catch {
+		return null;
+	}
+}
+
+export async function rememberMoodleHomeUrl(
+	storage: MoodleHomeStorage,
+	pageUrl: unknown,
+): Promise<boolean> {
+	const homeUrl = supportedMoodleHomeUrl(pageUrl);
+	if (!homeUrl) return false;
+	await storage.set({ [LAST_MOODLE_HOME_URL_KEY]: homeUrl });
+	return true;
 }
 
 export function createSyncNotificationId(
@@ -103,10 +143,24 @@ export async function navigateFromSyncNotification(
 		[PENDING_SYNC_SCREEN_NAVIGATION_KEY]: navigation,
 	});
 
+	let rememberedHomeUrl: string | null = null;
+	try {
+		const stored = await browserApi.storage.local.get(LAST_MOODLE_HOME_URL_KEY);
+		rememberedHomeUrl = supportedMoodleHomeUrl(stored[LAST_MOODLE_HOME_URL_KEY]);
+	} catch {
+		// 保存状態を読めなくても、従来のMoodle入口へ戻れるようにする。
+	}
 	const tabs = await browserApi.tabs.query({ url: MOODLE_HTTPS_MATCH_PATTERNS });
-	const target = tabs.find((tab) => tab.active) ?? tabs[0];
+	const preferredTabs = rememberedHomeUrl
+		? tabs.filter((tab) => supportedMoodleHomeUrl(tab.url) === rememberedHomeUrl)
+		: [];
+	const target =
+		preferredTabs.find((tab) => tab.active) ??
+		preferredTabs[0] ??
+		tabs.find((tab) => tab.active) ??
+		tabs[0];
 	if (target?.id === undefined) {
-		await browserApi.tabs.create({ url: MOODLE_HOME_URL, active: true });
+		await browserApi.tabs.create({ url: rememberedHomeUrl ?? MOODLE_HOME_URL, active: true });
 		return true;
 	}
 

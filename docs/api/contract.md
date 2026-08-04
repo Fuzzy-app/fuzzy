@@ -1,6 +1,6 @@
 # API契約（拡張機能 ⇄ Native Messagingホスト / Tauri）
 
-最終更新: 2026-07-29
+最終更新: 2026-08-04
 
 DBスキーマは [`データベース設計.md`](../データベース設計.md) を参照。wire型の正本は用途に応じて`crates/engine-core`または`apps/native-host/src/api_types.rs`のRust DTOとし、`ts-rs`で`packages/shared/src/generated/`へTS型を自動生成する（生成物は手編集しない）。`packages/shared/src/types.ts`は生成型の再exportを基本とし、未移行の暫定TS型だけを直接定義する。絶対パスを含む内部型をそのままwire形式にしない。
 
@@ -168,7 +168,7 @@ interface SyncMoodleAssignmentsRequest {
 }
 ```
 
-`moodleCourseId`と`moodleAssignmentId`はMoodleのcourse／course-module由来の安定IDを必須とし、SQLite内部IDをクライアントから受け取らない。`dueAt`は`Z`または`±HH:MM`を明示した実在するISO 8601日時だけを許可する。`submissionAvailability`はMoodle上で提出操作が可能なら`available`、明示的に締め切られていれば`unavailable`、DOMから確定できなければ`unknown`とする。`moodleUrl`は`https`、大学のMoodleホスト、`/mod/assign/view.php`または`/mod/quiz/view.php`、安全な`id`を全て満たすURLだけを許可し、不明時は`null`とする。同期対象は当該コースの完全スナップショットに限り、単一セクション表示・部分DOM・安定IDを取得できない活動を含む画面からは送信しない。native-hostはコース内だけを1トランザクションで更新し、受信しなかった既存Moodle課題を`removed_at`付きの同期対象外として保持する。別コースと安定IDのない従来行は変更しない。
+`moodleCourseId`と`moodleAssignmentId`はMoodleのcourse／course-module由来の安定IDを必須とし、SQLite内部IDをクライアントから受け取らない。`dueAt`は`Z`または`±HH:MM`を明示した実在するISO 8601日時だけを許可する。`submissionAvailability`はMoodle上で提出操作が可能なら`available`、明示的に締め切られていれば`unavailable`、DOMから確定できなければ`unknown`とする。`moodleUrl`は`https`、和歌山大学のMoodleホストまたは公開QA審査用の正確なホスト`fuzzy-qa-2026.moodlecloud.com`、`/mod/assign/view.php`または`/mod/quiz/view.php`、安全な`id`を全て満たすURLだけを許可し、不明時は`null`とする。公開QAホストは合成データによる拡張機能審査に限定した例外であり、一般のMoodleCloudホストへの対応を意味しない。同期対象は当該コースの完全スナップショットに限り、単一セクション表示・部分DOM・安定IDを取得できない活動を含む画面からは送信しない。native-hostはコース内だけを1トランザクションで更新し、受信しなかった既存Moodle課題を`removed_at`付きの同期対象外として保持する。別コースと安定IDのない従来行は変更しない。
 
 `AssignmentChange.field`は`"dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted" | "submissionAvailability" | "moodleUrl" | "removedAt"`とする。完全スナップショットから課題が消えた場合は`removedAt`の`oldValue: null`、`newValue: syncedAt`を記録し、同じ安定IDが再び現れた場合は`oldValue: 以前のremovedAt`、`newValue: null`を記録する。削除は`removedAssignmentCount`だけ、復帰は`newAssignmentCount`だけへ計上し、`changedAssignmentCount`へ重複加算しない。したがって通知件数に用いる`newAssignmentCount + changedAssignmentCount + removedAssignmentCount`は、状態が変わった課題数と一致する。
 
