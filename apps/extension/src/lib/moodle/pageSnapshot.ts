@@ -87,7 +87,7 @@ const ASSIGNMENT_KEYWORD_PATTERN =
 const DUE_TEXT_PATTERN =
 	/(?:提出期限|締切|期限|due\s*date|due)[:：\s]*(\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:\s+\d{1,2}:\d{2})?|[0-9０-９]{1,2}月[0-9０-９]{1,2}日(?:\s*[0-9０-９]{1,2}[:：][0-9０-９]{2})?|[^。．\n]{1,40})/i;
 const ACADEMIC_TERM_PATTERN =
-	/(?:(?:19|20)\d{2}\s*(?:年度)?\s*(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)|[1-9]年\s*(?:前期|後期|春学期|秋学期)|(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)(?:\s*(?:19|20)\d{2})?|(?:19|20)\d{2}\s*(?:spring|fall|autumn)(?:\s+(?:semester|term))?|(?:spring|fall|autumn)(?:\s+(?:semester|term))?\s*(?:19|20)\d{2}|(?:first|second|1st|2nd)\s+semester)/i;
+	/(?:(?:19|20)\d{2}\s*(?:年度)?\s*(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)|[1-9]年\s*(?:前期|後期|春学期|秋学期)|(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)(?:\s*(?:19|20)\d{2})?|[1-4１-４]\s*[QＱ]|(?:19|20)\d{2}\s*(?:spring|fall|autumn)(?:\s+(?:semester|term))?|(?:spring|fall|autumn)(?:\s+(?:semester|term))?\s*(?:19|20)\d{2}|(?:first|second|1st|2nd)\s+semester)/i;
 const NON_COURSE_LINK_CONTAINER_SELECTOR = [
 	"nav",
 	"header",
@@ -149,12 +149,15 @@ export function extractMoodleCourseId(root: Document | Element = document): stri
 /** 年度はMoodle文脈から独立して読み取り、term文字列の派生値として扱わない。 */
 export function extractAcademicYear(root: Document | Element = document): number | null {
 	const structured = root.querySelector("[data-academic-year]")?.getAttribute("data-academic-year");
+	const pageUrl = safeUrl(getBaseUri(root));
 	const candidates = [
 		structured,
 		...extractBreadcrumbs(root),
 		textOf(root.querySelector(".page-header-headings h1")),
 		textOf(root.querySelector("h1")),
 		extractCourseName(root),
+		pageUrl?.hostname.match(/(?:^|\.)moodle((?:19|20)\d{2})(?:\.|$)/i)?.[1],
+		pageUrl?.pathname.match(/\/(?:moodle)?((?:19|20)\d{2})(?:\/|$)/i)?.[1],
 	];
 	for (const candidate of candidates) {
 		const year = Number.parseInt(

@@ -13,7 +13,7 @@ https://github.com/Fuzzy-app/fuzzy/security/advisories/new
 
 ## 使用した版
 
-- Fuzzy: `v0.1.0-qa.3`
+- Fuzzy: `v0.1.0-qa.4`
 - 入手先: GitHub Pre-release
 
 ## 環境

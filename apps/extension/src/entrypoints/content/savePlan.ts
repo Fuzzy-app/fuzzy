@@ -168,7 +168,7 @@ export function saveSuggestionStatus(
 		return {
 			kind: "all-failed",
 			message:
-				"保存先を提案できませんでした。Moodleから年度や学期などを確認できず、現在のフォルダーの作り方を当てはめられない可能性があります。「保存・整理設定」で見直すか、「資料一覧を再読み込み」を押してください。",
+				"保存先を提案できませんでした。Moodleのコース情報または現在のフォルダーの作り方を候補へ当てはめられませんでした。「保存・整理設定」で見直すか、「資料一覧を再読み込み」を押してください。",
 			reviewRules: true,
 			suggestedFileCount: 0,
 			unavailableFileCount,
@@ -266,9 +266,19 @@ export function saveRootFromSuggestions(suggestions: FileSuggestions): string | 
  */
 export function courseFolderFromSuggestions(
 	suggestions: FileSuggestions,
+	selectedPaths?: SelectedFilePaths,
 ): CourseFolderNameResolution | null {
-	const resolutions = [...suggestions.values()]
-		.map((items) => items[0]?.courseFolder)
+	const resolutions = [...suggestions.entries()]
+		.map(([id, items]) => {
+			const selectedPath = selectedPaths?.get(id);
+			return (
+				(selectedPath
+					? items.find(
+							(item) => canonicalWindowsPath(item.path) === canonicalWindowsPath(selectedPath),
+						)
+					: null) ?? items[0]
+			)?.courseFolder;
+		})
 		.filter((item): item is CourseFolderNameResolution => Boolean(item));
 	if (resolutions.length === 0 || resolutions.length !== suggestions.size) return null;
 

@@ -172,7 +172,7 @@ interface SyncMoodleAssignmentsRequest {
 
 `AssignmentChange.field`は`"dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted" | "submissionAvailability" | "moodleUrl" | "removedAt"`とする。完全スナップショットから課題が消えた場合は`removedAt`の`oldValue: null`、`newValue: syncedAt`を記録し、同じ安定IDが再び現れた場合は`oldValue: 以前のremovedAt`、`newValue: null`を記録する。削除は`removedAssignmentCount`だけ、復帰は`newAssignmentCount`だけへ計上し、`changedAssignmentCount`へ重複加算しない。したがって通知件数に用いる`newAssignmentCount + changedAssignmentCount + removedAssignmentCount`は、状態が変わった課題数と一致する。
 
-`suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。backendは`moodleCourseId`でSQLiteのコースを解決し、省略時は同名候補が一意な場合だけ既存コースへ結び付ける。曖昧な場合は`RULE_CONFLICT`を返し、同じフォルダへの混在を許可しない。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
+`suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。年度はDOM上の明示値を優先し、通常のコース名に年度がない場合はMoodleのホスト名またはURLパスから取得する。backendは`moodleCourseId`の完全一致を候補へ必ず含める。さらに既存コース名とのNFKC正規化、明確な補足除去、部分包含、文字bigram類似度、年度・学期の整合、保存済みファイルの実績を評価し、DBを自動統合せず確からしさ順の`SaveSuggestion[]`として最大5候補を返す。候補がない場合だけ新しい安定ID付きコースを登録する。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
 
 `SaveSuggestion`とコース保存名の型は次のとおりとする。
 

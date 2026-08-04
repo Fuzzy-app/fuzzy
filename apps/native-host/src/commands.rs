@@ -579,20 +579,29 @@ fn suggest_save_path(database: &mut Database, request: Request) -> Response {
 		Err(response) => return response,
 	};
 	let result = (|| {
-		let course = database.resolve_course_context(
+		let mut course_candidates = database.suggest_course_contexts(
 			payload.course.moodle_course_id.as_deref(),
 			payload.course.name.as_deref(),
 			payload.course.academic_year,
 			payload.course.term.as_deref(),
 		)?;
-		let course_folder = database
+		if course_candidates.is_empty() {
+			let course = database.resolve_course_context(
+				payload.course.moodle_course_id.as_deref(),
+				payload.course.name.as_deref(),
+				payload.course.academic_year,
+				payload.course.term.as_deref(),
+			)?;
+			course_candidates.push(engine_core::types::CourseContextCandidate {
+				course,
+				confidence: 0.92,
+			});
+		}
+		let course_folders = database
 			.load_course_folder_resolutions()?
 			.into_iter()
-			.find(|folder| folder.course_id == course.course_id)
-			.ok_or_else(|| EngineError::NotFound {
-				entity: "コース保存名".to_string(),
-				id: course.course_id.to_string(),
-			})?;
+			.map(|folder| (folder.course_id, folder))
+			.collect::<std::collections::BTreeMap<_, _>>();
 		let rules = database.load_rule_set()?;
 		let base_folder = database.base_folder_path()?;
 		let file_name = payload
@@ -606,25 +615,56 @@ fn suggest_save_path(database: &mut Database, request: Request) -> Response {
 			.as_ref()
 			.and_then(|file| file.section_title.as_deref())
 			.or(payload.course.section_title.as_deref());
-		let context = RuleContext {
-			course_id: Some(course.course_id),
-			course_name: Some(course_folder.folder_name.clone()),
-			year: course.academic_year.map(|year| year.to_string()),
-			term: course.term,
-			assignment: None,
-			section: section_title
-				.and_then(parse_section_name)
-				.and_then(|section| section.number)
-				.map(|number| number.to_string()),
-		};
-		let relative_path = DefaultRuleEngine.suggest_save_path(file_name, &context, &rules)?;
-		let path = base_folder.join(&relative_path);
-		Ok(vec![SaveSuggestion {
-			path: path.to_string_lossy().into_owned(),
-			relative_path,
-			confidence: 0.92,
-			course_folder: course_folder.into(),
-		}])
+		let section = section_title
+			.and_then(parse_section_name)
+			.and_then(|section| section.number)
+			.map(|number| number.to_string());
+		let mut suggestions = Vec::new();
+		let mut first_error = None;
+		for candidate in course_candidates {
+			let suggestion: EngineResult<SaveSuggestion> = (|| {
+				let course = candidate.course;
+				let course_folder =
+					course_folders
+						.get(&course.course_id)
+						.ok_or_else(|| EngineError::NotFound {
+							entity: "コース保存名".to_string(),
+							id: course.course_id.to_string(),
+						})?;
+				let context = RuleContext {
+					course_id: Some(course.course_id),
+					course_name: Some(course_folder.folder_name.clone()),
+					year: course.academic_year.map(|year| year.to_string()),
+					term: course.term,
+					assignment: None,
+					section: section.clone(),
+				};
+				let relative_path =
+					DefaultRuleEngine.suggest_save_path(file_name, &context, &rules)?;
+				let path = base_folder.join(&relative_path);
+				Ok(SaveSuggestion {
+					path: path.to_string_lossy().into_owned(),
+					relative_path,
+					confidence: candidate.confidence,
+					course_folder: course_folder.clone().into(),
+				})
+			})();
+			match suggestion {
+				Ok(suggestion) => suggestions.push(suggestion),
+				Err(error) if first_error.is_none() => first_error = Some(error),
+				Err(_) => {}
+			}
+		}
+		if suggestions.is_empty() {
+			return Err(first_error.unwrap_or_else(|| EngineError::NotFound {
+				entity: "保存先候補".to_string(),
+				id: payload
+					.course
+					.name
+					.unwrap_or_else(|| "コース不明".to_string()),
+			}));
+		}
+		Ok(suggestions)
 	})();
 	respond(request.id, result)
 }

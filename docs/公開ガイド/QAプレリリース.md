@@ -2,7 +2,7 @@
 
 ## 対象
 
-この文書は、Fuzzy `v0.1.0-qa.3`を別のWindows 11 PCで試すQA参加者向けです。開発ツールやコマンドは必要ありません。
+この文書は、Fuzzy `v0.1.0-qa.4`を別のWindows 11 PCで試すQA参加者向けです。開発ツールやコマンドは必要ありません。
 
 この版は次の制限があります。
 
@@ -13,11 +13,11 @@
 
 ## ダウンロード
 
-[Fuzzy v0.1.0-qa.3 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.3)を開き、Assetsから`Fuzzy-Setup.exe`をダウンロードします。
+[Fuzzy v0.1.0-qa.4 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.4)を開き、Assetsから`Fuzzy-Setup.exe`をダウンロードします。
 
 Releaseには次も添付します。
 
-- `Fuzzy-0.1.0-qa.3-windows-unsigned.zip`: README、QA用成果物、チェックサムを含む一式
+- `Fuzzy-0.1.0-qa.4-windows-unsigned.zip`: README、QA用成果物、チェックサムを含む一式
 - `SHA256SUMS.txt`: 配布一式のSHA-256
 
 GitHub Actionsの一時artifactではなくReleaseを共有してください。Release assetはGitHubへログインしていない相手にも共有でき、QA期間中に自動失効しません。
@@ -63,7 +63,7 @@ GitHub Actionsの一時artifactではなくReleaseを共有してください。
 
 [QAプレリリース報告フォーム](https://github.com/Fuzzy-app/fuzzy/issues/new?template=qa_report.md)を使用し、次を記載してください。
 
-- `v0.1.0-qa.3`を使用したこと
+- `v0.1.0-qa.4`を使用したこと
 - Windows 11のバージョン
 - Chrome／Edgeとそのバージョン
 - 再現手順
