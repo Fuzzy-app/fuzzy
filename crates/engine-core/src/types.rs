@@ -16,6 +16,15 @@ pub struct CourseContextRecord {
 	pub term: Option<String>,
 }
 
+/// Moodle文脈と既存コースの曖昧一致候補。
+///
+/// 不確実な候補はDBを統合せず、保存先の案として利用者へ提示する。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseContextCandidate {
+	pub course: CourseContextRecord,
+	pub confidence: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExcludedFolderRecord {
 	pub id: i64,

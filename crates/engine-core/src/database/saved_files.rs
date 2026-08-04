@@ -1,6 +1,6 @@
 //! Moodle資料の保存に伴うコース解決とファイルメタデータ永続化。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
@@ -11,9 +11,14 @@ use super::library::{
 };
 use super::rules::apply_rule_compliance;
 use super::{db_err, Database};
+use crate::folder_names::folder_segment;
 use crate::rule::DefaultRuleEngine;
-use crate::types::{CourseContextRecord, DuplicateMatch, SavedFileRegistration, SimilarFileRecord};
+use crate::types::{
+	CourseContextCandidate, CourseContextRecord, DuplicateMatch, SavedFileRegistration,
+	SimilarFileRecord,
+};
 use crate::{EngineError, EngineResult};
+use unicode_normalization::UnicodeNormalization;
 
 /// ZIP展開元として解決した保存済みファイル。
 ///
@@ -42,6 +47,76 @@ pub struct ExtractedFileRegistration {
 }
 
 impl Database {
+	/// Moodle文脈に近い既存コースを確からしさ順に返す。
+	///
+	/// 安定ID以外の一致は候補提示専用であり、この処理ではコース統合やDB更新を行わない。
+	pub fn suggest_course_contexts(
+		&self,
+		moodle_course_id: Option<&str>,
+		name: Option<&str>,
+		academic_year: Option<i64>,
+		term: Option<&str>,
+	) -> EngineResult<Vec<CourseContextCandidate>> {
+		let stable_id = moodle_course_id
+			.map(str::trim)
+			.filter(|value| !value.is_empty());
+		let name = name.map(str::trim).filter(|value| !value.is_empty());
+		let mut statement = self
+			.conn
+			.prepare(
+				"SELECT c.id, c.name, c.academic_year, c.term, c.moodle_course_id,
+					(SELECT count(*) FROM files f WHERE f.course_id = c.id)
+				 FROM courses c
+				 ORDER BY c.id",
+			)
+			.map_err(db_err)?;
+		let courses = statement
+			.query_map([], |row| {
+				Ok((
+					course_context_from_row(row)?,
+					row.get::<_, Option<String>>(4)?,
+					row.get::<_, i64>(5)?,
+				))
+			})
+			.map_err(db_err)?
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.map_err(db_err)?;
+		let requested_term = term.map(str::trim).filter(|value| !value.is_empty());
+		let mut candidates = courses
+			.into_iter()
+			.filter_map(|(course, candidate_stable_id, file_count)| {
+				let stable_match = stable_id
+					.is_some_and(|stable_id| candidate_stable_id.as_deref() == Some(stable_id));
+				if stable_match {
+					return Some(CourseContextCandidate {
+						course,
+						confidence: if file_count > 0 { 1.0 } else { 0.92 },
+					});
+				}
+				let name = name?;
+				let context_score = context_compatibility(
+					course.academic_year,
+					course.term.as_deref(),
+					academic_year,
+					requested_term,
+				)?;
+				let name_score = course_name_similarity(name, &course.name);
+				(name_score >= 0.42).then_some(CourseContextCandidate {
+					course,
+					confidence: candidate_confidence(name_score, context_score, file_count),
+				})
+			})
+			.collect::<Vec<_>>();
+		candidates.sort_by(|left, right| {
+			right
+				.confidence
+				.total_cmp(&left.confidence)
+				.then_with(|| left.course.course_id.cmp(&right.course.course_id))
+		});
+		candidates.truncate(5);
+		Ok(candidates)
+	}
+
 	/// Moodleの安定IDを優先し、ない場合は同名候補が一意な既存コースだけへ解決する。
 	pub fn resolve_course_context(
 		&mut self,
@@ -409,6 +484,151 @@ impl Database {
 	}
 }
 
+fn course_context_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CourseContextRecord> {
+	Ok(CourseContextRecord {
+		course_id: row.get(0)?,
+		name: row.get(1)?,
+		academic_year: row.get(2)?,
+		term: row.get(3)?,
+	})
+}
+
+fn course_name_similarity(left: &str, right: &str) -> f64 {
+	let raw_left = normalize_course_match_text(left);
+	let raw_right = normalize_course_match_text(right);
+	if raw_left.is_empty() || raw_right.is_empty() {
+		return 0.0;
+	}
+	if raw_left == raw_right {
+		return 0.97;
+	}
+
+	let folder_left = normalize_course_match_text(&folder_segment(left));
+	let folder_right = normalize_course_match_text(&folder_segment(right));
+	let base_left = if folder_left.is_empty() {
+		raw_left.clone()
+	} else {
+		folder_left
+	};
+	let base_right = if folder_right.is_empty() {
+		raw_right.clone()
+	} else {
+		folder_right
+	};
+	if base_left == base_right {
+		return 0.95;
+	}
+	let (shorter, longer) = if base_left.chars().count() <= base_right.chars().count() {
+		(&base_left, &base_right)
+	} else {
+		(&base_right, &base_left)
+	};
+	let length_ratio = shorter.chars().count() as f64 / longer.chars().count() as f64;
+	if shorter.chars().count() >= 2 && longer.contains(shorter) {
+		return 0.72 + 0.2 * length_ratio;
+	}
+
+	let dice = bigram_dice(&base_left, &base_right);
+	let prefix = common_prefix_ratio(&base_left, &base_right);
+	(0.7 * dice + 0.2 * prefix + 0.1 * length_ratio).clamp(0.0, 0.9)
+}
+
+fn normalize_course_match_text(value: &str) -> String {
+	value
+		.nfkc()
+		.flat_map(char::to_lowercase)
+		.filter(|character| character.is_alphanumeric())
+		.collect()
+}
+
+fn candidate_confidence(name_score: f64, context_score: f64, file_count: i64) -> f64 {
+	let existing_file_evidence = if file_count > 0 { 0.07 } else { 0.0 };
+	(name_score * context_score + existing_file_evidence).clamp(0.0, 0.99)
+}
+
+fn bigram_dice(left: &str, right: &str) -> f64 {
+	let left = character_bigrams(left);
+	let right = character_bigrams(right);
+	if left.is_empty() || right.is_empty() {
+		return 0.0;
+	}
+	let overlap = left
+		.iter()
+		.map(|(gram, count)| (*count).min(right.get(gram).copied().unwrap_or(0)))
+		.sum::<usize>();
+	2.0 * overlap as f64 / (left.values().sum::<usize>() + right.values().sum::<usize>()) as f64
+}
+
+fn character_bigrams(value: &str) -> BTreeMap<(char, char), usize> {
+	let characters = value.chars().collect::<Vec<_>>();
+	let mut grams = BTreeMap::new();
+	for pair in characters.windows(2) {
+		*grams.entry((pair[0], pair[1])).or_default() += 1;
+	}
+	grams
+}
+
+fn common_prefix_ratio(left: &str, right: &str) -> f64 {
+	let common = left
+		.chars()
+		.zip(right.chars())
+		.take_while(|(left, right)| left == right)
+		.count();
+	common as f64 / left.chars().count().max(right.chars().count()) as f64
+}
+
+fn context_compatibility(
+	stored_year: Option<i64>,
+	stored_term: Option<&str>,
+	requested_year: Option<i64>,
+	requested_term: Option<&str>,
+) -> Option<f64> {
+	if matches!((stored_year, requested_year), (Some(left), Some(right)) if left != right) {
+		return None;
+	}
+	let mut score: f64 = 1.0;
+	if stored_year.is_none() != requested_year.is_none() {
+		score *= 0.97;
+	}
+	match (stored_term, requested_term) {
+		(Some(left), Some(right))
+			if normalize_course_match_text(left) == normalize_course_match_text(right) => {}
+		(Some(left), Some(right))
+			if term_family(left).is_some() && term_family(left) == term_family(right) =>
+		{
+			score *= 0.97;
+		}
+		(Some(_), Some(_)) => return None,
+		(Some(_), None) | (None, Some(_)) => score *= 0.94,
+		(None, None) => {}
+	}
+	Some(score)
+}
+
+fn term_family(value: &str) -> Option<&'static str> {
+	let normalized = value.nfkc().collect::<String>().to_ascii_lowercase();
+	if normalized.contains("前期")
+		|| normalized.contains("春学期")
+		|| normalized.contains("spring")
+		|| normalized.ends_with("1q")
+		|| normalized.ends_with("2q")
+	{
+		Some("first")
+	} else if normalized.contains("後期")
+		|| normalized.contains("秋学期")
+		|| normalized.contains("fall")
+		|| normalized.contains("autumn")
+		|| normalized.ends_with("3q")
+		|| normalized.ends_with("4q")
+	{
+		Some("second")
+	} else if normalized.contains("通年") {
+		Some("full")
+	} else {
+		None
+	}
+}
+
 fn invalid(field: &str, reason: &str) -> EngineError {
 	EngineError::InvalidInput {
 		field: field.to_string(),
@@ -424,6 +644,29 @@ mod tests {
 	use super::*;
 	use crate::rule::DefaultRuleEngine;
 	use crate::types::SavedFileRegistration;
+
+	#[test]
+	fn ranks_supplemented_moodle_course_name_as_the_existing_short_course() {
+		assert!(
+			course_name_similarity("画像処理（火5コマ，2Q，A101，中村恭之）", "画像処理") >= 0.9
+		);
+		assert!(course_name_similarity("画像処理", "ソフトウェア工学") < 0.42);
+	}
+
+	#[test]
+	fn course_candidate_context_accepts_grade_term_but_rejects_another_year() {
+		assert!(context_compatibility(None, Some("3年前期"), Some(2026), Some("前期")).is_some());
+		assert!(
+			context_compatibility(Some(2025), Some("前期"), Some(2026), Some("前期")).is_none()
+		);
+	}
+
+	#[test]
+	fn existing_files_can_raise_a_fuzzy_candidate_above_an_empty_exact_context() {
+		let fuzzy_existing = candidate_confidence(0.95, 0.97, 14);
+		let empty_exact_context = 0.92;
+		assert!(fuzzy_existing > empty_exact_context);
+	}
 
 	struct TestDirectory {
 		path: PathBuf,

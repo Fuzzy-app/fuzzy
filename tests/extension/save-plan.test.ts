@@ -124,7 +124,8 @@ describe("資料別の保存計画", () => {
 			unavailableFileCount: 2,
 		});
 		expect(allFailed?.message).toContain("保存・整理設定");
-		expect(allFailed?.message).toContain("年度や学期");
+		expect(allFailed?.message).toContain("コース情報");
+		expect(allFailed?.message).not.toContain("年度や学期");
 
 		const oneSuggestion = new Map([
 			["file-1", [createSuggestion("データベース\\第1回")]],
@@ -266,6 +267,20 @@ describe("資料別の保存計画", () => {
 				]),
 			),
 		).toBeNull();
+	});
+
+	test("別候補を選択した場合はそのコースを編集対象にする", () => {
+		const primary = createSuggestion("3年前期\\画像処理");
+		const alternative = {
+			...createSuggestion("3年前期\\画像処理演習", 0.7),
+			courseFolder: { courseId: 9, folderName: "画像処理演習", warnings: [] },
+		};
+		const suggestions = new Map([["1", [primary, alternative]]]);
+		const selectedPaths = new Map([["1", alternative.path]]);
+
+		expect(courseFolderFromSuggestions(suggestions, selectedPaths)).toEqual(
+			alternative.courseFolder,
+		);
 	});
 });
 
