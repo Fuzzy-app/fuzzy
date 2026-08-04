@@ -5,6 +5,7 @@
 import {
 	type SaveFileFailure,
 	type SimilarFileMatch,
+	canonicalWindowsPath,
 	normalizeRelativeSavePath,
 	relativeSavePath,
 	resolveSavePathUnderRoot,
@@ -332,13 +333,13 @@ export async function mountSavePanel(): Promise<void> {
 	}
 
 	function resetCourseFolderEditor() {
-		const courseFolder = courseFolderFromSuggestions(suggestions);
+		const courseFolder = courseFolderFromSuggestions(suggestions, selectedPaths);
 		courseFolderDraft = courseFolder ? initialCourseFolderName(courseFolder) : "";
 		courseFolderError = null;
 	}
 
 	async function updateCourseFolderName(folderName: string | null) {
-		const courseFolder = courseFolderFromSuggestions(suggestions);
+		const courseFolder = courseFolderFromSuggestions(suggestions, selectedPaths);
 		if (courseFolderSaving || !courseFolder || courseFolder.courseId === null) return;
 
 		courseFolderSaving = true;
@@ -596,7 +597,7 @@ export async function mountSavePanel(): Promise<void> {
 	}
 
 	function renderCourseFolderEditor(): HTMLElement | null {
-		const courseFolder = courseFolderFromSuggestions(suggestions);
+		const courseFolder = courseFolderFromSuggestions(suggestions, selectedPaths);
 		if (!courseFolder) return null;
 
 		const section = document.createElement("section");
@@ -635,6 +636,12 @@ export async function mountSavePanel(): Promise<void> {
 		const groupCards = groups
 			.map((group, index) => {
 				const commonSuggestions = commonGroupSuggestions(group, suggestions);
+				const selectedSuggestion = commonSuggestions.find(
+					(candidate) => canonicalWindowsPath(candidate.path) === canonicalWindowsPath(group.path),
+				);
+				const confidence = selectedSuggestion
+					? `一致度 ${Math.round(selectedSuggestion.confidence * 100)}%`
+					: "手動指定";
 				const fileNames = group.files.map((file) => `<li>${escapeHtml(file.title)}</li>`).join("");
 				const candidateSelect =
 					manualRelativePath.trim() || commonSuggestions.length < 2
@@ -655,7 +662,7 @@ export async function mountSavePanel(): Promise<void> {
 				return `<article class="fuzzy-destination-group">
 					<div class="fuzzy-destination-heading">
 						<strong>保存先 ${index + 1}</strong>
-						<span>${group.files.length}件</span>
+						<span>${group.files.length}件・${confidence}</span>
 					</div>
 					${renderPathBreadcrumb(group.relativePath)}
 					<ul>${fileNames}</ul>
@@ -961,7 +968,7 @@ export async function mountSavePanel(): Promise<void> {
 		const relativePath = normalizeRelativeSavePath(manualRelativePath);
 		if (!root || relativePath === null || !relativePath) return null;
 		const path = resolveSavePathUnderRoot(root, relativePath);
-		const courseId = courseFolderFromSuggestions(suggestions)?.courseId ?? null;
+		const courseId = courseFolderFromSuggestions(suggestions, selectedPaths)?.courseId ?? null;
 		return path ? { path, relativePath, courseId } : null;
 	}
 

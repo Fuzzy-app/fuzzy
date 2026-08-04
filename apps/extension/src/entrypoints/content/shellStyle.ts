@@ -29,10 +29,14 @@ export function ensureShellStyle(): void {
 			filter: none !important;
 		}
 
-		/* ヘッダー側に作られる通知ポップオーバーは、親のstacking contextごと
-		   Fuzzyより前へ出す。ヘッダー自体は隠さず、Moodleの操作をそのまま使う。 */
+		/* Moodle本文側のページ見出しはFuzzyと重ねない。右上の通知・メッセージ・
+		   ユーザーメニューは下の.navbarに属するため、ここを隠しても操作できる。 */
 		body.fuzzy-shell-open #page-header,
-		body.fuzzy-shell-open #page-navbar,
+		body.fuzzy-shell-open #page-navbar {
+			display: none !important;
+		}
+
+		/* 通知ポップオーバーの親stacking contextだけをFuzzyより前へ出す。 */
 		body.fuzzy-shell-open .navbar {
 			position: relative;
 			z-index: 2147483002 !important;

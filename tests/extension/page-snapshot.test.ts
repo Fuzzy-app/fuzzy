@@ -58,6 +58,20 @@ describe("Moodle資料のDOM解析", () => {
 		expect(snapshot.academicYear).toBe(2026);
 	});
 
+	test("通常コース名に年度がなくてもMoodle URLから年度を抽出する", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="300">
+				<head><base href="https://moodle2026.wakayama-u.ac.jp/2026/course/view.php?id=300" /></head>
+				<body><main><h1>画像処理（火5コマ，2Q，A101，中村恭之）</h1></main></body>
+			</html>
+		`);
+
+		const snapshot = collectMoodlePageSnapshot(document);
+		expect(snapshot.academicYear).toBe(2026);
+		expect(snapshot.term).toBe("2Q");
+		expect(snapshot.courseName).toBe("画像処理（火5コマ，2Q，A101，中村恭之）");
+	});
+
 	test("未認識のバッジでもMP3・EXEアイコンから種別を推定する", () => {
 		expect(
 			resolveMoodleActivityMimeHint(
