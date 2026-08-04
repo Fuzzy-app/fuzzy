@@ -1,15 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
-import wxtConfig, {
+import { MOODLE_HTTPS_MATCH_PATTERNS } from "../../apps/extension/moodleSite";
+
+// Manifest設定の単体テストではWXT本体を起動せず、設定オブジェクトだけを検証する。
+mock.module("wxt", () => ({ defineConfig: <T>(config: T): T => config }));
+
+const {
+	default: wxtConfig,
 	FUZZY_EXTENSION_ID,
 	FUZZY_EXTENSION_PUBLIC_KEY,
-} from "../../apps/extension/wxt.config";
+} = await import("../../apps/extension/wxt.config");
 
 const ICON_SIZES = [16, 32, 48, 96, 128] as const;
-const MOODLE_HTTPS_MATCH_PATTERN = "https://*.wakayama-u.ac.jp/*";
 
 type ManifestConfig = {
 	key?: string;
+	host_permissions?: string[];
 	web_accessible_resources?: Array<{
 		resources?: string[];
 		matches?: string[];
@@ -47,17 +53,19 @@ describe("Moodle向け公開範囲", () => {
 	test("Manifest V3でSVGとContent Scriptを同じHTTPS originだけに公開する", async () => {
 		expect(wxtConfig.manifestVersion).toBe(3);
 		const manifest = (wxtConfig as { manifest?: ManifestConfig }).manifest;
+		expect(manifest?.host_permissions).toEqual(MOODLE_HTTPS_MATCH_PATTERNS);
 		expect(manifest?.web_accessible_resources).toEqual([
 			{
 				resources: ["icon/fuzzy.svg"],
-				matches: [MOODLE_HTTPS_MATCH_PATTERN],
+				matches: MOODLE_HTTPS_MATCH_PATTERNS,
 			},
 		]);
 
 		const contentScriptSource = await Bun.file(
 			new URL("../../apps/extension/src/entrypoints/content/index.ts", import.meta.url),
 		).text();
-		expect(contentScriptSource).toContain(`matches: ["${MOODLE_HTTPS_MATCH_PATTERN}"]`);
+		expect(contentScriptSource).toContain("matches: [...MOODLE_HTTPS_MATCH_PATTERNS]");
+		expect(contentScriptSource).toContain("isSupportedMoodleHostname(location.hostname)");
 		expect(contentScriptSource).not.toContain("*://*.wakayama-u.ac.jp/*");
 
 		const shellElementsSource = await Bun.file(

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MOODLE_HTTPS_MATCH_PATTERNS } from "../../apps/extension/moodleSite";
 import {
 	type SyncNavigationBrowser,
 	createDeadlineScreenNavigation,
@@ -86,7 +87,10 @@ describe("同期通知から課題・締切への遷移", () => {
 				},
 			},
 			tabs: {
-				query: async () => [{ id: 7, active: true }],
+				query: async (query) => {
+					operations.push(["query", query]);
+					return [{ id: 7, active: true }];
+				},
 				create: async () => undefined,
 				update: async (tabId, properties) => {
 					operations.push(["update", tabId, properties]);
@@ -100,6 +104,7 @@ describe("同期通知から課題・締切への遷移", () => {
 
 		await navigateFromSyncNotification(browserApi, "fuzzy-sync-native-9");
 		expect(operations).toEqual([
+			["query", { url: MOODLE_HTTPS_MATCH_PATTERNS }],
 			["update", 7, { active: true }],
 			["message", 7, { type: "fuzzy:open-screen", screen: "deadlines", syncEventId: 9 }],
 			["remove", "fuzzy-pending-sync-screen-navigation"],

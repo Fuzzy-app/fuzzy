@@ -1,4 +1,5 @@
 import { defineConfig } from "wxt";
+import { MOODLE_HTTPS_MATCH_PATTERNS } from "./moodleSite";
 
 /**
  * 同梱するunpacked拡張のIDをインストール先パスに依存させない公開鍵。
@@ -17,13 +18,13 @@ export default defineConfig({
 		name: "Fuzzy",
 		short_name: "Fuzzy",
 		key: FUZZY_EXTENSION_PUBLIC_KEY,
-		host_permissions: ["https://*.wakayama-u.ac.jp/*"],
+		host_permissions: [...MOODLE_HTTPS_MATCH_PATTERNS],
 		web_accessible_resources: [
 			{
 				// Moodle DOMへ挿入する画面用SVGだけを公開する。
 				// 通知・拡張機能メニュー用PNGはextension内部から参照するため公開不要。
 				resources: ["icon/fuzzy.svg"],
-				matches: ["https://*.wakayama-u.ac.jp/*"],
+				matches: [...MOODLE_HTTPS_MATCH_PATTERNS],
 			},
 		],
 		permissions: [

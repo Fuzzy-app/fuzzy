@@ -1,5 +1,5 @@
 import type { FuzzyApiClient } from "@fuzzy/shared";
-import { MOODLE_HOME_URL, MOODLE_HTTPS_MATCH_PATTERN } from "../../../moodleSite";
+import { MOODLE_HOME_URL, MOODLE_HTTPS_MATCH_PATTERNS } from "../../../moodleSite";
 
 export const SYNC_NOTIFICATION_ID_PREFIX = "fuzzy-sync-";
 export const SYNC_SCREEN_NAVIGATION_MESSAGE = "fuzzy:open-screen";
@@ -33,7 +33,7 @@ export interface SyncNavigationBrowser {
 		};
 	};
 	tabs: {
-		query(query: { url: string }): Promise<MoodleTab[]>;
+		query(query: { url: string | string[] }): Promise<MoodleTab[]>;
 		create(properties: { url: string; active: boolean }): Promise<unknown>;
 		update(tabId: number, properties: { active: boolean }): Promise<unknown>;
 		sendMessage(tabId: number, message: unknown): Promise<unknown>;
@@ -103,7 +103,7 @@ export async function navigateFromSyncNotification(
 		[PENDING_SYNC_SCREEN_NAVIGATION_KEY]: navigation,
 	});
 
-	const tabs = await browserApi.tabs.query({ url: MOODLE_HTTPS_MATCH_PATTERN });
+	const tabs = await browserApi.tabs.query({ url: MOODLE_HTTPS_MATCH_PATTERNS });
 	const target = tabs.find((tab) => tab.active) ?? tabs[0];
 	if (target?.id === undefined) {
 		await browserApi.tabs.create({ url: MOODLE_HOME_URL, active: true });

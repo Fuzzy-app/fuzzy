@@ -3,6 +3,7 @@
 // 資料保存パネル（issue48〜51）は ./savePanel.ts に分離している。
 // DOM操作は issue48 のダッシュボード注入と同様に、このディレクトリ内で完結させる。
 import "@fuzzy/shared/theme.css";
+import { MOODLE_HTTPS_MATCH_PATTERNS, isSupportedMoodleHostname } from "../../../moodleSite";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
 import {
 	type AssignmentDetailProgress,
@@ -42,13 +43,11 @@ let disposeMoodleNativeSession: (() => void) | null = null;
 let moodlePageActive = true;
 
 export default defineContentScript({
-	// 年度で変わるホスト名（moodle2026.wakayama-u.ac.jp 等）を
-	// matches だけでは細かく絞り込めないため、
-	// main() 内部の正規表現で moodle[数字].wakayama-u.ac.jp の形式だけに限定する。
-	// 数字部分は任意（\d*）なので、年度なしの moodle.wakayama-u.ac.jp も許可する。
-	matches: ["https://*.wakayama-u.ac.jp/*"],
+	// 和歌山大学側は年度でホスト名が変わるため、matchesのワイルドカードに加えて
+	// main()でも対応ホストを限定する。審査用MoodleCloudは完全一致でだけ許可する。
+	matches: [...MOODLE_HTTPS_MATCH_PATTERNS],
 	main() {
-		if (!/^moodle\d*\.wakayama-u\.ac\.jp$/.test(location.hostname)) return;
+		if (!isSupportedMoodleHostname(location.hostname)) return;
 		initializeMoodleContent();
 	},
 });
