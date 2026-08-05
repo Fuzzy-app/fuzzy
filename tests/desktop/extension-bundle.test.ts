@@ -152,7 +152,7 @@ describe("Tauri extension bundle", () => {
 	});
 
 	test("配布対象すべてのバージョンが一致する", async () => {
-		await expect(validateDistributionVersions()).resolves.toBe("0.1.0");
+		await expect(validateDistributionVersions()).resolves.toBe("0.1.1");
 	});
 
 	test("インストールと削除はホスト登録を自動化し、保存処理を強制終了しない", async () => {

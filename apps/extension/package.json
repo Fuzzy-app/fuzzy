@@ -2,7 +2,7 @@
 	"name": "@fuzzy/extension",
 	"description": "Moodleの授業資料整理・課題締切一元化を行うFuzzyのブラウザ拡張機能",
 	"private": true,
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"type": "module",
 	"scripts": {
 		"dev": "wxt",

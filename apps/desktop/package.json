@@ -1,6 +1,6 @@
 {
 	"name": "desktop",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Fuzzy の初期セットアップ専用 Tauri アプリ",
 	"private": true,
 	"type": "module",
