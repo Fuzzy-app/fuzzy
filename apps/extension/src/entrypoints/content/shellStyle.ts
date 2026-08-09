@@ -355,6 +355,18 @@ export function ensureShellStyle(): void {
 			line-height: 1.5;
 		}
 
+		.fuzzy-course-tree-actions {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 5px;
+		}
+
+		.fuzzy-course-tree-actions button {
+			justify-content: center;
+			border: 1px solid var(--fuzzy-color-border);
+			background: var(--fuzzy-color-page);
+		}
+
 		.fuzzy-course-tree-group {
 			border-radius: 6px;
 			background: var(--fuzzy-color-surface-muted);
@@ -390,6 +402,11 @@ export function ensureShellStyle(): void {
 		.fuzzy-course-tree-group summary small {
 			color: var(--fuzzy-color-text-muted);
 			font-size: 0.66rem;
+		}
+
+		.fuzzy-course-tree-group summary input {
+			margin: 0;
+			accent-color: var(--fuzzy-color-primary);
 		}
 
 		.fuzzy-course-tree-items {
@@ -1069,6 +1086,17 @@ export function ensureShellStyle(): void {
 			flex-wrap: wrap;
 			gap: 10px;
 			margin-bottom: 10px;
+		}
+
+		.fuzzy-deadline-range-options {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px 18px;
+			margin-bottom: 8px;
+		}
+
+		.fuzzy-deadline-range-options .fuzzy-checkline {
+			margin-top: 0;
 		}
 
 		.fuzzy-filter-chip {

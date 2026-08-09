@@ -12,6 +12,7 @@ import type {
 	SearchScope,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
+	SyncMoodleTextBlocksRequest,
 	UpdateCourseFolderNameRequest,
 } from "@fuzzy/shared";
 import type { FuzzyApiRequestMessage } from "./backgroundApi";
@@ -79,6 +80,8 @@ export async function callBackgroundApi(
 			}
 			return event;
 		}
+		case "syncMoodleTextBlocks":
+			return client.syncMoodleTextBlocks(message.request as SyncMoodleTextBlocksRequest);
 		case "getLatestSyncEvent":
 			return client.getLatestSyncEvent();
 		case "getAssignmentChanges":

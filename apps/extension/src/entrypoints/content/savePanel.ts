@@ -194,12 +194,34 @@ export async function mountSavePanel(): Promise<void> {
 	 * 保存を実行する。issue51の完了条件に従い、保存前に必ず類似ファイルを照合し、
 	 * 該当があれば続行/キャンセルの確認を挟む。confirmed=true は「このまま保存」押下後の再入。
 	 */
-	async function saveSelectedFiles(confirmed = false) {
+	async function saveSelectedFiles(
+		confirmed = false,
+		skipExactMatches = false,
+		conflictPolicy: "skip" | "rename" = "skip",
+	) {
 		if (saving) return;
 
-		const groups = currentSaveGroups();
+		const exactFileIds = new Set(
+			similarWarnings
+				.filter((warning) => warning.match.exact)
+				.map((warning) => fileId(warning.file)),
+		);
+		const groups = currentSaveGroups()
+			.map((group) => ({
+				...group,
+				files: skipExactMatches
+					? group.files.filter((file) => !exactFileIds.has(fileId(file)))
+					: group.files,
+			}))
+			.filter((group) => group.files.length > 0);
 		const selectedFiles = groups.flatMap((group) => group.files);
-		if (selectedFiles.length === 0 || groups.length === 0) return;
+		if (selectedFiles.length === 0 || groups.length === 0) {
+			resetConfirmState();
+			message = "完全一致していた資料は保存しませんでした。";
+			messageTone = "info";
+			render();
+			return;
+		}
 
 		if (!confirmed && !(await ensureSimilarChecked(selectedFiles))) {
 			return; // 類似あり→確認待ちで一旦中断
@@ -221,6 +243,7 @@ export async function mountSavePanel(): Promise<void> {
 					files: group.files,
 					targetPath: group.path,
 					courseId: group.courseId,
+					conflictPolicy,
 				});
 				savedCount += result.savedFileIds.length;
 				failedFiles.push(...result.failedFiles);
@@ -294,8 +317,12 @@ export async function mountSavePanel(): Promise<void> {
 	}
 
 	async function collectSimilarWarnings(files: MoodleFileLink[]): Promise<SimilarWarning[]> {
+		const groups = currentSaveGroups();
 		const byFile = await boundedParallelMap(files, SIMILARITY_CHECK_CONCURRENCY, async (file) => {
-			const matches = await api.checkSimilarFiles({ fileMeta: file });
+			const courseId =
+				groups.find((group) => group.files.some((candidate) => fileId(candidate) === fileId(file)))
+					?.courseId ?? null;
+			const matches = await api.checkSimilarFiles({ fileMeta: file, courseId });
 			return matches.map((match) => ({ file, match }));
 		});
 		return byFile.flat();
@@ -633,6 +660,33 @@ export async function mountSavePanel(): Promise<void> {
 		const lastRelativePath = root && lastSavePath ? relativeSavePath(root, lastSavePath) : null;
 		const invalidManualPath =
 			manualRelativePath.trim().length > 0 && currentManualDestination() === null;
+		const explorerPath = currentExplorerRelativePath(groups);
+		const explorerSegments = splitWindowsPath(explorerPath);
+		const explorerBreadcrumb = [
+			"",
+			...explorerSegments.map((_, index) => explorerSegments.slice(0, index + 1).join("\\")),
+		]
+			.map((path, index) => {
+				const label = index === 0 ? "保存ルート" : (explorerSegments[index - 1] ?? "");
+				return `${index > 0 ? '<span class="fuzzy-path-separator" aria-hidden="true">›</span>' : ""}<button type="button" data-explorer-path="${escapeHtml(path)}">${escapeHtml(label)}</button>`;
+			})
+			.join("");
+		const explorerChildren = explorerChildPaths(explorerPath)
+			.map(
+				(child) =>
+					`<button type="button" data-explorer-path="${escapeHtml(child.path)}"><span aria-hidden="true">📁</span><span>${escapeHtml(child.label)}</span></button>`,
+			)
+			.join("");
+		const manualDestination = currentManualDestination();
+		const finalDestinations = manualDestination
+			? [manualDestination]
+			: groups.map(({ path, relativePath, courseId }) => ({ path, relativePath, courseId }));
+		const finalDestinationList = finalDestinations
+			.map(
+				(destination, index) =>
+					`<li><span>${finalDestinations.length > 1 ? `保存先 ${index + 1}` : "保存先"}</span><code>${escapeHtml(destination.path)}</code></li>`,
+			)
+			.join("");
 		const groupCards = groups
 			.map((group, index) => {
 				const commonSuggestions = commonGroupSuggestions(group, suggestions);
@@ -680,11 +734,20 @@ export async function mountSavePanel(): Promise<void> {
 				<button type="button" data-action="use-suggested" ${suggestions.size ? "" : "disabled"}>提案に戻す</button>
 				<button type="button" data-action="use-last-path" ${lastRelativePath === null ? "disabled" : ""}>前回と同じ場所</button>
 			</div>
+			<div class="fuzzy-folder-explorer">
+				<span class="fuzzy-folder-explorer-label">フォルダーをたどる</span>
+				<div class="fuzzy-path-breadcrumb is-interactive" role="navigation" aria-label="保存フォルダーの階層">${explorerBreadcrumb}</div>
+				<div class="fuzzy-folder-explorer-children">${explorerChildren || "<small>提案済みの下位フォルダーはありません。下の欄で新しいフォルダー名を追加できます。</small>"}</div>
+			</div>
 			<label class="fuzzy-input">
-				<span>手動でまとめる（保存ルート以下、区切りは / ）</span>
-				<input type="text" data-input="manual-path" value="${escapeHtml(manualRelativePath)}" placeholder="2026前期/データベース/第4回" aria-invalid="${invalidManualPath}" />
-				${invalidManualPath ? '<small class="fuzzy-input-error">保存ルート以下の有効なフォルダを指定してください。</small>' : ""}
+				<span>保存先を直接入力（相対パス または 保存ルート以下の絶対パス）</span>
+				<input type="text" data-input="manual-path" value="${escapeHtml(manualRelativePath)}" placeholder="3年前期/データベース または C:\\…\\データベース" aria-invalid="${invalidManualPath}" />
+				${invalidManualPath ? '<small class="fuzzy-input-error">保存ルート以下の有効な相対パスまたは絶対パスを指定してください。</small>' : ""}
 			</label>
+			<div class="fuzzy-final-destination" aria-live="polite">
+				<strong>最終的な保存先</strong>
+				<ul>${finalDestinationList || "<li>保存先を選択してください。</li>"}</ul>
+			</div>
 		`;
 		for (const select of section.querySelectorAll<HTMLSelectElement>("select[data-group-key]")) {
 			select.addEventListener("change", () => {
@@ -702,6 +765,12 @@ export async function mountSavePanel(): Promise<void> {
 				manualRelativePath = "";
 				render();
 			});
+		for (const button of section.querySelectorAll<HTMLButtonElement>("[data-explorer-path]")) {
+			button.addEventListener("click", () => {
+				manualRelativePath = displayEditablePath(button.dataset.explorerPath ?? "");
+				render();
+			});
+		}
 		section
 			.querySelector<HTMLButtonElement>("[data-action='use-last-path']")
 			?.addEventListener("click", () => {
@@ -775,23 +844,25 @@ export async function mountSavePanel(): Promise<void> {
 	function renderSimilarConfirm() {
 		const section = document.createElement("section");
 		section.className = "fuzzy-section";
+		const hasExactMatches = similarWarnings.some((warning) => warning.match.exact);
 		const rows = similarWarnings
 			.map(
 				(warning) => `
 					<div class="fuzzy-similar-row">
 						<strong>${escapeHtml(warning.file.title)}</strong>
-						<small>類似: ${escapeHtml(warning.match.originalName)}（${Math.round(warning.match.similarity * 100)}%）</small>
+						<small>${warning.match.exact ? "完全一致" : `類似 ${Math.round(warning.match.similarity * 100)}%`}: ${escapeHtml(warning.match.originalName)}</small>
 					</div>
 				`,
 			)
 			.join("");
 		section.innerHTML = `
 			<div class="fuzzy-section-heading"><h3>似た資料が見つかりました</h3><span>${similarWarnings.length}件</span></div>
-			<p class="fuzzy-note fuzzy-note-warning">すでに保存済みの可能性があります。続行すると重複して保存されます。</p>
+			<p class="fuzzy-note fuzzy-note-warning">${hasExactMatches ? "内容が完全に一致する保存済み資料があります。一致分を保存しない操作を推奨します。" : "同じ授業内に内容が近い資料があります。内容を確認して保存方法を選んでください。"}</p>
 			<div class="fuzzy-similar-list">${rows}</div>
 			<div class="fuzzy-confirm-buttons">
-				<button type="button" data-action="cancel-save">キャンセル</button>
-				<button type="button" data-action="confirm-save">このまま保存</button>
+				<button type="button" data-action="cancel-save">すべて中止</button>
+				${hasExactMatches ? '<button type="button" data-action="skip-exact">完全一致を除いて保存</button>' : '<button type="button" data-action="confirm-save">この名前で保存</button>'}
+				<button type="button" data-action="rename-save">同名なら別名で保存</button>
 			</div>
 		`;
 		section
@@ -803,8 +874,14 @@ export async function mountSavePanel(): Promise<void> {
 				render();
 			});
 		section
+			.querySelector<HTMLButtonElement>("[data-action='skip-exact']")
+			?.addEventListener("click", () => void saveSelectedFiles(true, true, "skip"));
+		section
 			.querySelector<HTMLButtonElement>("[data-action='confirm-save']")
 			?.addEventListener("click", () => void saveSelectedFiles(true));
+		section
+			.querySelector<HTMLButtonElement>("[data-action='rename-save']")
+			?.addEventListener("click", () => void saveSelectedFiles(true, false, "rename"));
 		return section;
 	}
 
@@ -965,11 +1042,47 @@ export async function mountSavePanel(): Promise<void> {
 		courseId: number | null;
 	} | null {
 		const root = saveRootFromSuggestions(suggestions);
-		const relativePath = normalizeRelativeSavePath(manualRelativePath);
+		const absoluteRelativePath = root ? relativeSavePath(root, manualRelativePath) : null;
+		const relativePath =
+			absoluteRelativePath !== null
+				? normalizeRelativeSavePath(absoluteRelativePath)
+				: normalizeRelativeSavePath(manualRelativePath);
 		if (!root || relativePath === null || !relativePath) return null;
 		const path = resolveSavePathUnderRoot(root, relativePath);
 		const courseId = courseFolderFromSuggestions(suggestions, selectedPaths)?.courseId ?? null;
 		return path ? { path, relativePath, courseId } : null;
+	}
+
+	function currentExplorerRelativePath(groups: SaveDestinationGroup[]): string {
+		const manual = currentManualDestination();
+		if (manual) return manual.relativePath;
+		return groups[0]?.relativePath ?? "";
+	}
+
+	function explorerChildPaths(parentPath: string): Array<{ label: string; path: string }> {
+		const parentSegments = splitWindowsPath(parentPath);
+		const children = new Map<string, { label: string; path: string }>();
+		for (const items of suggestions.values()) {
+			for (const suggestion of items) {
+				const segments = splitWindowsPath(suggestion.relativePath);
+				if (
+					segments.length <= parentSegments.length ||
+					parentSegments.some(
+						(segment, index) =>
+							segment.toLocaleLowerCase("ja-JP") !== segments[index]?.toLocaleLowerCase("ja-JP"),
+					)
+				) {
+					continue;
+				}
+				const label = segments[parentSegments.length];
+				if (!label) continue;
+				const path = segments.slice(0, parentSegments.length + 1).join("\\");
+				children.set(canonicalWindowsPath(path), { label, path });
+			}
+		}
+		return [...children.values()].sort((left, right) =>
+			left.label.localeCompare(right.label, "ja"),
+		);
 	}
 
 	function currentExtractDestinationPath(): string | null {

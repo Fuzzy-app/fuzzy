@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EXTENSION_RUNTIME_PROTOCOL_VERSION } from "@fuzzy/shared";
 import {
 	EXTENSION_RUNTIME_REPORT_REQUEST,
 	createExtensionRuntimeReport,
@@ -45,7 +46,7 @@ describe("extension runtime report", () => {
 		expect(createExtensionRuntimeReport("installation-1", "0.1.0")).toEqual({
 			installationId: "installation-1",
 			extensionVersion: "0.1.0",
-			protocolVersion: 0,
+			protocolVersion: EXTENSION_RUNTIME_PROTOCOL_VERSION,
 		});
 	});
 
@@ -93,7 +94,7 @@ describe("extension runtime report", () => {
 		const observation = {
 			installationId: "550e8400-e29b-41d4-a716-446655440000",
 			extensionVersion: "0.1.0",
-			protocolVersion: 0,
+			protocolVersion: EXTENSION_RUNTIME_PROTOCOL_VERSION,
 			firstSeenAt: "2026-07-20T12:00:00.000Z",
 			lastSeenAt: "2026-07-20T12:00:00.000Z",
 		};
@@ -115,7 +116,7 @@ describe("extension runtime report", () => {
 			{
 				installationId: "550e8400-e29b-41d4-a716-446655440000",
 				extensionVersion: "0.1.0",
-				protocolVersion: 0,
+				protocolVersion: EXTENSION_RUNTIME_PROTOCOL_VERSION,
 			},
 		]);
 	});

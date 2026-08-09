@@ -34,6 +34,7 @@ import type {
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
+	SyncMoodleTextBlocksRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateExcludedFoldersRequest,
@@ -58,6 +59,7 @@ const BACKGROUND_API_METHODS = [
 	"getNotificationRules",
 	"updateNotificationRules",
 	"syncMoodleAssignments",
+	"syncMoodleTextBlocks",
 	"getLatestSyncEvent",
 	"getAssignmentChanges",
 	"rebuildLibrary",
@@ -141,12 +143,21 @@ function isRequestForMethod(method: BackgroundApiMethod, request: unknown): bool
 				(request.folderName === null || typeof request.folderName === "string")
 			);
 		case "checkSimilarFiles":
-			return isRecord(request) && isMoodleFileMeta(request.fileMeta);
+			return (
+				isRecord(request) &&
+				isMoodleFileMeta(request.fileMeta) &&
+				(request.courseId === undefined ||
+					request.courseId === null ||
+					isPositiveInteger(request.courseId))
+			);
 		case "saveFiles":
 			return (
 				isRecord(request) &&
 				typeof request.targetPath === "string" &&
 				(request.courseId === null || isPositiveInteger(request.courseId)) &&
+				(request.conflictPolicy === undefined ||
+					request.conflictPolicy === "skip" ||
+					request.conflictPolicy === "rename") &&
 				Array.isArray(request.files) &&
 				request.files.length > 0 &&
 				request.files.length <= FILE_TRANSFER_LIMITS.maxFiles &&
@@ -175,6 +186,8 @@ function isRequestForMethod(method: BackgroundApiMethod, request: unknown): bool
 			);
 		case "syncMoodleAssignments":
 			return isSyncMoodleAssignmentsRequest(request);
+		case "syncMoodleTextBlocks":
+			return isSyncMoodleTextBlocksRequest(request);
 		case "getAssignmentChanges":
 			return (
 				isRecord(request) &&
@@ -313,6 +326,54 @@ function isSyncMoodleAssignmentsRequest(value: unknown): boolean {
 	});
 }
 
+function isSyncMoodleTextBlocksRequest(value: unknown): boolean {
+	if (
+		!isRecord(value) ||
+		!isRecord(value.course) ||
+		typeof value.course.moodleCourseId !== "string" ||
+		!/^[A-Za-z0-9._:-]{1,128}$/.test(value.course.moodleCourseId) ||
+		typeof value.course.name !== "string" ||
+		value.course.name.trim().length === 0 ||
+		value.course.name.length > 1_000 ||
+		(value.course.academicYear !== null &&
+			(!Number.isSafeInteger(value.course.academicYear) ||
+				Number(value.course.academicYear) < 1900 ||
+				Number(value.course.academicYear) > 9999)) ||
+		!isNullableString(value.course.term) ||
+		!Array.isArray(value.blocks) ||
+		value.blocks.length > 500
+	) {
+		return false;
+	}
+	const keys = new Set<string>();
+	return value.blocks.every((block) => {
+		if (
+			!isRecord(block) ||
+			typeof block.blockKey !== "string" ||
+			block.blockKey.length === 0 ||
+			block.blockKey.length > 256 ||
+			keys.has(block.blockKey) ||
+			typeof block.title !== "string" ||
+			block.title.trim().length === 0 ||
+			block.title.length > 512 ||
+			typeof block.text !== "string" ||
+			block.text.trim().length === 0 ||
+			block.text.length > 12_000 ||
+			typeof block.moodleUrl !== "string"
+		) {
+			return false;
+		}
+		try {
+			const url = new URL(block.moodleUrl);
+			if (url.protocol !== "https:" || url.username || url.password) return false;
+		} catch {
+			return false;
+		}
+		keys.add(block.blockKey);
+		return true;
+	});
+}
+
 function isExplicitOffsetIsoOrNull(value: unknown): boolean {
 	return (
 		value === null ||
@@ -335,14 +396,34 @@ function isPositiveInteger(value: unknown): value is number {
 }
 
 function isSearchScope(value: unknown): boolean {
+	if (
+		!isRecord(value) ||
+		!Object.keys(value).every(
+			(key) => key === "courseId" || key === "courseIds" || key === "folder",
+		)
+	) {
+		return false;
+	}
+	const courseId = value.courseId;
+	const courseIds = value.courseIds;
+	if (courseId != null && courseIds != null) return false;
+	if (courseId != null && !isPositiveInteger(courseId)) return false;
+	if (courseIds != null) {
+		if (
+			!Array.isArray(courseIds) ||
+			courseIds.length < 1 ||
+			courseIds.length > 200 ||
+			!courseIds.every(isPositiveInteger) ||
+			new Set(courseIds).size !== courseIds.length
+		) {
+			return false;
+		}
+	}
 	return (
-		isRecord(value) &&
-		Object.keys(value).every((key) => key === "courseId" || key === "folder") &&
-		(value.courseId === undefined || isPositiveInteger(value.courseId)) &&
-		(value.folder === undefined ||
-			(typeof value.folder === "string" &&
-				value.folder.trim().length > 0 &&
-				value.folder.length <= 512))
+		value.folder == null ||
+		(typeof value.folder === "string" &&
+			value.folder.trim().length > 0 &&
+			value.folder.length <= 512)
 	);
 }
 
@@ -427,6 +508,10 @@ export class BackgroundApiClient implements BackgroundApi {
 
 	syncMoodleAssignments(request: SyncMoodleAssignmentsRequest): Promise<DataSyncEvent> {
 		return this.#call("syncMoodleAssignments", request);
+	}
+
+	syncMoodleTextBlocks(request: SyncMoodleTextBlocksRequest): Promise<{ ok: boolean }> {
+		return this.#call("syncMoodleTextBlocks", request);
 	}
 
 	getLatestSyncEvent(): Promise<DataSyncEvent | null> {

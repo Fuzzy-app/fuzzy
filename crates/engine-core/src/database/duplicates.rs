@@ -78,6 +78,37 @@ impl Database {
 		load_file_fingerprints(&self.conn)
 	}
 
+	/// 保存前照合では別授業の同名・類似資料を混ぜない。
+	pub fn load_course_file_fingerprints(
+		&self,
+		course_id: Option<i64>,
+	) -> EngineResult<Vec<StoredFileFingerprint>> {
+		let Some(course_id) = course_id else {
+			return Ok(Vec::new());
+		};
+		let mut statement = self
+			.conn
+			.prepare(
+				"SELECT id, hash_blake3, simhash
+				 FROM files
+				 WHERE course_id = ?1 AND missing_at IS NULL AND excluded_at IS NULL
+				 ORDER BY id",
+			)
+			.map_err(db_err)?;
+		let fingerprints = statement
+			.query_map([course_id], |row| {
+				Ok(StoredFileFingerprint {
+					file_id: row.get(0)?,
+					hash_blake3: row.get(1)?,
+					simhash: row.get::<_, Option<i64>>(2)?.map(|value| value as u64),
+				})
+			})
+			.map_err(db_err)?
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.map_err(db_err)?;
+		Ok(fingerprints)
+	}
+
 	/// SQLiteに登録済みのファイルを読み、BLAKE3とSimHashを更新する。
 	///
 	/// ファイル内容や保存場所は変更しない。グループ再計算は

@@ -32,25 +32,26 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 ### 1.2 コマンド一覧
 
-現在のNative Messaging契約バージョンは`6`とする。検索結果へ索引作成時の総ページ数と資料を開く明示操作を追加し、`ping`で契約バージョンを照合するため、契約バージョン`5`以前の拡張機能またはnative-hostは互換として扱わない。
+現在のNative Messaging契約バージョンは`8`とする。Moodle本文ブロック同期・検索結果の出典と遷移先・保存時の安全な衝突方針・コース内類似照合に加え、複数コースを1要求で絞り込む検索範囲を追加したため、契約バージョン`7`以前の拡張機能またはnative-hostは互換として扱わない。
 
 | command                    | 用途                      | payload → data（概要）                                  |
 |----------------------------|-------------------------|-----------------------------------------------------|
 | `ping`                     | native-hostの実接続判定             | `{}` → `{ version, protocolVersion }`               |
 | `reportExtensionRuntime`   | 拡張機能の実応答・バージョンをSQLiteへ記録 | `{ installationId, extensionVersion, protocolVersion }` → `ExtensionRuntimeObservation` |
 | `suggestSavePath`          | 保存先候補の提案                | `{ course, fileMeta }` → `SaveSuggestion[]`         |
-| `beginSaveFiles`           | 取得済み資料の分割転送開始           | `{ transferId, targetPath, files: [{ fileId, fileName, mimeType, byteLength }] }` → `{ ok: true }` |
+| `beginSaveFiles`           | 取得済み資料の分割転送開始           | `{ transferId, targetPath, courseId, conflictPolicy: 'skip' \| 'rename', files: [{ fileId, fileName, mimeType, byteLength }] }` → `{ ok: true }` |
 | `appendSaveFileChunk`      | 取得済み資料のBase64チャンク追加      | `{ transferId, fileId, chunkIndex, dataBase64 }` → `{ ok: true }` |
 | `saveFiles`                | 転送完了済み資料の一括保存実行         | `{ transferId }` → `SaveFilesResult`                |
 | `beginCheckSimilarFile`    | 類似照合用資料の分割転送開始          | `{ transferId, byteLength }` → `{ ok: true }`       |
 | `appendCheckSimilarFileChunk` | 類似照合用資料のBase64チャンク追加 | `{ transferId, chunkIndex, dataBase64 }` → `{ ok: true }` |
 | `extractZip`               | ZIP展開要否の提案・実行           | `{ fileMeta, targetPath, destinationPath, flatten }` → `{ extractedPaths }` |
-| `checkSimilarFiles`        | 転送済み内容による保存前の類似ファイル検知 | `{ transferId, fileMeta }` → `SimilarFileMatch[]` |
+| `checkSimilarFiles`        | 転送済み内容による同一コース内の保存前類似検知 | `{ transferId, fileMeta, courseId }` → `SimilarFileMatch[]` |
 | `search`                   | 全文検索（表記ゆれ・授業／フォルダー範囲・該当ページと総ページ数に対応） | `{ query, scope? }` → `SearchResult[]`             |
 | `openFile`                 | 選択した検索結果をOSの既定アプリで開く明示操作 | `{ fileId, page }` → `{ opened, page }`            |
 | `getDashboard`             | コース別ダッシュボード集計           | `{}` → `DashboardSummary`                           |
 | `getDeadlines`             | 締切一覧取得（フィルタ可）           | `{ filter? }` → `Assignment[]`                      |
 | `syncMoodleAssignments`    | Moodleコースの課題完全スナップショット同期 | `{ trigger, course, assignments }` → `DataSyncEvent` |
+| `syncMoodleTextBlocks`     | Moodleコース本文ブロックの完全スナップショット同期 | `{ course, blocks: [{ blockKey, title, text, moodleUrl }] }` → `{ ok }` |
 | `updateSubmissionStatus`   | 提出状況の手動更新               | `{ assignmentId, submitted }` → `{ ok }`            |
 | `getRules`                 | グローバル／コース別ルール取得         | `{}` → `RuleSet`                                    |
 | `updateGlobalRule`         | グローバルルール更新              | `{ patternTemplate }` → `{ ok }`                    |
@@ -72,9 +73,9 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 `getDashboard`の`courses`要素には、保存資料から確定できた`academicYear`（年度）と`term`（学期）を含める。旧キャッシュとの互換性のため、クライアントはこれらが省略された場合を「学期未設定」として扱う。`fileCount`や`violationCount`など既存の集計値の意味は変更しない。
 
-`ping.protocolVersion`は初期値`0`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。初回リリース前のため、過去世代との互換処理やマイグレーションは持たない。
+`ping.protocolVersion`は現在の契約値`8`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。初回リリース前のため、過去世代との互換処理やマイグレーションは持たない。
 
-`search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルだけを返す。
+`search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルと、SQLiteの`moodle_text_blocks`にあるMoodle本文を返す。結果の`source`は`file`または`moodle_text`、Moodle本文では`moodleUrl`と`blockKey`を返す。`scope.folder`指定時はローカルファイルだけを対象にする。
 
 `rebuildLibrary`は次の形式を使用する。
 
@@ -104,11 +105,13 @@ interface LibraryMaintenanceSummary {
 
 `reconcileCourseFiles`は、認証済みの完全な`course/view.php`を表示したときに拡張機能から非同期で呼ぶ。Edge Add-ons審査用の`fuzzy-qa-2026.moodlecloud.com`だけは、完全なコースURL・コースDOM・ゲスト表示を全て確認できたゲストコースも対象にする。この例外を他ホストの未ログインページへ広げない。現在の保存ルールとコースフォルダー名から探索起点を決め、新規ファイルの再帰探索、登録済みファイルのサイズ・ナノ秒更新日時の比較、変更時だけの再ハッシュ・再索引、指定コースに属する欠損確認を行う。ルール変更前の場所に残る登録済みファイルも個別に確認し、対象外コースのフォルダーは探索しない。同一コースの同時要求は共有し、成功後5分間の再要求はbackgroundで抑制する。常時監視は行わず、利用者ファイルの移動・削除もしない。
 
+ダッシュボードから補助的にコースページを取得する場合は最大12コース、同時3要求までとし、要求元と応答先のオリジン・`course/view.php`・コースIDが一致するHTMLだけを扱う。コースページと追加取得するフォルダーページはいずれも1応答2MiBまでとし、`Content-Length`がない場合もストリーム実測値で中断する。入れ子フォルダーは深さ2、全階層合計50ページ、同時4要求までに制限し、同一オリジン外へのリダイレクト結果を解析しない。
+
 コースページから送る`moodleCourseId`は、年度をまたいだMoodle IDの衝突を防ぐため、取得できる場合は`moodle:<hostname>:<academicYear>:<rawCourseId>`形式のコンテキスト付き安定キーにする。ホストまたは年度を確定できない場合は同期を保留し、raw IDへ自動的に戻さない。native-hostは移行期間に限り、年度が一致する旧raw IDの行をこの形式へ引き継ぐ。`moodleAssignmentId`はcourse-module由来の安定IDとし、SQLite内部IDをクライアントから受け取らない。
 
 `updateExcludedFolders`は指定scopeの設定を受信したパス一覧へ置き換える。保存済みファイルの`excluded_at`を更新した後、除外中に変更された実ファイルを差分走査・再ハッシュ・再索引し、ルール適合注釈と重複候補を再計算してから応答する。除外設定の変更や通常の資料保存は、いずれも利用者の実ファイルを移動・削除しない。除外中の資料はダッシュボード、ルール違反、重複候補、全文検索から除外し、設定解除後は最新内容で再び表示対象になる。
 
-`search`はSQLiteの有効な索引メタデータと本文索引を照合し、NFKC・大小文字・空白・句読点を吸収した検索語で検索する。ファイル名が検索語と一致・包含する場合は本文だけの一致より関連度を高くする。`scope.courseId`はコースID、`scope.folder`は保存ルートからの相対フォルダー（`/`区切り）であり、絶対パス・`..`・空要素は拒否する。結果は`relativePath`を含めるが、絶対パスは返さない。
+`search`はSQLiteの有効な索引メタデータ・本文索引・`moodle_text_blocks.normalized_body`を照合し、NFKC・大小文字・空白・句読点を吸収した検索語で検索する。ファイル名が検索語と一致・包含する場合は本文だけの一致より関連度を高くする。クライアントは原文クエリを先に実行し、英数字語直後の日本語助詞を外した補助クエリを併用して重複結果を統合する。`scope.courseId`は単一コースID、`scope.courseIds`は1〜200件の複数コースIDであり、同時には指定しない。複数授業の選択はコースごとの要求へ分割せず、`courseIds`を使って1つの検索要求へまとめる。`scope.folder`は保存ルートからの相対フォルダー（`/`区切り）であり、絶対パス・`..`・空要素は拒否する。ファイル結果は`relativePath`を含めるが、絶対パスは返さない。Moodle本文結果の抜粋は正規化前の原文表記を保持し、`moodleUrl`は同期元と同一オリジンのHTTPS URLだけとして、ユーザー操作で開く。
 
 課題一覧の`sourceModifiedAtNs`は本文から要確認と判定された資料に紐付くローカル更新日時であり、端末外へ送信しない。旧キャッシュにない場合は`null`として扱う。
 
@@ -117,6 +120,7 @@ interface LibraryMaintenanceSummary {
 ```ts
 interface SearchScope {
 	courseId: number | null;
+	courseIds: number[] | null;
 	folder: string | null;
 }
 
@@ -216,7 +220,7 @@ interface SaveSuggestion {
 
 Native Messagingの転送は同じ接続上で`beginSaveFiles`、0個以上の`appendSaveFileChunk`、`saveFiles`の順に行う。`chunkIndex`はファイルごとに0から連続させる。拡張機能はBase64文字列を192KiB以下に分割し、native-hostは復号後256KiB以下だけを受理する。1要求は20ファイル、1ファイル64MiB、合計128MiBまでとする。backgroundはレスポンスをストリームで読み、Content-Lengthの有無にかかわらず上限到達時に中断する。切断・タイムアウト・一時的なHTTP失敗を固定キャッシュせず、利用者の再実行で新しい`transferId`を使って再試行できるようにする。
 
-類似照合用の内容も同じ接続上で`beginCheckSimilarFile`、0個以上の`appendCheckSimilarFileChunk`、`checkSimilarFiles`の順に送る。単一のNative Messagingメッセージへファイル全体のBase64を含めない。チャンク上限と1ファイル64MiB上限は保存転送と同じとし、`checkSimilarFiles`は宣言サイズ分の転送が完了した`transferId`だけを受理して、照合開始時に転送内容をセッションから取り出す。backgroundは全タブを合わせて同時に照合する資料を2件までに制限し、各保存パネルも実行中workerの収束を待ってから完了または失敗を返す。
+類似照合用の内容も同じ接続上で`beginCheckSimilarFile`、0個以上の`appendCheckSimilarFileChunk`、`checkSimilarFiles`の順に送る。単一のNative Messagingメッセージへファイル全体のBase64を含めない。チャンク上限と1ファイル64MiB上限は保存転送と同じとし、`checkSimilarFiles`は宣言サイズ分の転送が完了した`transferId`だけを受理して、照合開始時に転送内容をセッションから取り出す。backgroundは全タブを合わせて同時に照合する資料を2件までに制限し、各保存パネルも実行中workerの収束を待ってから完了または失敗を返す。照合用に取得済みの内容は、2分、20件、合計128MiBのうち最初に達する上限までbackgroundメモリへ保持し、直後の明示的な保存で1回だけ再利用する。期限切れ・上限超過・保存利用済みの内容は破棄し、永続化しない。
 
 ```ts
 interface SaveFilesResult {

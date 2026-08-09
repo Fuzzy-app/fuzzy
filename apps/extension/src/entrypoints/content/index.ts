@@ -5,6 +5,7 @@
 import "@fuzzy/shared/theme.css";
 import { MOODLE_HTTPS_MATCH_PATTERNS, isSupportedMoodleHostname } from "../../../moodleSite";
 import { BackgroundApiClient } from "../../lib/api/backgroundApi";
+import { boundedParallelMap } from "../../lib/boundedParallelMap";
 import {
 	type AssignmentDetailProgress,
 	collectAssignmentSubmissionAvailability,
@@ -12,7 +13,9 @@ import {
 import {
 	buildCourseFileReconcilePayload,
 	buildMoodleAssignmentSyncPayload,
+	buildMoodleTextBlockSyncPayload,
 } from "../../lib/moodle/assignmentSync";
+import { isHtmlResponse, readLimitedResponseText } from "../../lib/moodle/limitedResponse";
 import {
 	classifyMoodlePage,
 	isMoodleCoursePage,
@@ -36,8 +39,12 @@ import {
 	showAssignmentSyncFailure,
 	showAssignmentSyncSaving,
 } from "./moodleAssignmentSyncStatus";
+
 import { mountSavePanel } from "./savePanel";
 import { mountFuzzyShell } from "./shell";
+
+const DASHBOARD_COURSE_FETCH_CONCURRENCY = 3;
+const MAX_COURSE_HTML_BYTES = 2 * 1024 * 1024;
 
 let disposeMoodleNativeSession: (() => void) | null = null;
 let moodlePageActive = true;
@@ -129,10 +136,12 @@ async function syncCurrentCourseData(): Promise<void> {
 	let snapshot: ReturnType<typeof collectMoodlePageSnapshot>;
 	let assignmentRequest: ReturnType<typeof buildMoodleAssignmentSyncPayload>;
 	let fileRequest: ReturnType<typeof buildCourseFileReconcilePayload>;
+	let textRequest: ReturnType<typeof buildMoodleTextBlockSyncPayload>;
 	try {
 		snapshot = collectMoodlePageSnapshot(document);
 		assignmentRequest = buildMoodleAssignmentSyncPayload(snapshot, location.href, document);
 		fileRequest = buildCourseFileReconcilePayload(snapshot, location.href, document);
+		textRequest = buildMoodleTextBlockSyncPayload(snapshot, location.href, document);
 	} catch (error) {
 		console.warn("[fuzzy] Moodleコース情報を読み取れませんでした", error);
 		return;
@@ -146,6 +155,13 @@ async function syncCurrentCourseData(): Promise<void> {
 		operations.push(
 			client.reconcileCourseFiles(fileRequest).catch((error) => {
 				console.warn("[fuzzy] コース資料の差分更新に失敗しました", error);
+			}),
+		);
+	}
+	if (textRequest) {
+		operations.push(
+			client.syncMoodleTextBlocks(textRequest).catch((error) => {
+				console.warn("[fuzzy] Moodle本文の検索用同期に失敗しました", error);
 			}),
 		);
 	}
@@ -178,7 +194,9 @@ async function syncMoodleDashboardCourses(): Promise<void> {
 	if (courseUrls.length === 0) return;
 
 	const client = new BackgroundApiClient();
-	await Promise.all(courseUrls.map((url) => syncFetchedCourse(client, url)));
+	await boundedParallelMap(courseUrls, DASHBOARD_COURSE_FETCH_CONCURRENCY, (url) =>
+		syncFetchedCourse(client, url),
+	);
 }
 
 async function syncFetchedCourse(client: BackgroundApiClient, pageUrl: string): Promise<void> {
@@ -190,17 +208,25 @@ async function syncFetchedCourse(client: BackgroundApiClient, pageUrl: string): 
 			signal: controller.signal,
 		});
 		if (!response.ok) return;
-		const html = await response.text();
+		const responseUrl = response.url || pageUrl;
+		if (!isSameCoursePage(pageUrl, responseUrl) || !isHtmlResponse(response)) return;
+		const html = await readLimitedResponseText(response, MAX_COURSE_HTML_BYTES);
+		if (html === null) return;
 		const courseDocument = new DOMParser().parseFromString(html, "text/html");
 		const base = courseDocument.createElement("base");
-		base.href = pageUrl;
+		base.href = responseUrl;
 		courseDocument.head.prepend(base);
 		const snapshot = collectMoodlePageSnapshot(courseDocument);
-		const assignmentRequest = buildMoodleAssignmentSyncPayload(snapshot, pageUrl, courseDocument);
-		const fileRequest = buildCourseFileReconcilePayload(snapshot, pageUrl, courseDocument);
+		const assignmentRequest = buildMoodleAssignmentSyncPayload(
+			snapshot,
+			responseUrl,
+			courseDocument,
+		);
+		const fileRequest = buildCourseFileReconcilePayload(snapshot, responseUrl, courseDocument);
+		const textRequest = buildMoodleTextBlockSyncPayload(snapshot, responseUrl, courseDocument);
 		const operations: Promise<unknown>[] = [];
 		if (assignmentRequest) {
-			operations.push(syncAssignmentsWithDetails(client, snapshot, pageUrl, courseDocument));
+			operations.push(syncAssignmentsWithDetails(client, snapshot, responseUrl, courseDocument));
 		}
 		if (fileRequest) {
 			operations.push(
@@ -209,11 +235,34 @@ async function syncFetchedCourse(client: BackgroundApiClient, pageUrl: string): 
 				}),
 			);
 		}
+		if (textRequest) {
+			operations.push(
+				client.syncMoodleTextBlocks(textRequest).catch((error) => {
+					console.warn("[fuzzy] 背景でのMoodle本文同期に失敗しました", error);
+				}),
+			);
+		}
 		await Promise.all(operations);
 	} catch (error) {
 		console.warn("[fuzzy] ダッシュボードから授業情報を更新できませんでした", error);
 	} finally {
 		window.clearTimeout(timeout);
+	}
+}
+
+function isSameCoursePage(requestedUrl: string, responseUrl: string): boolean {
+	try {
+		const requested = new URL(requestedUrl);
+		const response = new URL(responseUrl);
+		return (
+			requested.protocol === "https:" &&
+			response.origin === requested.origin &&
+			response.pathname === requested.pathname &&
+			/\/course\/view\.php$/i.test(response.pathname) &&
+			response.searchParams.get("id") === requested.searchParams.get("id")
+		);
+	} catch {
+		return false;
 	}
 }
 

@@ -1,14 +1,17 @@
+import { boundedParallelMap } from "../boundedParallelMap";
 import {
 	fileExtensionFromName,
 	fileNameFromContentDisposition,
 	hasSupportedFileExtension,
 	normalizeFileTypeHint,
 } from "./fileType";
+import { isHtmlResponse, readLimitedResponseText } from "./limitedResponse";
 // Moodleページのスナップショット収集（issue48）。
 // ./pageSnapshot.ts が「渡されたDOMの解析」を担うのに対し、このモジュールは
 // フォルダページの追加フェッチを含む収集フロー全体と、失敗時のフォールバックを担う。
 import {
 	type MoodleFileLink,
+	type MoodleFolderLink,
 	type MoodlePageSnapshot,
 	collectMoodlePageSnapshot,
 	extractFileLinks,
@@ -20,9 +23,12 @@ import {
  * 授業ページ→フォルダ→サブフォルダ程度を想定し、無制限な探索はしない。
  */
 const MAX_FOLDER_DEPTH = 2;
+const MAX_FOLDER_FETCH_CONCURRENCY = 4;
+const MAX_NESTED_FOLDER_PAGES = 50;
 const MAX_MIME_HINT_REQUESTS = 20;
 const MAX_MIME_HINT_CONCURRENCY = 4;
 const MOODLE_REQUEST_TIMEOUT_MS = 4_000;
+const MAX_FOLDER_HTML_BYTES = 2 * 1024 * 1024;
 const MOODLE_RESOURCE_PATTERN = /\/mod\/resource\/view\.php/i;
 
 export interface ResolvedMoodleFileMetadata {
@@ -237,41 +243,56 @@ function applyResolvedMetadata(
 	};
 }
 
-async function collectNestedFolderFiles(
-	root: Document | Element,
-	depth = 0,
-	seenFolders = new Set<string>(),
-): Promise<MoodleFileLink[]> {
-	if (depth >= MAX_FOLDER_DEPTH) return [];
-
-	const folders = extractFolderLinks(root).filter((folder) => {
-		if (!isSameOriginUrl(folder.url) || seenFolders.has(folder.url)) return false;
+async function collectNestedFolderFiles(root: Document | Element): Promise<MoodleFileLink[]> {
+	type FolderTask = { folder: MoodleFolderLink; depth: number; inheritedSection: string };
+	const seenFolders = new Set<string>();
+	const queue: FolderTask[] = [];
+	for (const folder of extractFolderLinks(root)) {
+		if (!isSameOriginUrl(folder.url) || seenFolders.has(folder.url)) continue;
 		seenFolders.add(folder.url);
-		return true;
-	});
+		queue.push({ folder, depth: 0, inheritedSection: folder.sectionTitle ?? folder.title });
+	}
 
-	const filesByFolder = await Promise.all(
-		folders.map(async (folder) => {
+	const collected: MoodleFileLink[] = [];
+	let fetchedPages = 0;
+	while (queue.length > 0 && fetchedPages < MAX_NESTED_FOLDER_PAGES) {
+		const remaining = MAX_NESTED_FOLDER_PAGES - fetchedPages;
+		const batch = queue.splice(0, remaining);
+		fetchedPages += batch.length;
+		const results = await boundedParallelMap(batch, MAX_FOLDER_FETCH_CONCURRENCY, async (task) => {
 			try {
-				const folderDocument = await fetchMoodleDocument(folder.url);
-				const inheritedSection = folder.sectionTitle ?? folder.title;
-				const directFiles = withSectionFallback(extractFileLinks(folderDocument), inheritedSection);
-				const nestedFiles = withSectionFallback(
-					await collectNestedFolderFiles(folderDocument, depth + 1, seenFolders),
-					inheritedSection,
-				);
-				return [...directFiles, ...nestedFiles];
+				const folderDocument = await fetchMoodleDocument(task.folder.url);
+				return { task, folderDocument };
 			} catch (error) {
 				console.warn("[fuzzy] Moodleフォルダ内の資料取得に失敗しました", {
-					url: folder.url,
+					url: task.folder.url,
 					error,
 				});
-				return [];
+				return null;
 			}
-		}),
-	);
+		});
+		for (const result of results) {
+			if (!result) continue;
+			collected.push(
+				...withSectionFallback(
+					extractFileLinks(result.folderDocument),
+					result.task.inheritedSection,
+				),
+			);
+			if (result.task.depth + 1 >= MAX_FOLDER_DEPTH) continue;
+			for (const folder of extractFolderLinks(result.folderDocument)) {
+				if (!isSameOriginUrl(folder.url) || seenFolders.has(folder.url)) continue;
+				seenFolders.add(folder.url);
+				queue.push({
+					folder,
+					depth: result.task.depth + 1,
+					inheritedSection: folder.sectionTitle || folder.title || result.task.inheritedSection,
+				});
+			}
+		}
+	}
 
-	return dedupeFiles(filesByFolder.flat());
+	return dedupeFiles(collected);
 }
 
 function withSectionFallback(
@@ -287,12 +308,17 @@ async function fetchMoodleDocument(url: string): Promise<Document> {
 	try {
 		const response = await fetch(url, { credentials: "include", signal: controller.signal });
 		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const responseUrl = response.url || url;
+		if (!isSameOriginUrl(responseUrl, new URL(url).origin) || !isHtmlResponse(response)) {
+			throw new Error("Moodle外またはHTML以外の応答です");
+		}
 
-		const html = await response.text();
+		const html = await readLimitedResponseText(response, MAX_FOLDER_HTML_BYTES);
+		if (html === null) throw new Error("Moodleフォルダーページが上限を超えています");
 		const parsed = new DOMParser().parseFromString(html, "text/html");
 		// 相対リンクをフォルダページ基準で解決できるよう、baseを差し込む
 		const base = parsed.createElement("base");
-		base.href = url;
+		base.href = responseUrl;
 		parsed.head.prepend(base);
 		return parsed;
 	} finally {

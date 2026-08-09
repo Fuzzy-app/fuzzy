@@ -55,6 +55,9 @@ describe("分割したFuzzy画面controller", () => {
 			search: async () => [
 				{
 					fileId: 4,
+					source: "file",
+					moodleUrl: null,
+					blockKey: null,
 					fileName: "第4回_正規化.pdf",
 					courseName: "データベース",
 					relativePath: "データベース/第4回_正規化.pdf",
@@ -65,6 +68,9 @@ describe("分割したFuzzy画面controller", () => {
 				},
 				{
 					fileId: 4,
+					source: "file",
+					moodleUrl: null,
+					blockKey: null,
 					fileName: "第4回_正規化.pdf",
 					courseName: "データベース",
 					relativePath: "データベース/第4回_正規化.pdf",
@@ -101,11 +107,66 @@ describe("分割したFuzzy画面controller", () => {
 		expect(controller.root.textContent).toContain("資料を既定のアプリケーションで開きました。");
 	});
 
+	test("複数授業の検索を授業数だけ反復せず1つのscopeへまとめる", async () => {
+		installDom();
+		const calls: Array<{ query: string; scope: unknown }> = [];
+		const api = {
+			mode: "native" as const,
+			async getDashboard() {
+				return {
+					courses: [
+						course(2, "データベース"),
+						course(3, "離散数学"),
+						course(4, "情報アーキテクチャ"),
+					],
+					totalFiles: 0,
+					totalViolations: 0,
+					upcomingDeadlineCount: 0,
+				};
+			},
+			async search(query: string, scope?: unknown) {
+				calls.push({ query, scope });
+				return [];
+			},
+			async openFile() {
+				return { opened: true, page: null };
+			},
+		} as unknown as Pick<FuzzyApiClient, "mode" | "getDashboard" | "search" | "openFile">;
+		const controller = new SearchScreenController({
+			api: Promise.resolve(api),
+			onApiReady: () => {},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const excluded = controller.root.querySelector<HTMLInputElement>('input[data-course-id="3"]');
+		expect(excluded).not.toBeNull();
+		if (excluded) {
+			excluded.checked = false;
+			excluded.dispatchEvent(new Event("change"));
+		}
+		controller.input.value = "Pythonを高速化";
+		controller.input.dispatchEvent(new Event("input"));
+		controller.root
+			.querySelector<HTMLFormElement>("form")
+			?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(calls).toHaveLength(2);
+		expect(calls.map((call) => call.query)).toEqual(["Pythonを高速化", "Python 高速化"]);
+		expect(calls[0]?.scope).toEqual({
+			courseId: null,
+			courseIds: [2, 4],
+			folder: null,
+		});
+	});
+
 	test("同じ資料の同じページを重複させず、複数箇所を件数へまとめる", () => {
 		const results = aggregateSearchResults(
 			[
 				{
 					fileId: 1,
+					source: "file",
+					moodleUrl: null,
+					blockKey: null,
 					fileName: "資料.pdf",
 					courseName: "授業",
 					relativePath: "授業/資料.pdf",
@@ -116,6 +177,9 @@ describe("分割したFuzzy画面controller", () => {
 				},
 				{
 					fileId: 1,
+					source: "file",
+					moodleUrl: null,
+					blockKey: null,
 					fileName: "資料.pdf",
 					courseName: "授業",
 					relativePath: "授業/資料.pdf",
@@ -126,6 +190,9 @@ describe("分割したFuzzy画面controller", () => {
 				},
 				{
 					fileId: 1,
+					source: "file",
+					moodleUrl: null,
+					blockKey: null,
 					fileName: "資料.pdf",
 					courseName: "授業",
 					relativePath: "授業/資料.pdf",
@@ -142,3 +209,15 @@ describe("分割したFuzzy画面controller", () => {
 		expect(results[0]).toMatchObject({ exactMatchCount: 1, similarMatchCount: 1 });
 	});
 });
+
+function course(courseId: number, courseName: string) {
+	return {
+		courseId,
+		courseName,
+		academicYear: 2026,
+		term: "前期",
+		fileCount: 0,
+		violationCount: 0,
+		nextDueAt: null,
+	};
+}

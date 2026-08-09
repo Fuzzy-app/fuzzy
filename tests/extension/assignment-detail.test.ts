@@ -3,6 +3,7 @@ import { parseHTML } from "linkedom";
 import {
 	ASSIGNMENT_DETAIL_LIMITS,
 	analyzeAssignmentSubmissionAvailability,
+	analyzeAssignmentSubmissionState,
 	collectAssignmentSubmissionAvailability,
 	normalizeMoodleAssignmentDetailUrl,
 } from "../../apps/extension/src/lib/moodle/assignmentDetail";
@@ -40,6 +41,25 @@ describe("Moodle課題詳細の提出可否", () => {
 			const { document } = parseHTML(html);
 			expect(analyzeAssignmentSubmissionAvailability(document, DETAIL_URL)).toBe("unavailable");
 		}
+	});
+
+	test("提出ステータス表の評定用提出済みを提出済みとして確定する", () => {
+		const { document } = parseHTML(`
+			<html><body class="loggedin"><main id="region-main">
+				<form method="get" action="/mod/assign/view.php">
+					<input type="hidden" name="action" value="editsubmission">
+					<button type="submit">提出を編集する</button>
+				</form>
+				<div class="submissionstatustable"><table class="submissionsummarytable"><tbody><tr>
+					<th>提出ステータス</th>
+					<td class="submissionstatussubmitted">評定のために提出済み</td>
+				</tr></tbody></table></div>
+			</main></body></html>
+		`);
+		expect(analyzeAssignmentSubmissionState(document, DETAIL_URL)).toEqual({
+			availability: "available",
+			submitted: true,
+		});
 	});
 
 	test("未知DOM・根拠競合・ログイン画面をunknownにする", () => {

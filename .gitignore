@@ -29,6 +29,12 @@ apps/desktop/src-tauri/gen/
 *.log
 bun-debug.log*
 
+# ローカル作業用の一時ファイル
+/.codex-*-gitconfig
+/tmp/
+/presentation/work/
+*.pptx.inspect.ndjson
+
 # OS / エディタ
 .DS_Store
 Thumbs.db

@@ -52,7 +52,30 @@ pub struct SavedFileRegistration {
 pub struct SimilarFileRecord {
 	pub file_id: i64,
 	pub original_name: String,
+	pub size_bytes: i64,
 	pub similarity: f64,
+	pub exact: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoodleTextBlockRecord {
+	pub block_key: String,
+	pub title: String,
+	pub body: String,
+	pub normalized_body: String,
+	pub moodle_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoodleTextSearchRecord {
+	pub block_id: i64,
+	pub course_id: i64,
+	pub course_name: String,
+	pub block_key: String,
+	pub title: String,
+	pub body: String,
+	pub moodle_url: String,
+	pub score: f32,
 }
 
 /// SQLiteに保存された課題の取得条件。

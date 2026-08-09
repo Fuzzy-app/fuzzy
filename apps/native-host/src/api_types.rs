@@ -54,7 +54,17 @@ pub struct BeginSaveFilesRequest {
 	pub transfer_id: String,
 	pub target_path: String,
 	pub course_id: Option<i64>,
+	#[serde(default)]
+	pub conflict_policy: SaveConflictPolicy,
 	pub files: Vec<SaveFileDescriptor>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveConflictPolicy {
+	#[default]
+	Skip,
+	Rename,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -151,6 +161,8 @@ pub struct AppendCheckSimilarFileChunkRequest {
 pub struct CheckSimilarFilesTransferRequest {
 	pub transfer_id: String,
 	pub file_meta: MoodleFileMeta,
+	#[serde(default)]
+	pub course_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -159,6 +171,7 @@ pub struct SimilarFileMatch {
 	pub file_id: i64,
 	pub original_name: String,
 	pub similarity: f64,
+	pub exact: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -398,6 +411,24 @@ pub struct SyncMoodleAssignmentsRequest {
 	pub trigger: String,
 	pub course: SyncMoodleCourseRequest,
 	pub assignments: Vec<SyncMoodleAssignmentRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SyncMoodleTextBlockRequest {
+	pub block_key: String,
+	pub title: String,
+	pub text: String,
+	pub moodle_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SyncMoodleTextBlocksRequest {
+	pub course: SyncMoodleCourseRequest,
+	pub blocks: Vec<SyncMoodleTextBlockRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -822,6 +853,8 @@ impl DuplicateGroupListItem {
 pub struct SearchScope {
 	/// SQLite上のコースIDで絞り込む。
 	pub course_id: Option<i64>,
+	/// SQLite上の複数コースIDを1要求で絞り込む。
+	pub course_ids: Option<Vec<i64>>,
 	/// 保存ルートからの相対フォルダーで絞り込む。
 	pub folder: Option<String>,
 }
@@ -837,11 +870,20 @@ pub struct SearchRequest {
 }
 
 /// 全文検索のAPI結果。ファイル情報はSQLiteの正本から投影する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SearchResultSource {
+	File,
+	MoodleText,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct SearchResult {
 	pub file_id: i64,
+	pub source: SearchResultSource,
 	pub file_name: String,
 	pub course_name: Option<String>,
 	pub relative_path: String,
@@ -849,6 +891,8 @@ pub struct SearchResult {
 	pub page: Option<u32>,
 	pub page_count: Option<u32>,
 	pub score: f32,
+	pub moodle_url: Option<String>,
+	pub block_key: Option<String>,
 }
 
 /// 検索結果から資料を明示的に開く要求。

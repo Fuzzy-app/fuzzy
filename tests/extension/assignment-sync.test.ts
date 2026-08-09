@@ -3,6 +3,7 @@ import { parseHTML } from "linkedom";
 import {
 	buildCourseFileReconcilePayload,
 	buildMoodleAssignmentSyncPayload,
+	buildMoodleTextBlockSyncPayload,
 	contextualMoodleCourseId,
 	parseMoodleDueAt,
 } from "../../apps/extension/src/lib/moodle/assignmentSync";
@@ -13,6 +14,38 @@ import {
 } from "../../apps/extension/src/lib/moodle/pageSnapshot";
 
 describe("Moodle課題の実データ同期", () => {
+	test("Moodle本文をブロック単位で同期し元位置URLを保持する", () => {
+		const { document } = parseHTML(`
+			<html data-courseid="412"><body><main class="course-content">
+				<section class="course-section" data-sectionid="15">
+					<div class="summary" id="section-summary-15">Pythonを高速化する方法を扱います。</div>
+					<li class="activity" data-activityname="高速化演習" data-cmid="701">
+						<a href="/mod/page/view.php?id=701">NumPyによる高速化</a>
+					</li>
+				</section>
+			</main></body></html>
+		`);
+		const snapshot = {
+			...collectMoodlePageSnapshot(document),
+			courseName: "データベース",
+			academicYear: 2026,
+		};
+		const payload = buildMoodleTextBlockSyncPayload(
+			snapshot,
+			"https://moodle2026.wakayama-u.ac.jp/course/view.php?id=412",
+			document,
+		);
+		expect(payload?.blocks).toHaveLength(2);
+		expect(payload?.blocks.find((block) => block.blockKey === "dom:701")).toMatchObject({
+			blockKey: "dom:701",
+			title: "高速化演習",
+			moodleUrl: "https://moodle2026.wakayama-u.ac.jp/mod/page/view.php?id=701",
+		});
+		expect(
+			payload?.blocks.find((block) => block.blockKey === "dom:section-summary-15")?.moodleUrl,
+		).toBe("https://moodle2026.wakayama-u.ac.jp/course/view.php?id=412#section-summary-15");
+	});
+
 	test("完全コースページからコース限定差分走査要求を作る", () => {
 		const { document } = parseHTML(`
 			<html data-courseid="412"><body>
@@ -94,7 +127,7 @@ describe("Moodle課題の実データ同期", () => {
 				source: "moodle_text",
 				dueAtStatus: "normal",
 				submissionMode: "moodle_auto",
-				submitted: true,
+				submitted: false,
 				submissionAvailability: "unknown",
 				moodleUrl: "https://moodle2026.wakayama-u.ac.jp/mod/assign/view.php?id=701",
 			},

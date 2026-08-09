@@ -1,4 +1,8 @@
-import type { ReconcileCourseFilesRequest, SyncMoodleAssignmentsRequest } from "@fuzzy/shared";
+import type {
+	ReconcileCourseFilesRequest,
+	SyncMoodleAssignmentsRequest,
+	SyncMoodleTextBlocksRequest,
+} from "@fuzzy/shared";
 import {
 	FUZZY_QA_MOODLE_HTTPS_MATCH_PATTERN,
 	isSupportedMoodleAssignmentUrl,
@@ -114,6 +118,116 @@ export function buildCourseFileReconcilePayload(
 			term: snapshot.term,
 		},
 	};
+}
+
+/** 完全なコースページから検索可能なMoodle本文ブロックを作る。 */
+export function buildMoodleTextBlockSyncPayload(
+	snapshot: MoodlePageSnapshot,
+	pageUrl: string,
+	root: Document | Element = document,
+): SyncMoodleTextBlocksRequest | null {
+	if (!isCompleteCoursePage(pageUrl, root)) return null;
+	const moodleCourseId = contextualMoodleCourseId(snapshot, pageUrl) ?? "";
+	const name = snapshot.courseName?.trim() ?? "";
+	if (!/^[A-Za-z0-9._:-]{1,128}$/.test(moodleCourseId) || !name || name.length > 1_000) {
+		return null;
+	}
+	const base = safeSameOriginHttpsUrl(pageUrl, pageUrl);
+	if (!base) return null;
+	const selectors = [
+		"li.activity",
+		".activity[data-activityname]",
+		"[data-region='section'] .summary",
+		".course-section .summary",
+		".activity-description",
+		"[data-region='activity-information']",
+	].join(", ");
+	const seenElements = new Set<Element>();
+	const seenKeys = new Set<string>();
+	const blocks: SyncMoodleTextBlocksRequest["blocks"] = [];
+	for (const [index, element] of Array.from(
+		root.querySelectorAll<HTMLElement>(selectors),
+	).entries()) {
+		if (seenElements.has(element) || element.closest("#fuzzy-shell, #fuzzy-save-panel")) continue;
+		seenElements.add(element);
+		const text = normalizeBlockText(element.textContent).slice(0, 12_000);
+		if (text.length < 2) continue;
+		const title = blockTitle(element, text).slice(0, 512);
+		const blockKey = blockStableKey(element, text, index);
+		if (seenKeys.has(blockKey)) continue;
+		const moodleUrl = blockMoodleUrl(element, base.href);
+		if (!moodleUrl) continue;
+		seenKeys.add(blockKey);
+		blocks.push({ blockKey, title, text, moodleUrl });
+		if (blocks.length >= 500) break;
+	}
+	return {
+		course: {
+			moodleCourseId,
+			name,
+			academicYear: resolveMoodleAcademicYear(snapshot, pageUrl),
+			term: snapshot.term,
+		},
+		blocks,
+	};
+}
+
+function normalizeBlockText(value: string | null | undefined): string {
+	return value?.normalize("NFKC").replace(/\s+/g, " ").trim() ?? "";
+}
+
+function blockTitle(element: HTMLElement, text: string): string {
+	return (
+		normalizeBlockText(element.getAttribute("data-activityname")) ||
+		normalizeBlockText(element.querySelector("h1, h2, h3, h4, .instancename")?.textContent) ||
+		text.slice(0, 80)
+	);
+}
+
+function blockStableKey(element: HTMLElement, text: string, index: number): string {
+	const stable =
+		element.id ||
+		element.dataset.cmid ||
+		element.dataset.activityid ||
+		element.closest<HTMLElement>("[data-cmid], [data-activityid], [id]")?.dataset.cmid ||
+		element.closest<HTMLElement>("[data-cmid], [data-activityid], [id]")?.dataset.activityid ||
+		element.closest<HTMLElement>("[data-cmid], [data-activityid], [id]")?.id;
+	if (stable) return `dom:${stable}`.slice(0, 256);
+	let hash = 2_166_136_261;
+	for (const character of `${index}:${text}`) {
+		hash ^= character.codePointAt(0) ?? 0;
+		hash = Math.imul(hash, 16_777_619);
+	}
+	return `text:${(hash >>> 0).toString(16)}`;
+}
+
+function blockMoodleUrl(element: HTMLElement, pageUrl: string): string | null {
+	const candidate = element.querySelector<HTMLAnchorElement>(
+		"a[href*='/mod/'], a[href*='/course/section.php'], a[href*='/course/view.php']",
+	)?.href;
+	const resolved = safeSameOriginHttpsUrl(candidate ?? pageUrl, pageUrl);
+	if (!resolved) return null;
+	if (!candidate && element.id) resolved.hash = element.id;
+	return resolved.href;
+}
+
+function safeSameOriginHttpsUrl(value: string, baseValue: string): URL | null {
+	try {
+		const base = new URL(baseValue);
+		const candidate = new URL(value, base);
+		if (
+			base.protocol !== "https:" ||
+			candidate.protocol !== "https:" ||
+			candidate.origin !== base.origin ||
+			candidate.username ||
+			candidate.password
+		) {
+			return null;
+		}
+		return candidate;
+	} catch {
+		return null;
+	}
 }
 
 /** 審査専用QAサイトでは、DOMに年度がなくてもサイト名で固定された年度を補う。 */

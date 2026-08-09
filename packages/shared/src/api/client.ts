@@ -32,6 +32,7 @@ import type {
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
+	SyncMoodleTextBlocksRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
@@ -95,6 +96,7 @@ export interface FuzzyApiClient {
 
 	/** Moodleコースページから得た課題の完全snapshotをSQLiteへ同期する。 */
 	syncMoodleAssignments(request: SyncMoodleAssignmentsRequest): Promise<DataSyncEvent>;
+	syncMoodleTextBlocks(request: SyncMoodleTextBlocksRequest): Promise<{ ok: boolean }>;
 
 	/** 直近の同期（Moodleからのデータ取得）結果。データ取得通知の表示に使う。同期実績が無ければnull */
 	getLatestSyncEvent(): Promise<DataSyncEvent | null>;

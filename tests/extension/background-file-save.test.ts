@@ -100,6 +100,100 @@ describe("Moodle資料保存のbackground境界", () => {
 		expect(capturedContent).toBe("AQIDBA==");
 	});
 
+	test("類似照合で取得した同じ資料を直後の保存で再ダウンロードしない", async () => {
+		let fetchCount = 0;
+		let savedContent: string | undefined;
+		const file = createFile("cache-reuse", "https://moodle.example/pluginfile.php/cache-reuse.pdf");
+		const fetcher = (async () => {
+			fetchCount += 1;
+			return new Response(new Uint8Array([1, 2, 3, 4]), {
+				status: 200,
+				headers: { "content-type": "application/pdf" },
+			});
+		}) as unknown as typeof fetch;
+		const similarityClient = {
+			mode: "native" as const,
+			async checkSimilarFiles() {
+				return [];
+			},
+		} as unknown as Pick<FuzzyApiClient, "mode" | "checkSimilarFiles">;
+		const saveClient = {
+			mode: "native" as const,
+			async saveFiles(request: SaveFilesRequest) {
+				savedContent = request.files[0]?.contentBase64;
+				return { savedFileIds: ["cache-reuse"], failedFiles: [] };
+			},
+		} as Pick<FuzzyApiClient, "mode" | "saveFiles">;
+
+		await checkMoodleFileFromBackground(
+			similarityClient,
+			{ fileMeta: file, courseId: 2 },
+			"https://moodle.example",
+			{ fetcher },
+		);
+		await saveMoodleFilesFromBackground(
+			saveClient,
+			{ targetPath: "C:\\save", courseId: 2, files: [file] },
+			"https://moodle.example",
+			{ fetcher },
+		);
+
+		expect(fetchCount).toBe(1);
+		expect(savedContent).toBe("AQIDBA==");
+	});
+
+	test("一括類似照合した全資料を保存時に再ダウンロードしない", async () => {
+		let fetchCount = 0;
+		const files = Array.from({ length: 4 }, (_, index) =>
+			createFile(
+				`batch-cache-${index}`,
+				`https://moodle.example/pluginfile.php/batch-cache-${index}.pdf`,
+			),
+		);
+		const fetcher = (async () => {
+			fetchCount += 1;
+			return new Response(new Uint8Array([1, 2, 3, 4]), {
+				status: 200,
+				headers: { "content-type": "application/pdf" },
+			});
+		}) as unknown as typeof fetch;
+		const similarityClient = {
+			mode: "native" as const,
+			async checkSimilarFiles() {
+				return [];
+			},
+		} as unknown as Pick<FuzzyApiClient, "mode" | "checkSimilarFiles">;
+		const saveClient = {
+			mode: "native" as const,
+			async saveFiles(request: SaveFilesRequest) {
+				return {
+					savedFileIds: request.files.map((file) => file.fileId),
+					failedFiles: [],
+				};
+			},
+		} as Pick<FuzzyApiClient, "mode" | "saveFiles">;
+
+		await Promise.all(
+			files.map((file) =>
+				checkMoodleFileFromBackground(
+					similarityClient,
+					{ fileMeta: file, courseId: 2 },
+					"https://moodle.example",
+					{ fetcher },
+				),
+			),
+		);
+		const result = await saveMoodleFilesFromBackground(
+			saveClient,
+			{ targetPath: "C:\\save", courseId: 2, files },
+			"https://moodle.example",
+			{ fetcher },
+		);
+
+		expect(fetchCount).toBe(4);
+		expect(result.savedFileIds).toHaveLength(4);
+	});
+
 	test("全タブの類似照合をbackground全体で同時2件までに制限する", async () => {
 		let activeChecks = 0;
 		let maximumActiveChecks = 0;

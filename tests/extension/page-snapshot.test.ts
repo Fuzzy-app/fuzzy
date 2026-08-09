@@ -68,7 +68,7 @@ describe("Moodle資料のDOM解析", () => {
 
 		const snapshot = collectMoodlePageSnapshot(document);
 		expect(snapshot.academicYear).toBe(2026);
-		expect(snapshot.term).toBe("2Q");
+		expect(snapshot.term).toBeNull();
 		expect(snapshot.courseName).toBe("画像処理（火5コマ，2Q，A101，中村恭之）");
 	});
 

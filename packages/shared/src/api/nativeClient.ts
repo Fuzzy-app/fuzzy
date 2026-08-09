@@ -37,6 +37,7 @@ import type {
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
+	SyncMoodleTextBlocksRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
@@ -395,7 +396,7 @@ export class NativeApiClient implements FuzzyApiClient {
 			}
 			return await session.send<SimilarFileMatch[]>(
 				"checkSimilarFiles",
-				{ transferId, fileMeta: request.fileMeta },
+				{ transferId, fileMeta: request.fileMeta, courseId: request.courseId ?? null },
 				30_000,
 			);
 		} finally {
@@ -428,6 +429,7 @@ export class NativeApiClient implements FuzzyApiClient {
 				transferId,
 				targetPath: request.targetPath,
 				courseId: request.courseId,
+				conflictPolicy: request.conflictPolicy ?? "skip",
 				files: request.files.map(({ fileId, fileName, mimeType, byteLength }) => ({
 					fileId,
 					fileName,
@@ -515,6 +517,10 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	syncMoodleAssignments(request: SyncMoodleAssignmentsRequest): Promise<DataSyncEvent> {
 		return this.send("syncMoodleAssignments", request);
+	}
+
+	syncMoodleTextBlocks(request: SyncMoodleTextBlocksRequest): Promise<{ ok: boolean }> {
+		return this.send("syncMoodleTextBlocks", request);
 	}
 
 	getLatestSyncEvent(): Promise<DataSyncEvent | null> {

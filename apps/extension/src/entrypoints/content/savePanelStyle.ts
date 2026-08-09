@@ -481,6 +481,84 @@ export const SAVE_PANEL_STYLE = `
 			font-size: 14px;
 		}
 
+		.fuzzy-path-breadcrumb.is-interactive button {
+			min-height: 28px;
+			border: 0;
+			background: transparent;
+			padding: 3px 5px;
+			color: var(--fuzzy-color-primary-strong);
+			font: inherit;
+			text-decoration: underline;
+			text-underline-offset: 2px;
+		}
+
+		.fuzzy-folder-explorer {
+			display: grid;
+			gap: 6px;
+			border: 1px solid var(--fuzzy-color-border);
+			border-radius: 9px;
+			padding: 8px;
+		}
+
+		.fuzzy-folder-explorer-label,
+		.fuzzy-final-destination strong {
+			font-size: 11px;
+			font-weight: 900;
+		}
+
+		.fuzzy-folder-explorer-children {
+			display: grid;
+			gap: 5px;
+			max-height: 128px;
+			overflow-y: auto;
+		}
+
+		.fuzzy-folder-explorer-children button {
+			display: flex;
+			align-items: center;
+			gap: 7px;
+			justify-content: flex-start;
+			min-height: 32px;
+			background: var(--fuzzy-color-page);
+			color: var(--fuzzy-color-text);
+			font-size: 11px;
+		}
+
+		.fuzzy-folder-explorer-children small {
+			color: var(--fuzzy-color-text-muted);
+			font-size: 10px;
+			line-height: 1.45;
+		}
+
+		.fuzzy-final-destination {
+			display: grid;
+			gap: 5px;
+			border: 2px solid var(--fuzzy-color-primary);
+			border-radius: 9px;
+			background: var(--fuzzy-color-primary-soft);
+			padding: 9px;
+		}
+
+		.fuzzy-final-destination ul {
+			display: grid;
+			gap: 5px;
+			margin: 0;
+			padding: 0;
+			list-style: none;
+		}
+
+		.fuzzy-final-destination li {
+			display: grid;
+			gap: 2px;
+			font-size: 10px;
+		}
+
+		.fuzzy-final-destination code {
+			overflow-wrap: anywhere;
+			color: var(--fuzzy-color-text);
+			font-size: 10px;
+		}
+
 		.fuzzy-destination-group ul {
 			display: grid;
 			gap: 2px;
@@ -668,7 +746,7 @@ export const SAVE_PANEL_STYLE = `
 		}
 		.fuzzy-similar-row strong { overflow-wrap: anywhere; font-size: 12px; }
 		.fuzzy-similar-row small { color: var(--fuzzy-color-warning); font-size: 10px; font-weight: 700; }
-		.fuzzy-confirm-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+		.fuzzy-confirm-buttons { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 8px; }
 		.fuzzy-confirm-buttons button[data-action="cancel-save"] { background: var(--fuzzy-color-border-soft); color: var(--fuzzy-color-text-muted); }
 		.fuzzy-pill-mock { background: var(--fuzzy-color-danger-soft); color: var(--fuzzy-color-danger); }
 		.fuzzy-path-chips button:disabled { background: var(--fuzzy-color-background) !important; color: var(--fuzzy-color-disabled) !important; box-shadow: none; cursor: not-allowed; }

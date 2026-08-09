@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { FILE_TRANSFER_LIMITS } from "../protocolLimits";
+import { EXTENSION_RUNTIME_PROTOCOL_VERSION } from "../types";
 import { NativeApiClient } from "./nativeClient";
 
 const originalChrome = (globalThis as { chrome?: unknown }).chrome;
@@ -200,7 +201,7 @@ describe("NativeApiClientの接続ライフサイクル", () => {
 		expect(await oldClient.ping()).toBe(false);
 		oldClient.disconnect();
 
-		protocolVersion = 0;
+		protocolVersion = EXTENSION_RUNTIME_PROTOCOL_VERSION;
 		const currentClient = new NativeApiClient();
 		expect(await currentClient.ping()).toBe(true);
 		currentClient.disconnect();

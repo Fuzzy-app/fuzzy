@@ -1,9 +1,16 @@
 import type { Assignment } from "@fuzzy/shared";
 import { boundedParallelMap } from "../boundedParallelMap";
+import { isHtmlResponse, readLimitedResponseText } from "./limitedResponse";
 import { classifyMoodlePage } from "./pageClassification";
 import type { MoodleAssignmentHint } from "./pageSnapshot";
 
 type SubmissionAvailability = Assignment["submissionAvailability"];
+
+export interface AssignmentSubmissionState {
+	availability: SubmissionAvailability;
+	/** nullは詳細HTMLから提出状態を確定できなかったことを表す。 */
+	submitted: boolean | null;
+}
 
 export const ASSIGNMENT_DETAIL_LIMITS = {
 	maxAssignments: 50,
@@ -57,7 +64,7 @@ export async function collectAssignmentSubmissionAvailability(
 	);
 	const urls = uniqueUrls.slice(0, ASSIGNMENT_DETAIL_LIMITS.maxAssignments);
 	const skipped = uniqueUrls.length - urls.length;
-	const availabilityByUrl = new Map<string, SubmissionAvailability>();
+	const stateByUrl = new Map<string, AssignmentSubmissionState>();
 	let completed = 0;
 	let unknown = 0;
 
@@ -67,29 +74,31 @@ export async function collectAssignmentSubmissionAvailability(
 	reportProgress();
 
 	await boundedParallelMap(urls, ASSIGNMENT_DETAIL_LIMITS.concurrency, async (url) => {
-		let availability: SubmissionAvailability = "unknown";
+		let state: AssignmentSubmissionState = { availability: "unknown", submitted: null };
 		try {
 			const document = await fetchAssignmentDetailDocument(url, baseUrl, fetchImpl, parseHtml);
-			availability = document ? analyzeAssignmentSubmissionAvailability(document, url) : "unknown";
+			state = document ? analyzeAssignmentSubmissionState(document, url) : state;
 		} catch {
-			availability = "unknown";
+			state = { availability: "unknown", submitted: null };
 		}
-		availabilityByUrl.set(url, availability);
+		stateByUrl.set(url, state);
 		completed += 1;
-		if (availability === "unknown") unknown += 1;
+		if (state.availability === "unknown") unknown += 1;
 		reportProgress();
-		return availability;
+		return state;
 	});
 
 	return hints.map((hint) => {
 		const detailUrl = normalizeMoodleAssignmentDetailUrl(hint.moodleUrl, baseUrl);
+		const detailState = detailUrl ? stateByUrl.get(detailUrl) : undefined;
 		return {
 			...hint,
 			// assign以外（quiz等）の利用者向けURLは失わず、詳細取得の対象だけを正規化する。
 			moodleUrl: detailUrl ?? hint.moodleUrl,
 			submissionAvailability: detailUrl
-				? (availabilityByUrl.get(detailUrl) ?? "unknown")
+				? (detailState?.availability ?? "unknown")
 				: hint.submissionAvailability,
+			submitted: detailState?.submitted ?? hint.submitted,
 		};
 	});
 }
@@ -133,12 +142,24 @@ export function analyzeAssignmentSubmissionAvailability(
 	document: Document,
 	pageUrl: string,
 ): SubmissionAvailability {
-	if (classifyMoodlePage(document, pageUrl) !== "authenticated") return "unknown";
+	return analyzeAssignmentSubmissionState(document, pageUrl).availability;
+}
+
+export function analyzeAssignmentSubmissionState(
+	document: Document,
+	pageUrl: string,
+): AssignmentSubmissionState {
+	if (classifyMoodlePage(document, pageUrl) !== "authenticated") {
+		return { availability: "unknown", submitted: null };
+	}
 
 	const pageText = normalizeText(
 		(document.querySelector("main, #region-main, [role='main']") ?? document.body)?.textContent,
 	);
-	if (!pageText || UNEXPECTED_PAGE_TEXT.test(pageText)) return "unknown";
+	if (!pageText || UNEXPECTED_PAGE_TEXT.test(pageText)) {
+		return { availability: "unknown", submitted: null };
+	}
+	const submitted = analyzeStructuredSubmittedStatus(document);
 
 	const unavailableEvidence = UNAVAILABLE_TEXT.test(pageText);
 	let availableEvidence = false;
@@ -165,10 +186,34 @@ export function analyzeAssignmentSubmissionAvailability(
 		if (hasAllowedSubmissionTarget(element, pageUrl)) availableEvidence = true;
 	}
 
-	if (availableEvidence && (unavailableEvidence || disabledEvidence)) return "unknown";
-	if (availableEvidence) return "available";
-	if (unavailableEvidence || disabledEvidence) return "unavailable";
-	return "unknown";
+	const availability =
+		availableEvidence && (unavailableEvidence || disabledEvidence)
+			? "unknown"
+			: availableEvidence
+				? "available"
+				: unavailableEvidence || disabledEvidence
+					? "unavailable"
+					: "unknown";
+	return { availability, submitted };
+}
+
+function analyzeStructuredSubmittedStatus(document: Document): boolean | null {
+	for (const row of document.querySelectorAll<HTMLTableRowElement>(
+		".submissionstatustable tr, .submissionsummarytable tr",
+	)) {
+		const heading = normalizeText(row.querySelector("th")?.textContent);
+		if (!/^(?:提出ステータス|submission status)$/i.test(heading)) continue;
+		const cell = row.querySelector<HTMLElement>("td");
+		const status = normalizeText(cell?.textContent);
+		if (
+			cell?.classList.contains("submissionstatussubmitted") ||
+			/(?:評定のために提出済み|submitted for grading|submission submitted)/i.test(status)
+		) {
+			return true;
+		}
+		if (/(?:未提出|提出なし|下書き|no submission|not submitted|draft)/i.test(status)) return false;
+	}
+	return null;
 }
 
 async function fetchAssignmentDetailDocument(
@@ -190,14 +235,9 @@ async function fetchAssignmentDetailDocument(
 		const responseUrl = normalizeMoodleAssignmentDetailUrl(response.url || url, baseUrl);
 		// 同一Moodle内でも別課題への遷移結果を元の課題へ誤って紐付けない。
 		if (!responseUrl || responseUrl !== url) return null;
-		const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-		if (!/^(?:text\/html|application\/xhtml\+xml)(?:;|$)/.test(contentType)) return null;
-		const contentLength = Number(response.headers.get("content-length"));
-		if (Number.isFinite(contentLength) && contentLength > ASSIGNMENT_DETAIL_LIMITS.maxHtmlBytes) {
-			return null;
-		}
+		if (!isHtmlResponse(response)) return null;
 
-		const html = await readLimitedHtml(response, ASSIGNMENT_DETAIL_LIMITS.maxHtmlBytes);
+		const html = await readLimitedResponseText(response, ASSIGNMENT_DETAIL_LIMITS.maxHtmlBytes);
 		if (html === null) return null;
 		const parsed = parseHtml(html);
 		const base = parsed.createElement("base");
@@ -237,35 +277,6 @@ function hasAllowedSubmissionTarget(element: HTMLElement, pageUrl: string): bool
 	} catch {
 		return false;
 	}
-}
-
-async function readLimitedHtml(response: Response, maximumBytes: number): Promise<string | null> {
-	const reader = response.body?.getReader();
-	if (!reader) return null;
-	const chunks: Uint8Array[] = [];
-	let length = 0;
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			if (!value || value.byteLength === 0) continue;
-			if (length + value.byteLength > maximumBytes) {
-				await reader.cancel();
-				return null;
-			}
-			chunks.push(value);
-			length += value.byteLength;
-		}
-	} finally {
-		reader.releaseLock();
-	}
-	const bytes = new Uint8Array(length);
-	let offset = 0;
-	for (const chunk of chunks) {
-		bytes.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return new TextDecoder().decode(bytes);
 }
 
 function isDisabled(element: HTMLElement): boolean {

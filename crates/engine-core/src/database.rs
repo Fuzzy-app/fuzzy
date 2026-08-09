@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::database::setup::relative_path_within_base;
 use crate::library::is_indexable_document;
-use crate::types::SearchDocumentMetadata;
 use crate::{
 	is_compatible_extension_version, EngineError, EngineResult, ExtensionRecoveryState,
 	ExtensionRecoveryStatus, ExtensionRuntimeObservation, ExtensionRuntimeReport,
@@ -24,9 +22,11 @@ mod exclusions;
 mod learning;
 mod library;
 mod missing;
+mod moodle_text;
 mod notifications;
 mod rules;
 mod saved_files;
+mod search;
 mod setup;
 mod sync;
 
@@ -36,18 +36,8 @@ pub use saved_files::{ExtractedFileRegistration, SavedZipSource};
 
 /// DBファイルパスのオーバーライドに使う環境変数。
 const DB_PATH_ENV: &str = "FUZZY_DB_PATH";
-/// 初回リリース前のSQLiteスキーマ世代。
-const SCHEMA_VERSION: i64 = 0;
-type SearchDocumentRecord = (
-	i64,
-	String,
-	Option<String>,
-	Option<i64>,
-	PathBuf,
-	Option<u32>,
-	Option<i64>,
-);
-
+/// 現在のSQLiteスキーマ世代。
+const SCHEMA_VERSION: i64 = 1;
 /// SQLite接続。接続時にFK有効化と初版スキーマの適用・検証を保証する。
 pub struct Database {
 	conn: Connection,
@@ -89,7 +79,11 @@ impl Database {
 			apply_schema(&mut conn, SCHEMA_SQL)?;
 		} else {
 			let version = schema_version(&conn)?;
-			validate_schema_generation(&conn, version)?;
+			if version == 0 {
+				migrate_schema_0_to_1(&mut conn)?;
+			} else {
+				validate_schema_generation(&conn, version)?;
+			}
 			validate_foreign_key_integrity(&conn)?;
 		}
 
@@ -512,60 +506,6 @@ impl Database {
 			.map_err(db_err)
 	}
 
-	/// 検索ヒットのファイル名・コース名をSQLiteの正本から取得する。
-	pub fn search_document_metadata(
-		&self,
-		file_id: i64,
-	) -> EngineResult<Option<SearchDocumentMetadata>> {
-		let record: Option<SearchDocumentRecord> = self
-			.conn
-			.query_row(
-				"SELECT files.id, files.original_name, courses.name,
-				        files.course_id, files.saved_path, search_index_meta.page_count,
-				        files.scan_modified_at_ns
-				 FROM files
-				 INNER JOIN search_index_meta ON search_index_meta.file_id = files.id
-				 LEFT JOIN courses ON courses.id = files.course_id
-				 WHERE files.id = ?1
-					AND files.missing_at IS NULL
-					AND files.excluded_at IS NULL",
-				[file_id],
-				|row| {
-					Ok((
-						row.get(0)?,
-						row.get(1)?,
-						row.get(2)?,
-						row.get(3)?,
-						PathBuf::from(row.get::<_, String>(4)?),
-						row.get(5)?,
-						row.get(6)?,
-					))
-				},
-			)
-			.optional()
-			.map_err(db_err)?;
-		let Some((file_id, file_name, course_name, course_id, saved_path, page_count, modified_at)) =
-			record
-		else {
-			return Ok(None);
-		};
-		let relative_path = self
-			.base_folder_path()
-			.ok()
-			.and_then(|base| relative_path_within_base(&saved_path, &base))
-			.map(|path| path.to_string_lossy().replace('\\', "/"))
-			.unwrap_or_else(|| file_name.clone());
-		Ok(Some(SearchDocumentMetadata {
-			file_id,
-			file_name,
-			course_id,
-			course_name,
-			relative_path,
-			page_count,
-			modified_at,
-		}))
-	}
-
 	/// 検索結果から明示的に開く資料の実体パスを検証して返す。
 	///
 	/// 検索結果の`file_id`だけを受け取り、SQLiteに登録された有効な資料であること、
@@ -770,6 +710,14 @@ const REQUIRED_COLUMN_SHAPES: &[(&str, &str, bool, i64)] = &[
 	("files", "downloaded_at", true, 0),
 	("files", "missing_at", false, 0),
 	("files", "excluded_at", false, 0),
+	("moodle_text_blocks", "id", false, 1),
+	("moodle_text_blocks", "course_id", true, 0),
+	("moodle_text_blocks", "block_key", true, 0),
+	("moodle_text_blocks", "title", true, 0),
+	("moodle_text_blocks", "body", true, 0),
+	("moodle_text_blocks", "normalized_body", true, 0),
+	("moodle_text_blocks", "moodle_url", true, 0),
+	("moodle_text_blocks", "updated_at", true, 0),
 	("duplicate_groups", "id", false, 1),
 	("duplicate_groups", "method", true, 0),
 	("duplicate_members", "group_id", true, 1),
@@ -818,6 +766,13 @@ const EXPECTED_FOREIGN_KEYS: &[(&str, &str, &str, &str, &str)] = &[
 	("excluded_folders", "course_id", "courses", "id", "CASCADE"),
 	("files", "course_id", "courses", "id", "SET NULL"),
 	(
+		"moodle_text_blocks",
+		"course_id",
+		"courses",
+		"id",
+		"CASCADE",
+	),
+	(
 		"duplicate_members",
 		"group_id",
 		"duplicate_groups",
@@ -855,6 +810,7 @@ fn validate_schema_shape(conn: &Connection) -> EngineResult<()> {
 		("course_rule_overrides", &["course_id"][..], false),
 		("files", &["saved_path"][..], false),
 		("notification_rules", &["offset_minutes"][..], false),
+		("moodle_text_blocks", &["course_id", "block_key"][..], false),
 	] {
 		require_unique_index(conn, table, columns, partial)?;
 	}
@@ -865,7 +821,12 @@ fn validate_schema_shape(conn: &Connection) -> EngineResult<()> {
 		&["course_id", "moodle_assignment_id"],
 		true,
 	)?;
-	for index in ["idx_assignments_active", "idx_files_missing"] {
+	for index in [
+		"idx_assignments_active",
+		"idx_files_missing",
+		"idx_moodle_text_blocks_course",
+		"idx_moodle_text_blocks_normalized",
+	] {
 		if index_exists(conn, index)? {
 			continue;
 		}
@@ -1282,6 +1243,19 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 			"excluded_at",
 		],
 	),
+	(
+		"moodle_text_blocks",
+		&[
+			"id",
+			"course_id",
+			"block_key",
+			"title",
+			"body",
+			"normalized_body",
+			"moodle_url",
+			"updated_at",
+		],
+	),
 	("duplicate_groups", &["id", "method", "created_at"]),
 	("duplicate_members", &["group_id", "file_id", "similarity"]),
 	(
@@ -1340,6 +1314,29 @@ const REQUIRED_TABLE_COLUMNS: &[(&str, &[&str])] = &[
 fn apply_schema(conn: &mut Connection, schema_sql: &str) -> EngineResult<()> {
 	let transaction = conn.transaction().map_err(db_err)?;
 	transaction.execute_batch(schema_sql).map_err(db_err)?;
+	transaction.commit().map_err(db_err)
+}
+
+fn migrate_schema_0_to_1(conn: &mut Connection) -> EngineResult<()> {
+	let transaction = conn.transaction().map_err(db_err)?;
+	transaction
+		.execute_batch(
+			"CREATE TABLE moodle_text_blocks (
+				id              INTEGER PRIMARY KEY AUTOINCREMENT,
+				course_id       INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+				block_key       TEXT NOT NULL,
+				title           TEXT NOT NULL,
+				body            TEXT NOT NULL,
+				normalized_body TEXT NOT NULL,
+				moodle_url      TEXT NOT NULL,
+				updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+				UNIQUE (course_id, block_key)
+			);
+			CREATE INDEX idx_moodle_text_blocks_course ON moodle_text_blocks(course_id);
+			CREATE INDEX idx_moodle_text_blocks_normalized ON moodle_text_blocks(normalized_body);
+			PRAGMA user_version = 1;",
+		)
+		.map_err(db_err)?;
 	transaction.commit().map_err(db_err)
 }
 
@@ -1597,6 +1594,28 @@ mod tests {
 			Database::from_connection(conn, None),
 			Err(EngineError::Database { .. })
 		));
+	}
+
+	#[test]
+	fn completed_v0_database_is_migrated_to_v1_without_losing_data() {
+		let mut conn = Connection::open_in_memory().unwrap();
+		apply_schema(&mut conn, SCHEMA_SQL).unwrap();
+		conn.execute_batch(
+			"DROP TABLE moodle_text_blocks;
+			 PRAGMA user_version = 0;
+			 INSERT INTO courses (moodle_course_id, name)
+			 VALUES ('moodle:moodle.example.jp:2026:350', 'アプリ演習');",
+		)
+		.unwrap();
+
+		let database = Database::from_connection(conn, None).unwrap();
+		assert_eq!(schema_version(database.conn()).unwrap(), 1);
+		let course_count: i64 = database
+			.conn()
+			.query_row("SELECT count(*) FROM courses", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(course_count, 1);
+		assert!(table_exists(database.conn(), "moodle_text_blocks").unwrap());
 	}
 
 	#[test]
@@ -2005,6 +2024,55 @@ mod tests {
 			.unwrap();
 		assert!(!database.has_unindexed_active_documents().unwrap());
 		assert!(!database.has_indexed_active_documents().unwrap());
+	}
+
+	#[test]
+	fn loads_search_metadata_in_one_batch_and_excludes_paths_outside_the_root() {
+		let database = Database::open_in_memory().unwrap();
+		let base = std::env::temp_dir().join("fuzzy-search-metadata-root");
+		let outside = std::env::temp_dir().join("fuzzy-search-metadata-outside.pdf");
+		database
+			.conn()
+			.execute(
+				"INSERT INTO app_settings (key, value) VALUES ('base_folder_path', ?1)",
+				[base.to_string_lossy().as_ref()],
+			)
+			.unwrap();
+		for (file_id, name, path) in [
+			(41, "第一回.pdf", base.join("授業/第一回.pdf")),
+			(42, "第二回.pdf", base.join("授業/第二回.pdf")),
+			(43, "範囲外.pdf", outside),
+		] {
+			database
+				.conn()
+				.execute(
+					"INSERT INTO files (
+						id, original_name, saved_path, size_bytes, hash_blake3
+					 ) VALUES (?1, ?2, ?3, 1, ?4)",
+					params![
+						file_id,
+						name,
+						path.to_string_lossy().as_ref(),
+						format!("b3:{file_id:064x}")
+					],
+				)
+				.unwrap();
+			database.mark_search_indexed(file_id, Some(2)).unwrap();
+		}
+
+		let metadata = database
+			.search_document_metadata_batch(&[42, 41, 42, 43])
+			.unwrap();
+
+		assert_eq!(metadata.keys().copied().collect::<Vec<_>>(), vec![41, 42]);
+		assert_eq!(metadata[&41].relative_path, "授業/第一回.pdf");
+		assert!(database.search_document_metadata(43).unwrap().is_none());
+		assert_eq!(
+			database
+				.search_document_ids_in_scope(None, Some("授業"))
+				.unwrap(),
+			vec![41, 42]
+		);
 	}
 
 	#[test]
