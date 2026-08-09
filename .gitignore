@@ -32,8 +32,7 @@ bun-debug.log*
 # ローカル作業用の一時ファイル
 /.codex-*-gitconfig
 /tmp/
-/presentation/work/
-*.pptx.inspect.ndjson
+/presentation/
 
 # OS / エディタ
 .DS_Store
