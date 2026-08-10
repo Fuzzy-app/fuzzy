@@ -29,10 +29,13 @@ export function ensureShellStyle(): void {
 			filter: none !important;
 		}
 
-		/* Moodle本文側のページ見出しはFuzzyと重ねない。右上の通知・メッセージ・
-		   ユーザーメニューは下の.navbarに属するため、ここを隠しても操作できる。 */
+		/* Moodle本文側のページ見出しとコース固有ナビはFuzzyと重ねない。
+		   右上の通知・メッセージ・ユーザーメニューとFuzzy入口は下の.navbarに
+		   属するため、グローバルナビだけを残す。 */
 		body.fuzzy-shell-open #page-header,
-		body.fuzzy-shell-open #page-navbar {
+		body.fuzzy-shell-open #page-navbar,
+		body.fuzzy-shell-open .secondary-navigation,
+		body.fuzzy-shell-open .tertiary-navigation {
 			display: none !important;
 		}
 
