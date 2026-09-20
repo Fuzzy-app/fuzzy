@@ -48,7 +48,7 @@ docs/*      ドキュメント
 
 - インデントは **タブ**（スペース禁止。`.editorconfig` 準拠）
 - 改行コードは **LF**
-- コミット前に `bun run build`（`bun run check` の自動整形＋`bun run typecheck`）を通す。TS/JS/JSONはBiome、`.svelte`はPrettier
+- コミット前に `bun run build`（自動整形・型チェック・テスト・site／extension／desktopのビルド）を通す。TS/JS/JSONはBiome、`.svelte`はPrettier
 - Rust側は `bun run fmt:rust` / `bun run lint:rust`（clippy `-D warnings`）
 - ドキュメント・コードコメントは日本語（既存ファイルの言語に合わせる）
 - 生成物 `packages/shared/src/generated/` は手編集しない

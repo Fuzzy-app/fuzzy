@@ -24,9 +24,6 @@ function phaseTitle(progress: LibraryMaintenanceProgress | null): string {
 			if (progress.state === "failed") {
 				return "資料情報を準備できませんでした";
 			}
-			if (progress.state === "completedWithWarnings") {
-				return "完了しました";
-			}
 			return "完了しました";
 	}
 }

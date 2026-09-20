@@ -1,4 +1,5 @@
 import type { ExtensionRuntimeObservation, ExtensionSetupStatus } from "@fuzzy/shared";
+import { invoke } from "@tauri-apps/api/core";
 import distributionConfig from "../../../distribution.config.json";
 
 export type ExtensionInstallChannel = "bundled" | "store";
@@ -202,7 +203,6 @@ export async function openExtensionInstallDestinationClient(
 
 export async function createStatusRuntime(): Promise<ExtensionStatusRuntime | null> {
 	if (!isTauriRuntime()) return null;
-	const { invoke } = await import("@tauri-apps/api/core");
 	return { invoke };
 }
 

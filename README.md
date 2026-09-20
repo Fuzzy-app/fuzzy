@@ -18,7 +18,8 @@ Moodle の授業資料を自動整理し、課題・締切を一元化する学�
 apps/
 ├── extension/    ブラウザ拡張（WXT / Svelte / TS）。初期セットアップ以外のほぼ全画面
 ├── desktop/      初期セットアップ・拡張機能復旧確認用 Tauri アプリ（src=UI、src-tauri=Tauri側Rust）
-└── native-host/  Native Messaging ホスト（Rust・GUIなし・常駐エンジン）
+├── native-host/  Native Messaging ホスト（Rust・GUIなし・常駐エンジン）
+└── site/         一般利用者向けの公開サイト・プライバシー方針（Vite）
 crates/
 └── engine-core/  走査・ルール照合・全文索引・重複検出など、desktop/native-host 共有のRustロジック
 packages/
@@ -42,7 +43,7 @@ docs/
 
 - Bun >= 1.1
 - Rust（rustup）＋ Tauri の前提パッケージ（Microsoft C++ Build Tools, WebView2）
-- VS Code（`.vscode/extensions.json` の推奨拡張が自動提案されます）
+- VS Code（`apps/desktop`・`apps/extension` を開くと、それぞれの `.vscode/extensions.json` にある推奨拡張が提案されます）
 
 インストール手順の詳細は [`docs/セットアップ.md`](docs/セットアップ.md) を参照。
 
@@ -73,7 +74,7 @@ docs/
 
 ## コーディング規約
 
-- インデントは **タブ**（`.editorconfig` で全エディタに適用。VS Code は `.vscode/settings.json` でスペース無効）
+- インデントは **タブ**（`.editorconfig` で定義。エディタのEditorConfig対応を有効にする。YAMLはスペース2文字）
 - 改行コードは **LF**（`.gitattributes` で正規化。Windows 混在でも安全）
 - コミット前に `bun run build` を実行して整形・型エラーを解消する
 - 生成物 `packages/shared/src/generated/` は **手で編集しない**（ts-rs が Rust から生成）
