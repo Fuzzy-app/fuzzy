@@ -8,7 +8,7 @@ Moodle の授業資料を自動整理し、課題・締切を一元化する学�
 
 現在は公開審査前です。ローカルテスト成果物は`dist/Fuzzy-<version>-windows/`へ生成され、通常の確認には最上位の`Fuzzy-Setup.exe`を使います。`QA-確認用/`は開発・審査専用です。正式公開には、Windowsコード署名とブラウザストアの公開URL・拡張機能IDの設定が別途必要です。
 
-別PCでの動作確認には、未署名の[Fuzzy v0.1.1-qa.1 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.1-qa.1)を使用します。これは正式版ではありません。参加方法と注意事項は[QAプレリリースの試し方](docs/公開ガイド/QAプレリリース.md)を参照してください。
+別PCでの動作確認には、未署名の[Fuzzy v0.1.2-qa.1 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.2-qa.1)を使用します。これは正式版ではありません。参加方法と注意事項は[QAプレリリースの試し方](docs/公開ガイド/QAプレリリース.md)を参照してください。
 
 公開責任者、ストア申請担当、Windows配布担当、QA担当、一般利用者向けの手順は、役割別の[`docs/公開ガイド/`](docs/公開ガイド/README.md)を参照してください。
 
@@ -80,16 +80,19 @@ docs/
 - 生成物 `packages/shared/src/generated/` は **手で編集しない**（ts-rs が Rust から生成）
 - UI変更では [`docs/UIデザインシステム.md`](docs/UIデザインシステム.md) と共通theme tokenを使用し、アプリ固有コードへ色リテラルを追加しない
 
-## 担当（機能＝担当）
+## 開発体制
+
+現在は単独開発として全領域を管理する。以下はチーム開発時の担当履歴であり、現在の変更に旧担当者の承認は必要ない。
 
 - subaru: API定義（Native Messaging・Tauriコマンド・ts-rs型方針）、DB定義、`crates/engine-core`、`apps/native-host`、`packages/shared`、`docs/api/contract.md`
 - matoba: `apps/extension` の資料保存UI（保存先サジェスト・一括DL・ZIP提案）
 - okaji: `apps/desktop`（初期セットアップ画面）、`apps/extension` のルール管理・整合性チェック画面（カスタムルール・コース別例外・違反警告）
 - hirase: `apps/extension` の活用UI（横断検索・締切ハブ・ダッシュボード・カレンダー連携・通知）
-- 接点: 拡張⇄ホスト間のAPI（`packages/shared` の型と `docs/api/contract.md`）。変更は PR で相談
+- 接点: 拡張⇄ホスト間のAPI（`packages/shared` の型と `docs/api/contract.md`）。変更内容と互換性への影響をPRへ記録する
 
 ## GitHub運用
 
 - gitフローで開発
-- main は保護。作業は `issue<番号>` ブランチ（例: `issue33`。対応するissueの番号を付ける） → PR → 1人レビュー → CI 通過後にマージ。
+- main は保護。作業は `issue<番号>` ブランチ（例: `issue33`。対応するissueの番号を付ける） → PR → 本人による差分確認 → 必須CI通過・会話解決後にSquash merge。他者の承認は必須にしない。
+- GitHubの `Settings → Rules → Rulesets → Protect main` で運用する。承認人数は0とし、コードオーナー承認・最終push者以外の承認は要求しない。PR必須、最新mainに対する`verify`成功、直線的な履歴、mainの削除・force push禁止は維持する。
 - コミットメッセージは [`.github/COMMIT_MESSAGE_TEMPLATE.md`](.github/COMMIT_MESSAGE_TEMPLATE.md) に従ってください。

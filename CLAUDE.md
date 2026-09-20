@@ -55,10 +55,12 @@ docs/*      ドキュメント
 
 ## 開発フロー
 
-- `main` は保護ブランチ。作業は `issue<番号>` 形式のブランチ（例: `issue33`。対応するissueの番号を付ける）を切り、PR → 1人レビュー → CI通過後にマージ
-- 拡張⇄ホスト間API（`packages/shared`の型・`docs/api/contract.md`）を変更する場合はPRで相談（README記載の「接点」ルール）
+- `main` は保護ブランチ。作業は `issue<番号>` 形式のブランチ（例: `issue33`。対応するissueの番号を付ける）を切り、PR → 本人による差分確認 → 必須CI通過・会話解決後にSquash merge。他者の承認は必須にしない
+- 拡張⇄ホスト間API（`packages/shared`の型・`docs/api/contract.md`）を変更する場合は、変更内容と互換性への影響をPRへ記録する（README記載の「接点」ルール）
 
 ## 担当（機能＝担当。README.mdが正）
+
+現在は単独開発として全領域を管理する。以下は旧チームの担当履歴であり、旧担当者の承認は必要ない。
 
 - subaru: API定義・DB定義・`crates/engine-core`・`apps/native-host`・`packages/shared`・`docs/api/contract.md`
 - matoba: `apps/extension` の資料保存UI（保存先サジェスト・一括DL・ZIP提案）
@@ -67,7 +69,7 @@ docs/*      ドキュメント
 
 ## AIが作業する際の注意
 
-1. 既存の本実装を雛形やスタブと誤認して置き換えない。実装を変更する際は、対応するissueの担当者・完了条件と現在のテストを確認する。他人の担当領域に踏み込む場合は必ずユーザーに確認する
+1. 既存の本実装を雛形やスタブと誤認して置き換えない。実装を変更する際は、対応するissueの完了条件と現在のテストを確認する。単独開発のため、旧チームの担当境界だけを理由に作業を止めない
 2. 型定義・APIコマンド・DBスキーマは3点（`packages/shared/src/types.ts`・`docs/api/contract.md`・`crates/engine-core/fixtures/schema.sql`）の整合を必ず確認する
 3. 仕様に無い自動実行系の機能（自動移動・自動削除・外部送信等）を提案・実装しない
 4. 既存のサンプルデータ（6科目：情報アーキテクチャ・データベース・離散数学・アプリ演習・認知科学概論・英語IIB）の世界観に合わせてテストデータを作る
