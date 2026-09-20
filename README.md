@@ -8,7 +8,7 @@ Moodle の授業資料を自動整理し、課題・締切を一元化する学�
 
 現在は公開審査前です。ローカルテスト成果物は`dist/Fuzzy-<version>-windows/`へ生成され、通常の確認には最上位の`Fuzzy-Setup.exe`を使います。`QA-確認用/`は開発・審査専用です。正式公開には、Windowsコード署名とブラウザストアの公開URL・拡張機能IDの設定が別途必要です。
 
-別PCでの動作確認には、未署名の[Fuzzy v0.1.0-qa.4 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.0-qa.4)を使用します。これは正式版ではありません。参加方法と注意事項は[QAプレリリースの試し方](docs/公開ガイド/QAプレリリース.md)を参照してください。
+別PCでの動作確認には、未署名の[Fuzzy v0.1.1-qa.1 Pre-release](https://github.com/Fuzzy-app/fuzzy/releases/tag/v0.1.1-qa.1)を使用します。これは正式版ではありません。参加方法と注意事項は[QAプレリリースの試し方](docs/公開ガイド/QAプレリリース.md)を参照してください。
 
 公開責任者、ストア申請担当、Windows配布担当、QA担当、一般利用者向けの手順は、役割別の[`docs/公開ガイド/`](docs/公開ガイド/README.md)を参照してください。
 

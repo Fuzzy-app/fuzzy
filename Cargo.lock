@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "engine-core",
  "serde",
@@ -1383,7 +1383,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "engine-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "lopdf",
@@ -2859,7 +2859,7 @@ checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 
 [[package]]
 name = "native-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "engine-core",
