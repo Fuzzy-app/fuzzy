@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 type CargoMetadata = {
 	target_directory?: unknown;
 };
@@ -19,4 +21,3 @@ export async function cargoTargetDirectory(repositoryDirectory: string): Promise
 	}
 	return metadata.target_directory;
 }
-import { isAbsolute } from "node:path";

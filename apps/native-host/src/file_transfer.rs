@@ -15,8 +15,8 @@ use tempfile::NamedTempFile;
 
 use crate::api_types::{
 	AppendCheckSimilarFileChunkRequest, AppendSaveFileChunkRequest, BeginCheckSimilarFileRequest,
-	BeginSaveFilesRequest, SaveFileDescriptor, SaveFileFailure, SaveFileFailureCode,
-	SaveFilesResult,
+	BeginSaveFilesRequest, SaveConflictPolicy, SaveFileDescriptor, SaveFileFailure,
+	SaveFileFailureCode, SaveFilesResult,
 };
 
 const MAX_ACTIVE_TRANSFERS: usize = 4;
@@ -89,6 +89,7 @@ impl Drop for ExtractedZipFiles {
 struct PendingTransfer {
 	target_path: PathBuf,
 	course_id: Option<i64>,
+	conflict_policy: SaveConflictPolicy,
 	files: HashMap<String, PendingFile>,
 }
 
@@ -985,6 +986,7 @@ impl FileTransferManager {
 			PendingTransfer {
 				target_path,
 				course_id: request.course_id,
+				conflict_policy: request.conflict_policy,
 				files,
 			},
 		);
@@ -1109,8 +1111,23 @@ impl FileTransferManager {
 				continue;
 			}
 
-			let destination = target_path.join(&file.descriptor.file_name);
-			if destination.exists() {
+			let requested_destination = target_path.join(&file.descriptor.file_name);
+			let destination = match transfer.conflict_policy {
+				SaveConflictPolicy::Skip => requested_destination,
+				SaveConflictPolicy::Rename => {
+					match available_renamed_destination(&requested_destination) {
+						Ok(destination) => destination,
+						Err(_) => {
+							failed_files.push(SaveFileFailure {
+								file_id,
+								code: SaveFileFailureCode::IoError,
+							});
+							continue;
+						}
+					}
+				}
+			};
+			if transfer.conflict_policy == SaveConflictPolicy::Skip && destination.exists() {
 				failed_files.push(SaveFileFailure {
 					file_id,
 					code: SaveFileFailureCode::AlreadyExists,
@@ -1220,6 +1237,45 @@ impl FileTransferManager {
 	fn active_transfer_count(&self) -> usize {
 		self.transfers.len() + self.similarity_transfers.len()
 	}
+}
+
+fn available_renamed_destination(requested: &Path) -> std::io::Result<PathBuf> {
+	match std::fs::symlink_metadata(requested) {
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+			return Ok(requested.to_path_buf());
+		}
+		Err(error) => return Err(error),
+		Ok(_) => {}
+	}
+	let parent = requested.parent().ok_or_else(|| {
+		std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			"保存先の親を解決できません",
+		)
+	})?;
+	let stem = requested
+		.file_stem()
+		.and_then(|value| value.to_str())
+		.ok_or_else(|| {
+			std::io::Error::new(std::io::ErrorKind::InvalidInput, "ファイル名が不正です")
+		})?;
+	let extension = requested.extension().and_then(|value| value.to_str());
+	for suffix in 2..=1_000 {
+		let file_name = match extension {
+			Some(extension) => format!("{stem} ({suffix}).{extension}"),
+			None => format!("{stem} ({suffix})"),
+		};
+		let candidate = parent.join(file_name);
+		match std::fs::symlink_metadata(&candidate) {
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+			Err(error) => return Err(error),
+			Ok(_) => {}
+		}
+	}
+	Err(std::io::Error::new(
+		std::io::ErrorKind::AlreadyExists,
+		"別名の保存先を確保できません",
+	))
 }
 
 fn decode_chunk(data_base64: &str) -> EngineResult<Vec<u8>> {
@@ -2154,6 +2210,7 @@ mod tests {
 			transfer_id: transfer_id.to_string(),
 			target_path: target.to_string_lossy().into_owned(),
 			course_id: None,
+			conflict_policy: SaveConflictPolicy::Skip,
 			files: vec![SaveFileDescriptor {
 				file_id: "file-1".to_string(),
 				file_name: file_name.to_string(),

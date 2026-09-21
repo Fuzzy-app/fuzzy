@@ -86,18 +86,18 @@ QA用ファイルを一般利用者向けダウンロードとして案内しま
 
 公開審査前QA版:
 
-- Tag: `v0.1.1-qa.1`
-- Release title: `Fuzzy v0.1.1-qa.1 — QAプレリリース（未署名）`
+- Tag: `v0.1.2-qa.1`
+- Release title: `Fuzzy v0.1.2-qa.1 — QAプレリリース（未署名）`
 - Pre-releaseとして作成し、Latest releaseにはしない
 - Asset: `Fuzzy-Setup.exe`
-- Asset: `Fuzzy-0.1.1-qa.1-windows-unsigned.zip`
+- Asset: `Fuzzy-0.1.2-qa.1-windows-unsigned.zip`
 - Asset: `SHA256SUMS.txt`
 - Release本文とAsset名の両方で未署名・QA専用と明示する
 
 初回正式版:
 
-- Tag: `v0.1.1`
-- Release title: `Fuzzy v0.1.1`
+- Tag: `v0.1.2`
+- Release title: `Fuzzy v0.1.2`
 - Asset: `Fuzzy-Setup.exe`
 - Asset: `SHA256SUMS.txt`
 - 必要に応じて署名検証情報、SBOM、第三者ライセンス一覧

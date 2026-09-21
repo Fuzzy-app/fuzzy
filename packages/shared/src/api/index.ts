@@ -1,4 +1,4 @@
-import { ApiError, type FuzzyApiClient } from "./client";
+import { ApiError } from "./client";
 import { NativeApiClient } from "./nativeClient";
 
 export type { FuzzyApiClient } from "./client";

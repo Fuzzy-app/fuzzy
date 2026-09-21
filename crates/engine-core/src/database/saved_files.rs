@@ -459,14 +459,14 @@ impl Database {
 		matches
 			.iter()
 			.map(|matched| {
-				let original_name = self
+				let (original_name, size_bytes) = self
 					.conn
 					.query_row(
-						"SELECT original_name
+						"SELECT original_name, size_bytes
 						 FROM files
 						 WHERE id = ?1 AND missing_at IS NULL AND excluded_at IS NULL",
 						[matched.file_id],
-						|row| row.get::<_, String>(0),
+						|row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
 					)
 					.optional()
 					.map_err(db_err)?
@@ -477,7 +477,9 @@ impl Database {
 				Ok(SimilarFileRecord {
 					file_id: matched.file_id,
 					original_name,
+					size_bytes,
 					similarity: matched.similarity,
+					exact: matched.exact,
 				})
 			})
 			.collect()

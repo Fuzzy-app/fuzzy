@@ -1,5 +1,5 @@
 import { RULE_SEGMENT_KINDS, type StructuredRuleSegment } from "@fuzzy/shared";
-import { isTauriRuntime } from "./extension-install";
+import { createStatusRuntime } from "./extension-install";
 import { parseLibraryMaintenanceSummary } from "./library-maintenance";
 import type { LibraryMaintenanceSummary } from "./library-maintenance";
 import type {
@@ -211,9 +211,7 @@ export const previewSetupAdapter: SetupRuntime = {
 };
 
 async function createSetupRuntime(): Promise<SetupRuntime> {
-	if (!isTauriRuntime()) return previewSetupAdapter;
-	const { invoke } = await import("@tauri-apps/api/core");
-	return { invoke };
+	return (await createStatusRuntime()) ?? previewSetupAdapter;
 }
 
 export function parsePatternCandidates(value: unknown): PatternCandidate[] | null {

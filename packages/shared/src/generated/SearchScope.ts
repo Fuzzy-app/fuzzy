@@ -9,6 +9,10 @@ export type SearchScope = {
    */
   courseId: number | null;
   /**
+   * SQLite上の複数コースIDを1要求で絞り込む。
+   */
+  courseIds: Array<number> | null;
+  /**
    * 保存ルートからの相対フォルダーで絞り込む。
    */
   folder: string | null;

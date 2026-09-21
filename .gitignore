@@ -23,11 +23,26 @@ apps/desktop/src-tauri/gen/
 *.db
 *.sqlite
 *.sqlite3
+# SQLiteのトランザクション用補助ファイルにも実データが含まれる
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
 /data/
 
 # ログ
 *.log
 bun-debug.log*
+
+# ローカル作業用の一時ファイル
+/.codex-*-gitconfig
+/tmp/
+/presentation/
 
 # OS / エディタ
 .DS_Store

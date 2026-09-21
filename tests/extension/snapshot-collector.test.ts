@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { parseHTML } from "linkedom";
 import type { MoodleFileLink } from "../../apps/extension/src/lib/moodle/pageSnapshot";
 import {
 	type ResolvedMoodleFileMetadata,
+	collectMoodlePageSnapshotWithNestedFolders,
 	resolveMissingMimeHints,
 } from "../../apps/extension/src/lib/moodle/snapshotCollector";
 
@@ -198,6 +200,55 @@ describe("未判定MIMEのHEAD補完", () => {
 		expect(first).toEqual([external]);
 		expect(second).toEqual([{ ...sameOrigin, title: "資料1.pdf", mimeHint: "pdf" }, external]);
 		expect(requestCount).toBe(3);
+	});
+});
+
+describe("Moodleフォルダーページの安全な収集", () => {
+	test("入れ子収集全体で同時4ページまでに制限する", async () => {
+		const originalFetch = globalThis.fetch;
+		const originalDocument = globalThis.document;
+		const originalDomParser = globalThis.DOMParser;
+		const originalLocation = globalThis.location;
+		const links = Array.from(
+			{ length: 60 },
+			(_, index) => `<a href="${ORIGIN}/mod/folder/view.php?id=${index}">folder ${index}</a>`,
+		).join("");
+		const { document, window } = parseHTML(`<html><body><main>${links}</main></body></html>`);
+		let active = 0;
+		let maximumActive = 0;
+		let requestCount = 0;
+		try {
+			Object.assign(globalThis, {
+				document,
+				DOMParser: window.DOMParser,
+				location: new URL(`${ORIGIN}/course/view.php?id=1`),
+				fetch: async () => {
+					requestCount += 1;
+					active += 1;
+					maximumActive = Math.max(maximumActive, active);
+					await new Promise((resolve) => setTimeout(resolve, 2));
+					active -= 1;
+					return new Response("<html><body><main></main></body></html>", {
+						status: 200,
+						headers: { "content-type": "text/html" },
+					});
+				},
+			});
+
+			await collectMoodlePageSnapshotWithNestedFolders(document, {
+				resolveMimeHints: false,
+			});
+
+			expect(requestCount).toBe(50);
+			expect(maximumActive).toBeLessThanOrEqual(4);
+		} finally {
+			Object.assign(globalThis, {
+				fetch: originalFetch,
+				document: originalDocument,
+				DOMParser: originalDomParser,
+				location: originalLocation,
+			});
+		}
 	});
 });
 

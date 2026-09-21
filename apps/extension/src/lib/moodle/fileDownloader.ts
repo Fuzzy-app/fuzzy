@@ -23,6 +23,8 @@ export interface MoodleFileDownloadOptions {
 	maxFileBytes?: number;
 	maxTransferBytes?: number;
 	concurrency?: number;
+	/** 直前の保存前照合で取得済みの内容を、同じ保存操作へ一度だけ再利用する。 */
+	reusePreparedFile?: (file: MoodleFileMeta) => SaveFilePayload | null;
 }
 
 export interface PreparedSaveFiles {
@@ -57,6 +59,18 @@ export async function downloadMoodleFiles(
 			const file = files[index];
 			if (!file) return;
 			const fileId = transferFileId(file);
+			const reused = options.reusePreparedFile?.(file) ?? null;
+			if (
+				reused &&
+				reused.fileId === fileId &&
+				reused.byteLength > 0 &&
+				reused.byteLength <= maxFileBytes &&
+				budget.used + reused.byteLength <= budget.maximum
+			) {
+				budget.used += reused.byteLength;
+				prepared[index] = reused;
+				continue;
+			}
 			const downloaded = await downloadFile(
 				file,
 				pageOrigin,
@@ -83,6 +97,7 @@ export async function downloadMoodleFiles(
 		request: {
 			targetPath: request.targetPath,
 			courseId: request.courseId,
+			conflictPolicy: request.conflictPolicy,
 			files: prepared.filter((file): file is SaveFilePayload => file !== null),
 		},
 		failedFiles,

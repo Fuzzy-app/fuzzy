@@ -88,6 +88,36 @@ describe("コースフォルダ名のbackground API中継", () => {
 			hasValidFuzzyApiRequestPayload({
 				type: FUZZY_API_MESSAGE_TYPE,
 				method: "search",
+				request: {
+					query: "正規化",
+					scope: { courseId: null, courseIds: [2, 9], folder: null },
+				},
+			}),
+		).toBe(true);
+		expect(
+			hasValidFuzzyApiRequestPayload({
+				type: FUZZY_API_MESSAGE_TYPE,
+				method: "search",
+				request: {
+					query: "正規化",
+					scope: { courseId: 2, courseIds: [2, 9], folder: null },
+				},
+			}),
+		).toBe(false);
+		expect(
+			hasValidFuzzyApiRequestPayload({
+				type: FUZZY_API_MESSAGE_TYPE,
+				method: "search",
+				request: {
+					query: "正規化",
+					scope: { courseId: null, courseIds: [2, 2], folder: null },
+				},
+			}),
+		).toBe(false);
+		expect(
+			hasValidFuzzyApiRequestPayload({
+				type: FUZZY_API_MESSAGE_TYPE,
+				method: "search",
 				request: { query: "検".repeat(257) },
 			}),
 		).toBe(false);

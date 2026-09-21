@@ -30,8 +30,11 @@ export type { RuleViolationListItem } from "./generated/RuleViolationListItem";
 export type { SearchRequest } from "./generated/SearchRequest";
 export type { SearchScope } from "./generated/SearchScope";
 export type { SearchResult } from "./generated/SearchResult";
+export type { SearchResultSource } from "./generated/SearchResultSource";
 export type { SyncMoodleAssignmentRequest } from "./generated/SyncMoodleAssignmentRequest";
 export type { SyncMoodleAssignmentsRequest } from "./generated/SyncMoodleAssignmentsRequest";
+export type { SyncMoodleTextBlockRequest } from "./generated/SyncMoodleTextBlockRequest";
+export type { SyncMoodleTextBlocksRequest } from "./generated/SyncMoodleTextBlocksRequest";
 export type { SyncMoodleCourseRequest } from "./generated/SyncMoodleCourseRequest";
 export type { UpdateCourseFolderNameRequest } from "./generated/UpdateCourseFolderNameRequest";
 export type { UpdateCourseFolderNameResult } from "./generated/UpdateCourseFolderNameResult";
@@ -51,6 +54,8 @@ export interface SimilarFileMatch {
 	fileId: number;
 	originalName: string;
 	similarity: number;
+	/** BLAKE3が一致した、内容が同一のファイル。類似度の丸め値とは区別する。 */
+	exact: boolean;
 }
 
 export interface SaveSuggestion {
@@ -147,15 +152,21 @@ export interface SuggestSavePathRequest {
 
 export interface CheckSimilarFilesRequest {
 	fileMeta: MoodleFileMeta;
+	/** 保存予定コース。類似候補はこのコース内だけに閉じる。 */
+	courseId?: number | null;
 	/** backgroundが認証付き取得後にnative-hostへ渡す。content scriptからは指定しない。 */
 	contentBase64?: string;
 }
+
+export type SaveConflictPolicy = "skip" | "rename";
 
 /** content scriptからbackgroundへ渡す、認証付き取得前の保存要求。 */
 export interface MoodleSaveFilesRequest {
 	files: MoodleFileMeta[];
 	targetPath: string;
 	courseId: number | null;
+	/** 同名ファイルがある場合の安全な扱い。上書きは行わない。 */
+	conflictPolicy?: SaveConflictPolicy;
 }
 
 /** backgroundがMoodleから取得し、native-hostへ分割転送する1ファイル。 */
@@ -172,6 +183,7 @@ export interface SaveFilesRequest {
 	files: SaveFilePayload[];
 	targetPath: string;
 	courseId: number | null;
+	conflictPolicy?: SaveConflictPolicy;
 }
 
 export interface SaveFileFailure {
@@ -314,4 +326,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 0 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 8 as const;

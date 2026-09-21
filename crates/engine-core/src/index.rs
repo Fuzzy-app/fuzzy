@@ -11,7 +11,7 @@ use crate::error::{EngineError, EngineResult};
 use crate::types::SearchHit;
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
-use tantivy::query::QueryParser;
+use tantivy::query::{BooleanQuery, Occur, Query, QueryParser, TermSetQuery};
 use tantivy::schema::{
 	Field, IndexRecordOption, Schema, TantivyDocument, TextFieldIndexing, TextOptions, Value,
 	INDEXED, STORED,
@@ -20,6 +20,7 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term};
 use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
 mod extraction;
 
@@ -29,8 +30,17 @@ const INDEX_PATH_ENV: &str = "FUZZY_INDEX_PATH";
 const TOKENIZER_NAME: &str = "fuzzy_ngram";
 const INDEX_WRITER_MEMORY_BYTES: usize = 20_000_000;
 const TRANSIENT_INDEX_IO_ATTEMPTS: usize = 8;
-const ASSIGNMENT_KEYWORD_PATTERN: &str =
-	"課題 レポート 提出 締切 期限 小テスト assignment report deadline due quiz";
+const ASSIGNMENT_INSTRUCTION_PATTERNS: &[&str] = &[
+	"提出してください",
+	"提出すること",
+	"moodleに提出",
+	"課題を提出",
+	"レポートを提出",
+	"提出期限",
+	"提出締切",
+	"uploadyoursubmission",
+	"submityourassignment",
+];
 const TRANSIENT_INDEX_IO_DELAY: Duration = Duration::from_millis(20);
 const MAX_EXTRACTION_WORKERS: usize = 4;
 
@@ -61,6 +71,30 @@ pub trait IndexEngine {
 
 	/// クエリ文字列で全文検索し、スコア順のヒットを返す。
 	fn search(&self, query: &str, limit: usize) -> EngineResult<Vec<SearchHit>>;
+
+	/// 許可されたファイルIDの範囲内だけを全文検索する。
+	///
+	/// 既定実装はテスト用・代替実装との互換性のため取得後に絞る。
+	/// Tantivy実装は上位件数を決める前に索引クエリへ範囲を組み込む。
+	fn search_scoped(
+		&self,
+		query: &str,
+		limit: usize,
+		allowed_file_ids: Option<&[i64]>,
+	) -> EngineResult<Vec<SearchHit>> {
+		let hits = self.search(query, limit)?;
+		let Some(allowed_file_ids) = allowed_file_ids else {
+			return Ok(hits);
+		};
+		let allowed_file_ids = allowed_file_ids
+			.iter()
+			.copied()
+			.collect::<std::collections::BTreeSet<_>>();
+		Ok(hits
+			.into_iter()
+			.filter(|hit| allowed_file_ids.contains(&hit.file_id))
+			.collect())
+	}
 }
 
 /// Tantivyの永続索引を使う既定実装。
@@ -256,6 +290,15 @@ impl IndexEngine for DefaultIndexEngine {
 	}
 
 	fn search(&self, query: &str, limit: usize) -> EngineResult<Vec<SearchHit>> {
+		self.search_scoped(query, limit, None)
+	}
+
+	fn search_scoped(
+		&self,
+		query: &str,
+		limit: usize,
+		allowed_file_ids: Option<&[i64]>,
+	) -> EngineResult<Vec<SearchHit>> {
 		let query = normalize_search_text(query);
 		if query.is_empty() {
 			return Err(EngineError::InvalidInput {
@@ -273,8 +316,26 @@ impl IndexEngine for DefaultIndexEngine {
 		let searcher = self.reader.searcher();
 		let parser = QueryParser::for_index(&self.index, vec![self.body_field]);
 		let parsed_query = parser.parse_query(&query).map_err(index_err)?;
+		let parsed_query: Box<dyn Query> = match allowed_file_ids {
+			Some([]) => return Ok(Vec::new()),
+			Some(allowed_file_ids) => {
+				let allowed_terms = allowed_file_ids.iter().filter_map(|file_id| {
+					u64::try_from(*file_id)
+						.ok()
+						.map(|file_id| Term::from_field_u64(self.file_id_field, file_id))
+				});
+				Box::new(BooleanQuery::from(vec![
+					(Occur::Must, parsed_query),
+					(Occur::Must, Box::new(TermSetQuery::new(allowed_terms))),
+				]))
+			}
+			None => parsed_query,
+		};
 		let top_docs = searcher
-			.search(&parsed_query, &TopDocs::with_limit(limit).order_by_score())
+			.search(
+				parsed_query.as_ref(),
+				&TopDocs::with_limit(limit).order_by_score(),
+			)
 			.map_err(index_err)?;
 		let mut snippet_generator =
 			SnippetGenerator::create(&searcher, parsed_query.as_ref(), self.body_field)
@@ -313,9 +374,9 @@ impl IndexEngine for DefaultIndexEngine {
 fn extracted_document_contains_assignment_keyword(document: &ExtractedDocument) -> bool {
 	document.pages.iter().any(|page| {
 		let normalized = normalize_search_text(&page.text);
-		ASSIGNMENT_KEYWORD_PATTERN
-			.split_whitespace()
-			.any(|keyword| normalized.contains(keyword))
+		ASSIGNMENT_INSTRUCTION_PATTERNS
+			.iter()
+			.any(|pattern| normalized.contains(pattern))
 	})
 }
 
@@ -455,6 +516,42 @@ pub fn normalize_search_text(value: &str) -> String {
 		.flat_map(char::to_lowercase)
 		.filter(|character| character.is_alphanumeric())
 		.collect()
+}
+
+/// 検索用に正規化した一致位置を、表示用原文のUTF-8バイト範囲へ戻す。
+///
+/// 正規化後の文字列だけで位置を探すと、全角文字・結合文字・除去した空白の分だけ
+/// 原文との位置がずれる。この関数は各書記素の原文範囲を保持して同じ正規化を行い、
+/// 抜粋表示が原文の表記を失わないようにする。
+pub fn search_match_byte_range(value: &str, query: &str) -> Option<std::ops::Range<usize>> {
+	let normalized_query = normalize_search_text(query);
+	if normalized_query.is_empty() {
+		return None;
+	}
+
+	let mut normalized_value = String::new();
+	let mut original_ranges = Vec::new();
+	for (start, grapheme) in value.grapheme_indices(true) {
+		let end = start + grapheme.len();
+		for character in grapheme
+			.nfkc()
+			.flat_map(char::to_lowercase)
+			.filter(|character| character.is_alphanumeric())
+		{
+			normalized_value.push(character);
+			original_ranges.push(start..end);
+		}
+	}
+
+	let normalized_start = normalized_value.find(&normalized_query)?;
+	let first_character = normalized_value[..normalized_start].chars().count();
+	let character_count = normalized_query.chars().count();
+	let last_character = first_character
+		.checked_add(character_count)?
+		.checked_sub(1)?;
+	let start = original_ranges.get(first_character)?.start;
+	let end = original_ranges.get(last_character)?.end;
+	Some(start..end)
 }
 
 fn register_tokenizer(index: &Index) -> EngineResult<()> {
@@ -626,6 +723,59 @@ mod tests {
 		assert_eq!(hits.len(), 1);
 		assert_eq!(hits[0].file_id, 71);
 		assert_eq!(normalize_search_text("ＡＩ・基礎"), "ai基礎");
+		drop(engine);
+		std::fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn maps_normalized_search_matches_back_to_the_original_text() {
+		let body = "導入：Ｐｙｔｈｏｎを高速化する方法を説明します。";
+		let range = search_match_byte_range(body, "pythonを高速化").unwrap();
+
+		assert_eq!(&body[range], "Ｐｙｔｈｏｎを高速化");
+		assert!(search_match_byte_range(body, "存在しない語").is_none());
+		assert!(search_match_byte_range(body, "　・ ").is_none());
+	}
+
+	#[test]
+	fn maps_combining_characters_without_splitting_utf8() {
+		let body = "Cafe\u{301}の資料";
+		let range = search_match_byte_range(body, "CAFÉ").unwrap();
+
+		assert_eq!(&body[range], "Cafe\u{301}");
+	}
+
+	#[test]
+	fn applies_file_scope_before_the_top_result_limit() {
+		let directory = test_directory("scoped-search-before-limit");
+		std::fs::create_dir_all(&directory).unwrap();
+		let high_score_path = directory.join("high.txt");
+		let scoped_path = directory.join("scoped.txt");
+		std::fs::write(&high_score_path, "正規化").unwrap();
+		std::fs::write(
+			&scoped_path,
+			format!(
+				"{}正規化{}",
+				"関連しない説明".repeat(100),
+				"補足".repeat(100)
+			),
+		)
+		.unwrap();
+		let database = Database::open_in_memory().unwrap();
+		insert_file(&database, 81, &high_score_path);
+		insert_file(&database, 82, &scoped_path);
+		let mut engine = DefaultIndexEngine::open(&directory.join("index")).unwrap();
+		engine
+			.index_files(&database, &[(81, high_score_path), (82, scoped_path)])
+			.into_iter()
+			.collect::<EngineResult<Vec<_>>>()
+			.unwrap();
+
+		assert_eq!(engine.search("正規化", 1).unwrap()[0].file_id, 81);
+		let scoped = engine.search_scoped("正規化", 1, Some(&[82])).unwrap();
+		assert_eq!(scoped.len(), 1);
+		assert_eq!(scoped[0].file_id, 82);
+
 		drop(engine);
 		std::fs::remove_dir_all(directory).unwrap();
 	}

@@ -21,10 +21,10 @@ use lsh::{lsh_candidate_pairs, lsh_query_candidates, max_hamming_distance};
 
 pub use lsh::simhash_similarity;
 
-/// 暫定の類似度下限。64 bit SimHashでハミング距離3以下に相当する。
+/// 類似度下限。64 bit SimHashでハミング距離1以下に限定し、完全一致はBLAKE3で判定する。
 ///
 /// 実データでの適合率・再現率を評価して確定するまでは、呼び出し側から上書きできる。
-pub const DEFAULT_SIMILARITY_THRESHOLD: f64 = 61.0 / 64.0;
+pub const DEFAULT_SIMILARITY_THRESHOLD: f64 = 63.0 / 64.0;
 
 /// 重複・類似ファイル検出を担うトレイト。
 ///
@@ -438,10 +438,10 @@ mod tests {
 	#[test]
 	fn lsh_groups_near_hashes_without_missing_the_threshold_boundary() {
 		let base = 0x1234_5678_9abc_def0_u64;
-		let three_bands_differ = (1_u64 << 0) | (1_u64 << 16) | (1_u64 << 32);
+		let threshold_distance_differs = 1_u64 << 0;
 		let fingerprints = vec![
 			stored(1, "b3:a", Some(base)),
-			stored(2, "b3:b", Some(base ^ three_bands_differ)),
+			stored(2, "b3:b", Some(base ^ threshold_distance_differs)),
 			stored(3, "b3:c", Some(base ^ 0xffff)),
 			stored(4, "b3:exact", Some(0xaaaa_aaaa_aaaa_aaaa)),
 			stored(5, "b3:exact", Some(0xaaaa_aaaa_aaaa_aaaa)),

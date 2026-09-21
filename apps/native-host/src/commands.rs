@@ -13,7 +13,7 @@ use engine_core::index::{normalize_search_text, IndexEngine};
 use engine_core::library::{document_mime_type, is_indexable_document, LibraryMaintenance};
 use engine_core::rule::{DefaultRuleEngine, RuleEngine};
 use engine_core::section::{parse_section_file_prefix, parse_section_name};
-use engine_core::types::RuleContext;
+use engine_core::types::{MoodleTextBlockRecord, RuleContext};
 use engine_core::{Database, EngineError, EngineResult, ExtensionRuntimeReport};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -27,20 +27,21 @@ use crate::api_types::{
 	GetExcludedFoldersRequest, ImportDataRequest, ImportDataResult, LibraryMaintenanceSummary,
 	NotificationRule, NotificationRuleUpdateResult, OkResult, OpenFileRequest, OpenFileResult,
 	PingResult, RebuildLibraryRequest, ReconcileCourseFilesRequest, RuleSet, RuleViolationListItem,
-	SaveFilesRequest, SaveFilesResult, SaveSuggestion, SearchRequest, SearchResult, SearchScope,
-	SimilarFileMatch, SuggestSavePathRequest, SyncMoodleAssignmentsRequest,
+	SaveFilesRequest, SaveFilesResult, SaveSuggestion, SearchRequest, SimilarFileMatch,
+	SuggestSavePathRequest, SyncMoodleAssignmentsRequest, SyncMoodleTextBlocksRequest,
 	UpdateCourseFolderNameRequest, UpdateCourseFolderNameResult, UpdateCourseRuleOverrideRequest,
 	UpdateExcludedFoldersRequest, UpdateGlobalRuleRequest, UpdateNotificationRulesRequest,
 	UpdateSubmissionStatusRequest,
 };
 use crate::file_transfer::{extract_zip_archive, FileTransferCommitResult, FileTransferManager};
 use crate::protocol::{Request, Response};
+use crate::search_results::execute_search;
+#[cfg(test)]
+use crate::search_results::MAX_SEARCH_QUERY_CHARACTERS;
 use engine_core::EXTENSION_RUNTIME_PROTOCOL_VERSION;
 
-const DEFAULT_SEARCH_LIMIT: usize = 50;
-const SEARCH_CANDIDATE_LIMIT: usize = 200;
-const MAX_SEARCH_QUERY_CHARS: usize = 256;
-const MAX_SEARCH_FOLDER_CHARS: usize = 512;
+const MAX_EXACT_MATCHES_PER_FILE: usize = 3;
+const MAX_SIMILAR_MATCHES_PER_FILE: usize = 5;
 
 pub fn dispatch_with_services(
 	database: &mut Database,
@@ -80,6 +81,7 @@ fn dispatch_with_file_transfers(
 		"ping" => ping(request),
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
 		"syncMoodleAssignments" => sync_moodle_assignments(database, request),
+		"syncMoodleTextBlocks" => sync_moodle_text_blocks(database, request),
 		"suggestSavePath" => suggest_save_path(database, request),
 		"beginCheckSimilarFile" => begin_check_similar_file(file_transfers, request),
 		"appendCheckSimilarFileChunk" => append_check_similar_file_chunk(file_transfers, request),
@@ -213,143 +215,59 @@ fn valid_moodle_identifier(value: &str) -> bool {
 			.all(|character| character.is_ascii_alphanumeric() || "._:-".contains(character))
 }
 
+fn sync_moodle_text_blocks(database: &mut Database, request: Request) -> Response {
+	let payload = match parse_payload::<SyncMoodleTextBlocksRequest>(&request) {
+		Ok(payload) => payload,
+		Err(response) => return response,
+	};
+	let result = (|| {
+		if !valid_moodle_identifier(&payload.course.moodle_course_id) {
+			return Err(EngineError::InvalidInput {
+				field: "course.moodleCourseId".to_string(),
+				reason: "1文字以上128文字以下の安定IDを指定してください".to_string(),
+			});
+		}
+		if payload.course.name.trim().is_empty() || payload.course.name.chars().count() > 1_000 {
+			return Err(EngineError::InvalidInput {
+				field: "course.name".to_string(),
+				reason: "1文字以上1000文字以下で指定してください".to_string(),
+			});
+		}
+		if payload.blocks.len() > 500 {
+			return Err(EngineError::InvalidInput {
+				field: "blocks".to_string(),
+				reason: "1コース500ブロック以下で指定してください".to_string(),
+			});
+		}
+		let course = database.resolve_course_context(
+			Some(&payload.course.moodle_course_id),
+			Some(&payload.course.name),
+			payload.course.academic_year,
+			payload.course.term.as_deref(),
+		)?;
+		let blocks = payload
+			.blocks
+			.into_iter()
+			.map(|block| MoodleTextBlockRecord {
+				block_key: block.block_key,
+				title: block.title.trim().to_string(),
+				normalized_body: normalize_search_text(&block.text),
+				body: block.text.trim().to_string(),
+				moodle_url: block.moodle_url,
+			})
+			.collect::<Vec<_>>();
+		database.sync_moodle_text_blocks(course.course_id, &blocks)?;
+		Ok(OkResult { ok: true })
+	})();
+	respond(request.id, result)
+}
+
 fn search(database: &Database, index_engine: &dyn IndexEngine, request: Request) -> Response {
 	let payload = match parse_payload::<SearchRequest>(&request) {
 		Ok(payload) => payload,
 		Err(response) => return response,
 	};
-	let query = payload.query.trim();
-	if query.is_empty() || query.chars().count() > MAX_SEARCH_QUERY_CHARS {
-		return engine_error_response(
-			request.id,
-			EngineError::InvalidInput {
-				field: "query".to_string(),
-				reason: format!("1〜{MAX_SEARCH_QUERY_CHARS}文字で指定してください"),
-			},
-		);
-	}
-	let normalized_query = normalize_search_text(query);
-	if normalized_query.is_empty() {
-		return engine_error_response(
-			request.id,
-			EngineError::InvalidInput {
-				field: "query".to_string(),
-				reason: "検索できる文字を1文字以上指定してください".to_string(),
-			},
-		);
-	}
-	let scope = match normalize_search_scope(payload.scope) {
-		Ok(scope) => scope,
-		Err(error) => return engine_error_response(request.id, error),
-	};
-	let result = index_engine
-		.search(query, SEARCH_CANDIDATE_LIMIT)
-		.and_then(|hits| {
-			let mut results = hits
-				.into_iter()
-				.filter_map(|hit| match database.search_document_metadata(hit.file_id) {
-					Ok(Some(metadata)) if search_scope_matches(scope.as_ref(), &metadata) => {
-						let file_stem = Path::new(&metadata.file_name)
-							.file_stem()
-							.and_then(|value| value.to_str())
-							.unwrap_or(&metadata.file_name);
-						let normalized_file_name = normalize_search_text(file_stem);
-						let filename_boost = if normalized_file_name == normalized_query {
-							0.5
-						} else if normalized_file_name.contains(&normalized_query) {
-							0.1
-						} else {
-							0.0
-						};
-						Some(Ok((
-							SearchResult {
-								file_id: metadata.file_id,
-								file_name: metadata.file_name,
-								course_name: metadata.course_name,
-								relative_path: metadata.relative_path,
-								snippet: hit.snippet,
-								page: hit.page.filter(|page| {
-									*page >= 1
-										&& metadata
-											.page_count
-											.is_none_or(|page_count| *page <= page_count)
-								}),
-								page_count: metadata.page_count,
-								score: hit.score + filename_boost,
-							},
-							metadata.modified_at,
-						)))
-					}
-					Ok(Some(_)) => None,
-					Ok(None) => None,
-					Err(error) => Some(Err(error)),
-				})
-				.collect::<EngineResult<Vec<_>>>()?;
-			results.sort_by(|(left, left_modified), (right, right_modified)| {
-				right
-					.score
-					.total_cmp(&left.score)
-					.then_with(|| right_modified.cmp(left_modified))
-			});
-			results.truncate(DEFAULT_SEARCH_LIMIT);
-			Ok(results
-				.into_iter()
-				.map(|(result, _)| result)
-				.collect::<Vec<_>>())
-		});
-	respond(request.id, result)
-}
-
-fn normalize_search_scope(scope: Option<SearchScope>) -> EngineResult<Option<SearchScope>> {
-	let Some(mut scope) = scope else {
-		return Ok(None);
-	};
-	if scope.course_id.is_some_and(|course_id| course_id <= 0) {
-		return Err(EngineError::InvalidInput {
-			field: "scope.courseId".to_string(),
-			reason: "1以上のコースIDを指定してください".to_string(),
-		});
-	}
-	if let Some(folder) = scope.folder.take() {
-		let folder = folder.trim().replace('\\', "/");
-		if folder.len() > MAX_SEARCH_FOLDER_CHARS
-			|| folder.is_empty()
-			|| folder.starts_with('/')
-			|| folder.ends_with('/')
-			|| folder
-				.split('/')
-				.any(|part| part.is_empty() || part == "." || part == ".." || part.contains(':'))
-		{
-			return Err(EngineError::InvalidInput {
-				field: "scope.folder".to_string(),
-				reason: "保存ルートからの相対フォルダーを指定してください".to_string(),
-			});
-		}
-		scope.folder = Some(folder);
-	}
-	if scope.course_id.is_none() && scope.folder.is_none() {
-		return Ok(None);
-	}
-	Ok(Some(scope))
-}
-
-fn search_scope_matches(
-	scope: Option<&SearchScope>,
-	metadata: &engine_core::types::SearchDocumentMetadata,
-) -> bool {
-	let Some(scope) = scope else {
-		return true;
-	};
-	if scope
-		.course_id
-		.is_some_and(|course_id| metadata.course_id != Some(course_id))
-	{
-		return false;
-	}
-	scope.folder.as_ref().is_none_or(|folder| {
-		let relative_path = metadata.relative_path.replace('\\', "/");
-		relative_path == *folder || relative_path.starts_with(&format!("{folder}/"))
-	})
+	respond(request.id, execute_search(database, index_engine, payload))
 }
 
 fn open_file(database: &Database, request: Request) -> Response {
@@ -724,23 +642,74 @@ fn check_similar_files(
 		Err(response) => return response,
 	};
 	let result = (|| {
+		if payload.course_id.is_some_and(|course_id| course_id <= 0) {
+			return Err(EngineError::InvalidInput {
+				field: "courseId".to_string(),
+				reason: "正の整数またはnullを指定してください".to_string(),
+			});
+		}
 		let bytes = file_transfers.finish_similarity(&payload.transfer_id)?;
 		let mut temporary = tempfile::NamedTempFile::new().map_err(EngineError::Io)?;
 		temporary.write_all(&bytes).map_err(EngineError::Io)?;
-		let detector = DefaultDuplicateDetector::new(database.load_file_fingerprints()?);
+		let detector = DefaultDuplicateDetector::new(
+			database.load_course_file_fingerprints(payload.course_id)?,
+		);
 		let matches = detector.find_similar(temporary.path(), DEFAULT_SIMILARITY_THRESHOLD)?;
-		database.similar_file_records(&matches).map(|records| {
+		let records = database.similar_file_records(&matches)?;
+		let exact_records = records
+			.iter()
+			.filter(|record| record.exact)
+			.take(MAX_EXACT_MATCHES_PER_FILE)
+			.cloned()
+			.collect::<Vec<_>>();
+		let display_records = if exact_records.is_empty() {
 			records
 				.into_iter()
-				.map(|record| SimilarFileMatch {
-					file_id: record.file_id,
-					original_name: record.original_name,
-					similarity: record.similarity,
+				// 異なる形式・大幅に異なるサイズ・SimHash同値の退化ケースを候補から外す。
+				.filter(|record| {
+					!record.exact
+						&& record.similarity < 1.0
+						&& same_file_extension(&payload.file_meta.title, &record.original_name)
+						&& comparable_file_size(bytes.len(), record.size_bytes)
 				})
+				.take(MAX_SIMILAR_MATCHES_PER_FILE)
 				.collect::<Vec<_>>()
-		})
+		} else {
+			exact_records
+		};
+		Ok(display_records
+			.into_iter()
+			.map(|record| SimilarFileMatch {
+				file_id: record.file_id,
+				original_name: record.original_name,
+				similarity: record.similarity,
+				exact: record.exact,
+			})
+			.collect::<Vec<_>>())
 	})();
 	respond(request.id, result)
+}
+
+fn same_file_extension(left: &str, right: &str) -> bool {
+	let extension = |value: &str| {
+		Path::new(value)
+			.extension()
+			.and_then(|extension| extension.to_str())
+			.map(str::to_ascii_lowercase)
+	};
+	extension(left).is_some_and(|left| extension(right).as_deref() == Some(left.as_str()))
+}
+
+fn comparable_file_size(requested: usize, stored: i64) -> bool {
+	let Ok(stored) = usize::try_from(stored) else {
+		return false;
+	};
+	let (small, large) = if requested <= stored {
+		(requested, stored)
+	} else {
+		(stored, requested)
+	};
+	small > 0 && small.saturating_mul(100) >= large.saturating_mul(85)
 }
 
 fn extract_zip(
@@ -1476,7 +1445,10 @@ mod tests {
 		let database = Database::open_in_memory().unwrap();
 		let index = TestIndexEngine::default();
 
-		for query in [" \t".to_string(), "あ".repeat(MAX_SEARCH_QUERY_CHARS + 1)] {
+		for query in [
+			" \t".to_string(),
+			"あ".repeat(MAX_SEARCH_QUERY_CHARACTERS + 1),
+		] {
 			let response = search(
 				&database,
 				&index,
@@ -1491,7 +1463,7 @@ mod tests {
 			&index,
 			request(
 				"search",
-				serde_json::json!({ "query": "あ".repeat(MAX_SEARCH_QUERY_CHARS) }),
+				serde_json::json!({ "query": "あ".repeat(MAX_SEARCH_QUERY_CHARACTERS) }),
 			),
 		);
 		assert!(response.ok, "{:?}", response.error);
@@ -2061,6 +2033,16 @@ mod tests {
 		let path = root.join("第4回_正規化.txt");
 		std::fs::write(&path, "正規化").unwrap();
 		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"search-test",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
 		let database_id = database
 			.register_saved_file(&SavedFileRegistration {
 				course_id: None,
@@ -2110,7 +2092,17 @@ mod tests {
 		std::fs::create_dir_all(&root).unwrap();
 		let path = root.join("第4回_正規化.pdf");
 		std::fs::write(&path, b"%PDF-test").unwrap();
-		let database = Database::open_in_memory().unwrap();
+		let mut database = Database::open_in_memory().unwrap();
+		database
+			.save_initial_setup(
+				&root,
+				"course-assignment",
+				"{course}/{assignment}",
+				"search-test",
+				Some(0),
+				"[]",
+			)
+			.unwrap();
 		let file_id = database
 			.register_saved_file(&SavedFileRegistration {
 				course_id: None,

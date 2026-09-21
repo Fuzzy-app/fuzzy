@@ -94,6 +94,21 @@ CREATE INDEX idx_files_hash ON files(hash_blake3);
 CREATE INDEX idx_files_violation ON files(rule_compliant);
 CREATE INDEX idx_files_missing ON files(missing_at);
 
+-- course/view.phpから取得したMoodle本文のブロック。検索後に元位置へ戻れるURLを保持する。
+CREATE TABLE moodle_text_blocks (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	course_id       INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+	block_key       TEXT NOT NULL,
+	title           TEXT NOT NULL,
+	body            TEXT NOT NULL,
+	normalized_body TEXT NOT NULL,
+	moodle_url      TEXT NOT NULL,
+	updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+	UNIQUE (course_id, block_key)
+);
+CREATE INDEX idx_moodle_text_blocks_course ON moodle_text_blocks(course_id);
+CREATE INDEX idx_moodle_text_blocks_normalized ON moodle_text_blocks(normalized_body);
+
 CREATE TABLE duplicate_groups (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	method     TEXT NOT NULL CHECK (method IN ('exact', 'similar')),
@@ -168,4 +183,4 @@ CREATE TABLE assignment_changes (
 CREATE INDEX idx_assignment_changes_sync ON assignment_changes(sync_event_id);
 CREATE INDEX idx_assignment_changes_assignment ON assignment_changes(assignment_id);
 
-PRAGMA user_version = 0;
+PRAGMA user_version = 1;

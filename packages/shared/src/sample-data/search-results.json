@@ -2,23 +2,29 @@
 	"正規化": [
 		{
 			"fileId": 3,
+			"source": "file",
 			"fileName": "第4回_正規化.pdf",
 			"courseName": "データベース",
 			"relativePath": "データベース/第4回_正規化.pdf",
 			"snippet": "…第3正規化の条件は、推移的関数従属が存在しないこと…",
 			"page": 12,
 			"pageCount": 24,
-			"score": 0.93
+			"score": 0.93,
+			"moodleUrl": null,
+			"blockKey": null
 		},
 		{
 			"fileId": 4,
+			"source": "file",
 			"fileName": "正規化_メモ.docx",
 			"courseName": "データベース",
 			"relativePath": "データベース/正規化_メモ.docx",
 			"snippet": "…正規化のメリットは更新異常の防止…",
 			"page": null,
 			"pageCount": null,
-			"score": 0.81
+			"score": 0.81,
+			"moodleUrl": null,
+			"blockKey": null
 		}
 	]
 }

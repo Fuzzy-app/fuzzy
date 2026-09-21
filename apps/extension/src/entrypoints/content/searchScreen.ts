@@ -1,4 +1,4 @@
-import { normalizeSearchText } from "@fuzzy/shared";
+import { buildSearchQueryVariants, normalizeSearchText } from "@fuzzy/shared";
 import type {
 	CourseDashboardEntry,
 	FuzzyApiClient,
@@ -6,6 +6,7 @@ import type {
 	SearchResult,
 	SearchScope,
 } from "@fuzzy/shared";
+import { boundedParallelMap } from "../../lib/boundedParallelMap";
 import { groupCourses } from "./courseHierarchy";
 import {
 	buildShellScreenHeader,
@@ -99,7 +100,10 @@ export function aggregateSearchResults(
 			similarMatchCount,
 			score,
 		}))
-		.sort((left, right) => right.score - left.score);
+		.sort((left, right) => {
+			const exactOrder = Number(right.exactMatchCount > 0) - Number(left.exactMatchCount > 0);
+			return exactOrder || right.score - left.score;
+		});
 }
 
 export class SearchScreenController {
@@ -114,6 +118,8 @@ export class SearchScreenController {
 	readonly #resultsHost: HTMLElement;
 	readonly #noteHost: HTMLElement;
 	#requestId = 0;
+	#courses: CourseDashboardEntry[] = [];
+	#coursesLoaded = false;
 	#model: SearchModel = {
 		query: "",
 		courseIds: [],
@@ -203,22 +209,56 @@ export class SearchScreenController {
 	}
 
 	#renderCourseTree(courses: readonly CourseDashboardEntry[]): void {
-		const all = el("button", "fuzzy-course-tree-option", "すべての授業");
-		all.dataset.allCourses = "true";
-		all.type = "button";
-		all.addEventListener("click", () => {
+		this.#courses = [...courses];
+		if (!this.#coursesLoaded) {
+			this.#model.courseIds = courses.map((course) => course.courseId);
+			this.#coursesLoaded = true;
+		}
+		const scopeActions = el("div", "fuzzy-course-tree-actions");
+		const selectAll = el("button", "fuzzy-course-tree-option", "すべて選択");
+		selectAll.dataset.selectAllCourses = "true";
+		selectAll.type = "button";
+		selectAll.addEventListener("click", () => {
+			this.#model.courseIds = this.#courses.map((course) => course.courseId);
+			this.#updateCourseTreeSelection();
+		});
+		const clearAll = el("button", "fuzzy-course-tree-option", "すべて解除");
+		clearAll.dataset.clearAllCourses = "true";
+		clearAll.type = "button";
+		clearAll.addEventListener("click", () => {
 			this.#model.courseIds = [];
 			this.#updateCourseTreeSelection();
 		});
+		scopeActions.append(selectAll, clearAll);
 		this.#courseScopeHost.replaceChildren(
 			el("p", "fuzzy-course-tree-hint", "学期をクリックすると授業を開けます。"),
-			all,
+			scopeActions,
 		);
 		for (const group of groupCourses(courses)) {
 			const details = document.createElement("details");
 			details.className = "fuzzy-course-tree-group";
 			const summary = document.createElement("summary");
-			summary.append(el("span", "", group.label), el("small", "", `${group.courses.length}授業`));
+			const groupCheckbox = document.createElement("input");
+			groupCheckbox.type = "checkbox";
+			groupCheckbox.dataset.courseGroup = group.key;
+			groupCheckbox.dataset.courseIds = group.courses.map((course) => course.courseId).join(",");
+			groupCheckbox.setAttribute("aria-label", `${group.label}をまとめて選択`);
+			groupCheckbox.addEventListener("click", (event) => event.stopPropagation());
+			groupCheckbox.addEventListener("change", () => {
+				const groupIds = group.courses.map((course) => course.courseId);
+				const selected = new Set(this.#model.courseIds);
+				for (const courseId of groupIds) {
+					if (groupCheckbox.checked) selected.add(courseId);
+					else selected.delete(courseId);
+				}
+				this.#model.courseIds = [...selected];
+				this.#updateCourseTreeSelection();
+			});
+			summary.append(
+				groupCheckbox,
+				el("span", "", group.label),
+				el("small", "", `${group.courses.length}授業`),
+			);
 			const items = el("div", "fuzzy-course-tree-items");
 			for (const course of group.courses) {
 				const option = el("label", "fuzzy-course-tree-option");
@@ -249,14 +289,20 @@ export class SearchScreenController {
 		return folder || null;
 	}
 
-	#searchScopes(): Array<SearchScope | undefined> {
+	#searchScope(): SearchScope | undefined | null {
 		const folder = this.#folderScope();
-		if (this.#model.courseIds.length === 0) {
-			return folder ? [{ folder } as SearchScope] : [undefined];
+		if (!this.#coursesLoaded) {
+			return folder ? { courseId: null, courseIds: null, folder } : undefined;
 		}
-		return this.#model.courseIds.map(
-			(courseId) => ({ courseId, ...(folder ? { folder } : {}) }) as SearchScope,
-		);
+		if (this.#model.courseIds.length === 0) return null;
+		if (this.#model.courseIds.length === this.#courses.length) {
+			return folder ? { courseId: null, courseIds: null, folder } : undefined;
+		}
+		return {
+			courseId: null,
+			courseIds: [...this.#model.courseIds],
+			folder,
+		};
 	}
 
 	#updateCourseTreeSelection(): void {
@@ -271,11 +317,16 @@ export class SearchScreenController {
 				option.classList.toggle("is-selected", selected);
 			}
 		}
-		const all = this.#courseScopeHost.querySelector<HTMLButtonElement>("[data-all-courses='true']");
-		if (all) {
-			const selected = this.#model.courseIds.length === 0;
-			all.classList.toggle("is-selected", selected);
-			all.setAttribute("aria-pressed", String(selected));
+		for (const group of this.#courseScopeHost.querySelectorAll<HTMLInputElement>(
+			"input[data-course-group]",
+		)) {
+			const ids = (group.dataset.courseIds ?? "")
+				.split(",")
+				.map(Number)
+				.filter(Number.isSafeInteger);
+			const count = ids.filter((courseId) => selectedIds.has(courseId)).length;
+			group.checked = ids.length > 0 && count === ids.length;
+			group.indeterminate = count > 0 && count < ids.length;
 		}
 	}
 
@@ -284,6 +335,7 @@ export class SearchScreenController {
 	}
 
 	#formatPage(result: SearchResult, compact = false): string {
+		if (result.source === "moodle_text") return compact ? "Moodle" : "Moodle本文";
 		if (result.page === null) return compact ? "—" : "ページ情報なし";
 		if (result.pageCount === null) return compact ? `p.${result.page}` : `${result.page}ページ`;
 		return compact
@@ -295,11 +347,11 @@ export class SearchScreenController {
 		const row = el("div", "fuzzy-result-row");
 		row.dataset.resultKey = this.#resultKey(result, index);
 
-		const kindClass = fileKindClass(result.fileName);
+		const kindClass = result.source === "moodle_text" ? "" : fileKindClass(result.fileName);
 		const kind = el(
 			"div",
 			kindClass ? `fuzzy-result-kind ${kindClass}` : "fuzzy-result-kind",
-			fileKindLabel(result.fileName),
+			result.source === "moodle_text" ? "本文" : fileKindLabel(result.fileName),
 		);
 		const main = el("div", "fuzzy-result-main");
 		main.append(
@@ -333,6 +385,13 @@ export class SearchScreenController {
 	}
 
 	async #openResult(result: SearchResult): Promise<void> {
+		if (result.source === "moodle_text" && result.moodleUrl) {
+			window.open(result.moodleUrl, "_blank", "noopener,noreferrer");
+			this.#noteHost.append(
+				el("p", "fuzzy-note-copy fuzzy-note-success", "Moodle上の該当位置を開きました。"),
+			);
+			return;
+		}
 		try {
 			const api = await this.#options.api;
 			const opened = await api.openFile({
@@ -389,7 +448,7 @@ export class SearchScreenController {
 		const grid = el("dl", "fuzzy-note-grid");
 		for (const [term, detail] of [
 			["授業", selected.courseName ?? "未設定"],
-			["所在", selected.relativePath],
+			["所在", selected.source === "moodle_text" ? "Moodle本文" : selected.relativePath],
 			["ページ", this.#formatPage(selected)],
 			["完全一致", `${selected.exactMatchCount}件`],
 			["近い一致", `${selected.similarMatchCount}件`],
@@ -399,14 +458,20 @@ export class SearchScreenController {
 			grid.append(row);
 		}
 		this.#noteHost.replaceChildren(
-			el("p", "fuzzy-section-label", "選択中の資料"),
+			el(
+				"p",
+				"fuzzy-section-label",
+				selected.source === "moodle_text" ? "選択中のMoodle本文" : "選択中の資料",
+			),
 			el("h2", "", selected.fileName),
 			el(
 				"p",
 				"fuzzy-note-copy",
-				selected.page === null
-					? "該当箇所を見つけました。ページ情報は未登録です。"
-					: `${this.#formatPage(selected)}付近に該当箇所があります。`,
+				selected.source === "moodle_text"
+					? "Moodle本文の該当ブロックを見つけました。「詳細を見る」で元の位置を開けます。"
+					: selected.page === null
+						? "該当箇所を見つけました。ページ情報は未登録です。"
+						: `${this.#formatPage(selected)}付近に該当箇所があります。`,
 			),
 			grid,
 		);
@@ -418,7 +483,7 @@ export class SearchScreenController {
 		this.#submitButton.textContent = loading ? "検索中…" : "検索";
 		this.#submitButton.disabled = loading;
 		this.#countLabel.textContent = executedQuery
-			? `「${executedQuery}」に一致: ${results.length}ファイル`
+			? `「${executedQuery}」に一致: ${results.length}件`
 			: (presentation.impact ?? presentation.title);
 
 		if (presentation.tone === "error") {
@@ -465,8 +530,18 @@ export class SearchScreenController {
 		this.#render();
 		try {
 			const api = await this.#options.api;
-			const resultSets = await Promise.all(
-				this.#searchScopes().map((scope) => api.search(query, scope)),
+			const scope = this.#searchScope();
+			if (scope === null) {
+				this.#model.presentation = {
+					tone: "warning",
+					title: "検索する授業を1つ以上選択してください。",
+				};
+				this.#render();
+				return;
+			}
+			const queryVariants = buildSearchQueryVariants(query);
+			const resultSets = await boundedParallelMap(queryVariants, 2, (queryVariant) =>
+				api.search(queryVariant, scope),
 			);
 			const results = aggregateSearchResults(resultSets.flat(), query);
 			if (requestId !== this.#requestId) return;

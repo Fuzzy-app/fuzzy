@@ -80,20 +80,18 @@ export function upsertDrawerButton(): HTMLAnchorElement | null {
 }
 
 export function getShellTopOffset(navHost: HTMLElement): number {
+	// Fuzzy表示中も残すグローバルナビだけを基準にする。
+	// secondary/tertiary navigationやnav-tabsはコース本文側のナビであり、
+	// Fuzzy表示中は隠すため候補へ含めない。
 	const candidates = [
-		navHost.closest<HTMLElement>("header"),
+		navHost.closest<HTMLElement>(".navbar"),
+		navHost.closest<HTMLElement>("header[role='banner']"),
 		navHost.closest<HTMLElement>(".primary-navigation"),
-		navHost.closest<HTMLElement>(".secondary-navigation"),
 		navHost.closest<HTMLElement>(".moremenu"),
 		document.querySelector<HTMLElement>("header[role='banner']"),
 		document.querySelector<HTMLElement>(".navbar"),
 		document.querySelector<HTMLElement>(".primary-navigation"),
-		document.querySelector<HTMLElement>(".secondary-navigation"),
-		document.querySelector<HTMLElement>(".tertiary-navigation"),
-		document.querySelector<HTMLElement>(".nav-tabs"),
-		document.querySelector<HTMLElement>(".tabs"),
 		document.querySelector<HTMLElement>(".moremenu"),
-		document.querySelector<HTMLElement>(".secondarymoremenu"),
 	];
 
 	const bottoms = candidates

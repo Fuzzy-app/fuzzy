@@ -223,7 +223,7 @@ export default defineBackground(() => {
 
 		const senderUrl = sender.tab?.url ?? sender.url ?? "";
 		const rememberSender =
-			message.method === "syncMoodleAssignments"
+			message.method === "syncMoodleAssignments" || message.method === "syncMoodleTextBlocks"
 				? rememberMoodleHomeUrl(browser.storage.local, senderUrl).catch((error) => {
 						console.warn("[fuzzy] 同期元Moodleの記録に失敗しました", error);
 						return false;

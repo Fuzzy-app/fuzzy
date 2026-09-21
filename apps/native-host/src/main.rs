@@ -8,6 +8,7 @@ pub mod api_types;
 mod commands;
 mod file_transfer;
 mod protocol;
+mod search_results;
 
 use std::io::{stdin, stdout};
 

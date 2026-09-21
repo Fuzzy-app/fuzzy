@@ -7,9 +7,11 @@ export interface CourseGroup {
 }
 
 export function courseGroupLabel(course: CourseDashboardEntry): string {
-	const term = course.term?.trim() ?? "";
+	const term = normalizeCourseTerm(course.term);
 	const year = course.academicYear;
-	if (term && year !== null && year !== undefined && !term.includes(String(year))) {
+	// 学年を含む「3年前期」などは、年度表記の有無にかかわらず同じグループにする。
+	if (/^[1-9]年(?:前期|後期|春学期|秋学期)$/.test(term)) return term;
+	if (term && year !== null && year !== undefined) {
 		return `${year}年度 ${term}`;
 	}
 	if (term) return term;
@@ -17,11 +19,22 @@ export function courseGroupLabel(course: CourseDashboardEntry): string {
 	return "学期未設定";
 }
 
+/** Moodleのコース名から確実に得られないクォーター表記は検索範囲に使わない。 */
+export function normalizeCourseTerm(value: string | null | undefined): string {
+	return (value ?? "")
+		.normalize("NFKC")
+		.replace(/(?:19|20|21)\d{2}\s*年度?/g, "")
+		.replace(/(?:第\s*)?[1-4]\s*(?:Q|クォーター)/gi, "")
+		.replace(/[・,，/／_-]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
 export function groupCourses(courses: readonly CourseDashboardEntry[]): CourseGroup[] {
 	const groups = new Map<string, CourseGroup>();
 	for (const course of courses) {
 		const label = courseGroupLabel(course);
-		const key = `${course.academicYear ?? "unknown"}:${course.term ?? "unknown"}:${label}`;
+		const key = label.normalize("NFKC").replace(/\s+/g, "").toLocaleLowerCase("ja-JP");
 		const group = groups.get(key) ?? { key, label, courses: [] };
 		group.courses.push(course);
 		groups.set(key, group);

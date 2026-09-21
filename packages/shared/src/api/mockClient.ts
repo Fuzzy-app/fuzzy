@@ -56,6 +56,7 @@ import type {
 	SimilarFileMatch,
 	SuggestSavePathRequest,
 	SyncMoodleAssignmentsRequest,
+	SyncMoodleTextBlocksRequest,
 	UpdateCourseFolderNameRequest,
 	UpdateCourseFolderNameResult,
 	UpdateCourseRuleOverrideRequest,
@@ -128,12 +129,11 @@ export class MockApiClient implements FuzzyApiClient {
 		const normalizedQuery = normalizeSearchText(query);
 		const candidates = Object.values(table).flat();
 		const results = candidates.filter((result) => {
-			if (
-				scope?.courseId !== undefined &&
-				this.courses.find((course) => course.name === result.courseName)?.id !== scope.courseId
-			) {
+			const resultCourseId = this.courses.find((course) => course.name === result.courseName)?.id;
+			if (scope?.courseId != null && resultCourseId !== scope.courseId) {
 				return false;
 			}
+			if (scope?.courseIds?.length && !scope.courseIds.includes(resultCourseId ?? -1)) return false;
 			if (
 				scope?.folder &&
 				!result.relativePath.toLowerCase().startsWith(`${scope.folder.toLowerCase()}/`)
@@ -219,6 +219,7 @@ export class MockApiClient implements FuzzyApiClient {
 					fileId: 204,
 					originalName: "第04回_正規化.pdf",
 					similarity: 0.88,
+					exact: false,
 				},
 			]);
 		}
@@ -228,6 +229,7 @@ export class MockApiClient implements FuzzyApiClient {
 					fileId: 317,
 					originalName: "演習問題_解答例.docx",
 					similarity: 0.74,
+					exact: false,
 				},
 			]);
 		}
@@ -468,6 +470,10 @@ export class MockApiClient implements FuzzyApiClient {
 			changedAssignmentCount: 0,
 			removedAssignmentCount: 0,
 		});
+	}
+
+	async syncMoodleTextBlocks(_request: SyncMoodleTextBlocksRequest): Promise<{ ok: boolean }> {
+		return delay({ ok: true });
 	}
 
 	async getAssignmentChanges(sinceSyncEventId?: number): Promise<AssignmentChange[]> {

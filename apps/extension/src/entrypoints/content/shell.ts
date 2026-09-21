@@ -370,12 +370,12 @@ export function mountFuzzyShell(): void {
 		isOpen = true;
 		window.dispatchEvent(new CustomEvent(FUZZY_SHELL_VISIBILITY_EVENT, { detail: { open: true } }));
 		renderEntryState();
-		// Measure Moodle's header before the shell's compacting rules hide page content.
-		const initialShellTopOffset = getShellTopOffset(navHost);
 		document.body.classList.add("fuzzy-shell-open");
 		moveMainContentToStash();
 		document.body.append(buildPage());
-		applyShellFrame(initialShellTopOffset);
+		// compacting rules適用後のグローバルナビ下端から配置する。
+		// 非表示になるコース見出しの古い座標を保持すると白い空白が残る。
+		applyShellFrame();
 		window.addEventListener("resize", handleShellResize);
 
 		// 接続モードの表示だけ非同期で更新する（検索は自動では実行しない）

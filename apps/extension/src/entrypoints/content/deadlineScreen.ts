@@ -53,6 +53,8 @@ export class DeadlineScreenController {
 	readonly #options: DeadlineScreenOptions;
 	readonly #calendarPanel;
 	#filter: DeadlineViewFilter = "all";
+	#includePastTerms = false;
+	#includeMaterialCandidates = false;
 	#assignments: Assignment[] = [];
 	#courses: CourseDashboardEntry[] = [];
 	#assignmentState: PresentationState = {
@@ -130,7 +132,7 @@ export class DeadlineScreenController {
 			this.#buildSyncSummary(),
 			this.#buildToolbar(),
 			this.#buildList(),
-			this.#calendarPanel.render(this.#assignments),
+			this.#calendarPanel.render(this.#baseAssignments()),
 		);
 		return screen;
 	}
@@ -205,7 +207,7 @@ export class DeadlineScreenController {
 	}
 
 	#visibleAssignments(): Assignment[] {
-		const filtered = this.#assignments.filter((assignment) => {
+		const filtered = this.#baseAssignments().filter((assignment) => {
 			switch (this.#filter) {
 				case "upcoming":
 					return isUpcoming(assignment);
@@ -230,6 +232,15 @@ export class DeadlineScreenController {
 				(parseDueAt(left.dueAt) ?? Number.MAX_SAFE_INTEGER) -
 				(parseDueAt(right.dueAt) ?? Number.MAX_SAFE_INTEGER)
 			);
+		});
+	}
+
+	#baseAssignments(): Assignment[] {
+		return this.#assignments.filter((assignment) => {
+			if (!this.#includeMaterialCandidates && assignment.source === "file_content") return false;
+			if (this.#includePastTerms) return true;
+			const course = this.#courses.find((candidate) => candidate.courseId === assignment.courseId);
+			return !isDefinitelyOutsideCurrentTerm(course);
 		});
 	}
 
@@ -464,16 +475,17 @@ export class DeadlineScreenController {
 
 	#buildMetrics(): HTMLElement {
 		const grid = el("section", "fuzzy-metric-grid");
+		const assignments = this.#baseAssignments();
 		for (const metric of [
-			{ label: "未提出", value: this.#assignments.filter((item) => !item.submitted).length },
+			{ label: "未提出", value: assignments.filter((item) => !item.submitted).length },
 			{
 				label: "締切日を確認",
-				value: this.#assignments.filter(isNeedsReview).length,
+				value: assignments.filter(isNeedsReview).length,
 				className: "is-warn",
 			},
 			{
 				label: "期限切れ",
-				value: this.#assignments.filter(isOverdue).length,
+				value: assignments.filter(isOverdue).length,
 				className: "is-soft",
 			},
 		]) {
@@ -507,7 +519,34 @@ export class DeadlineScreenController {
 			filterRow.append(button);
 		}
 		const toolbar = el("section", "fuzzy-deadline-toolbar");
-		toolbar.append(filterRow, el("p", "fuzzy-toolbar-copy", DEADLINE_REVIEW_HELP_TEXT));
+		const rangeOptions = el("div", "fuzzy-deadline-range-options");
+		const pastToggle = el("input");
+		pastToggle.type = "checkbox";
+		pastToggle.checked = this.#includePastTerms;
+		pastToggle.addEventListener("change", () => {
+			this.#includePastTerms = pastToggle.checked;
+			this.#options.onChange();
+		});
+		const pastLabel = el("label", "fuzzy-checkline");
+		pastLabel.append(pastToggle, el("span", "", "過去の授業も表示"));
+		const materialToggle = el("input");
+		materialToggle.type = "checkbox";
+		materialToggle.checked = this.#includeMaterialCandidates;
+		materialToggle.addEventListener("change", () => {
+			this.#includeMaterialCandidates = materialToggle.checked;
+			this.#options.onChange();
+		});
+		const materialLabel = el("label", "fuzzy-checkline");
+		materialLabel.append(
+			materialToggle,
+			el("span", "", "授業資料の本文から抽出した確認候補も表示"),
+		);
+		rangeOptions.append(pastLabel, materialLabel);
+		toolbar.append(
+			filterRow,
+			rangeOptions,
+			el("p", "fuzzy-toolbar-copy", DEADLINE_REVIEW_HELP_TEXT),
+		);
 		return toolbar;
 	}
 

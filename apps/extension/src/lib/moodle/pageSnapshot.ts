@@ -87,7 +87,7 @@ const ASSIGNMENT_KEYWORD_PATTERN =
 const DUE_TEXT_PATTERN =
 	/(?:提出期限|締切|期限|due\s*date|due)[:：\s]*(\d{4}[/-]\d{1,2}[/-]\d{1,2}(?:\s+\d{1,2}:\d{2})?|[0-9０-９]{1,2}月[0-9０-９]{1,2}日(?:\s*[0-9０-９]{1,2}[:：][0-9０-９]{2})?|[^。．\n]{1,40})/i;
 const ACADEMIC_TERM_PATTERN =
-	/(?:(?:19|20)\d{2}\s*(?:年度)?\s*(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)|[1-9]年\s*(?:前期|後期|春学期|秋学期)|(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)(?:\s*(?:19|20)\d{2})?|[1-4１-４]\s*[QＱ]|(?:19|20)\d{2}\s*(?:spring|fall|autumn)(?:\s+(?:semester|term))?|(?:spring|fall|autumn)(?:\s+(?:semester|term))?\s*(?:19|20)\d{2}|(?:first|second|1st|2nd)\s+semester)/i;
+	/(?:(?:19|20)\d{2}\s*(?:年度)?\s*(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)|[1-9]年\s*(?:前期|後期|春学期|秋学期)|(?:前期|後期|通年|春学期|秋学期|第[12一二]学期)(?:\s*(?:19|20)\d{2})?|(?:19|20)\d{2}\s*(?:spring|fall|autumn)(?:\s+(?:semester|term))?|(?:spring|fall|autumn)(?:\s+(?:semester|term))?\s*(?:19|20)\d{2}|(?:first|second|1st|2nd)\s+semester)/i;
 const NON_COURSE_LINK_CONTAINER_SELECTOR = [
 	"nav",
 	"header",
@@ -353,7 +353,11 @@ export function extractStructuredAssignmentHints(
 				dueText: extractDueText(sourceText),
 				sourceText,
 				source: isDashboardAssignment(link) ? "dashboard_widget" : "page_text",
-				submitted: /(?:提出済み|提出しました|submitted|graded)/i.test(sourceText),
+				submitted: Boolean(
+					container.querySelector(
+						".submissionstatussubmitted, [data-submission-status='submitted']",
+					),
+				),
 				submissionAvailability: detectSubmissionAvailability(sourceText),
 				moodleUrl: normalizedAssignmentUrl(url),
 			},
