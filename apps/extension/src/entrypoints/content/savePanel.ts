@@ -52,7 +52,7 @@ import {
 import { FUZZY_SHELL_VISIBILITY_EVENT } from "./shell";
 import { createBrandIcon } from "./shellElements";
 import { SHELL_NAV_BUTTON_ID, SHELL_PAGE_ID } from "./shellIds";
-import { userFacingErrorMessage } from "./userFacingError";
+import { nativeConnectionIssuePresentation, userFacingErrorMessage } from "./userFacingError";
 
 /** 直近の保存先を記憶しておくstorageキー（「前回と同じ場所」で再利用する）。 */
 const LAST_SAVE_PATH_KEY = "fuzzy:lastSavePath";
@@ -92,6 +92,7 @@ export async function mountSavePanel(): Promise<void> {
 	let suggestions: FileSuggestions = new Map();
 	let selectedFileIds = new Set(snapshot.files.map(fileId));
 	let selectedPaths: SelectedFilePaths = new Map();
+	let configuredSaveRoot: string | null = null;
 	let manualRelativePath = "";
 	let lastSavePath = "";
 	let zipMode: "extract" | "keep" = "extract";
@@ -132,14 +133,17 @@ export async function mountSavePanel(): Promise<void> {
 
 	async function initialize() {
 		try {
-			const [fullSnapshot, storedPath] = await Promise.all([
+			const [fullSnapshot, storedPath, saveRoot] = await Promise.all([
 				collectMoodlePageSnapshotWithNestedFolders(),
 				loadLastSavePath(),
+				api.getSaveRoot().catch(() => null),
 			]);
 			snapshot = fullSnapshot;
 			lastSavePath = storedPath;
+			configuredSaveRoot = saveRoot;
 			selectedFileIds = new Set(snapshot.files.map(fileId));
 			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot, location.href);
+			throwIfEverySuggestionFailed(suggestionResult, snapshot.files.length);
 			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
@@ -167,9 +171,15 @@ export async function mountSavePanel(): Promise<void> {
 		messageTone = "progress";
 		render();
 		try {
-			snapshot = await collectMoodlePageSnapshotWithNestedFolders();
+			const [fullSnapshot, saveRoot] = await Promise.all([
+				collectMoodlePageSnapshotWithNestedFolders(),
+				api.getSaveRoot().catch(() => null),
+			]);
+			snapshot = fullSnapshot;
+			configuredSaveRoot = saveRoot;
 			selectedFileIds = new Set(snapshot.files.map(fileId));
 			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot, location.href);
+			throwIfEverySuggestionFailed(suggestionResult, snapshot.files.length);
 			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
@@ -386,6 +396,7 @@ export async function mountSavePanel(): Promise<void> {
 
 		try {
 			const suggestionResult = await loadFileSuggestionsWithFailures(api, snapshot, location.href);
+			throwIfEverySuggestionFailed(suggestionResult, snapshot.files.length);
 			suggestions = suggestionResult.suggestions;
 			selectedPaths = createSelectedFilePaths(suggestions);
 			resetCourseFolderEditor();
@@ -400,10 +411,12 @@ export async function mountSavePanel(): Promise<void> {
 					? "コース保存名を自動提案へ戻しました。"
 					: "コース保存名を更新し、保存先候補を再取得しました。";
 			messageTone = "success";
-		} catch {
+		} catch (error) {
 			suggestionStatus = null;
-			message =
-				"コース保存名は更新済みですが、保存先候補を再取得できませんでした。再読み込みしてください。";
+			const connectionIssue = nativeConnectionIssuePresentation(error);
+			message = connectionIssue
+				? `コース保存名は更新済みですが、${connectionIssue.title} ${connectionIssue.impact}`
+				: "コース保存名は更新済みですが、保存先候補を再取得できませんでした。再読み込みしてください。";
 			messageTone = "warning";
 		} finally {
 			courseFolderSaving = false;
@@ -656,7 +669,7 @@ export async function mountSavePanel(): Promise<void> {
 		const section = document.createElement("section");
 		section.className = "fuzzy-section";
 		const groups = currentSaveGroups();
-		const root = saveRootFromSuggestions(suggestions);
+		const root = configuredSaveRoot ?? saveRootFromSuggestions(suggestions);
 		const lastRelativePath = root && lastSavePath ? relativeSavePath(root, lastSavePath) : null;
 		const invalidManualPath =
 			manualRelativePath.trim().length > 0 && currentManualDestination() === null;
@@ -1041,7 +1054,7 @@ export async function mountSavePanel(): Promise<void> {
 		relativePath: string;
 		courseId: number | null;
 	} | null {
-		const root = saveRootFromSuggestions(suggestions);
+		const root = configuredSaveRoot ?? saveRootFromSuggestions(suggestions);
 		const absoluteRelativePath = root ? relativeSavePath(root, manualRelativePath) : null;
 		const relativePath =
 			absoluteRelativePath !== null
@@ -1087,7 +1100,7 @@ export async function mountSavePanel(): Promise<void> {
 
 	function currentExtractDestinationPath(): string | null {
 		if (!extractDestinationRelativePath.trim()) return null;
-		const root = saveRootFromSuggestions(suggestions);
+		const root = configuredSaveRoot ?? saveRootFromSuggestions(suggestions);
 		return root ? resolveSavePathUnderRoot(root, extractDestinationRelativePath) : null;
 	}
 
@@ -1127,9 +1140,20 @@ async function saveLastSavePath(path: string): Promise<void> {
 }
 
 function toErrorMessage(error: unknown, fallback: string): string {
+	const connectionIssue = nativeConnectionIssuePresentation(error);
+	if (connectionIssue) return `${connectionIssue.title} ${connectionIssue.impact}`;
 	return userFacingErrorMessage(error, `${fallback}。`, {
 		prefixFallback: true,
 	});
+}
+
+function throwIfEverySuggestionFailed(
+	result: Awaited<ReturnType<typeof loadFileSuggestionsWithFailures>>,
+	fileCount: number,
+): void {
+	if (fileCount > 0 && result.failedFileIds.length === fileCount && result.firstError) {
+		throw result.firstError;
+	}
 }
 
 function renderPathBreadcrumb(relativePath: string): string {

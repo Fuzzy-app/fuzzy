@@ -152,6 +152,10 @@ export class MockApiClient implements FuzzyApiClient {
 		return delay({ opened: true, page: request.page });
 	}
 
+	async getSaveRoot(): Promise<string> {
+		return delay(MOCK_SAVE_ROOT);
+	}
+
 	async suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
 		const knownCourses = this.courses;
 		const requestedCourseName = request.course.name ?? "不明なコース";

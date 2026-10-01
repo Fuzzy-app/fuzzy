@@ -82,6 +82,7 @@ fn dispatch_with_file_transfers(
 		"reportExtensionRuntime" => report_extension_runtime(database, request),
 		"syncMoodleAssignments" => sync_moodle_assignments(database, request),
 		"syncMoodleTextBlocks" => sync_moodle_text_blocks(database, request),
+		"getSaveRoot" => get_save_root(database, request),
 		"suggestSavePath" => suggest_save_path(database, request),
 		"beginCheckSimilarFile" => begin_check_similar_file(file_transfers, request),
 		"appendCheckSimilarFileChunk" => append_check_similar_file_chunk(file_transfers, request),
@@ -566,7 +567,9 @@ fn suggest_save_path(database: &mut Database, request: Request) -> Response {
 					course_id: Some(course.course_id),
 					course_name: Some(course_folder.folder_name.clone()),
 					year: course.academic_year.map(|year| year.to_string()),
-					term: course.term,
+					term: course
+						.term
+						.or_else(|| current_term_for_save_path(course.academic_year)),
 					assignment: None,
 					section: section.clone(),
 				};
@@ -598,6 +601,38 @@ fn suggest_save_path(database: &mut Database, request: Request) -> Response {
 		Ok(suggestions)
 	})();
 	respond(request.id, result)
+}
+
+fn get_save_root(database: &Database, request: Request) -> Response {
+	if let Err(response) = parse_payload::<EmptyRequest>(&request) {
+		return response;
+	}
+	respond(
+		request.id,
+		database
+			.base_folder_path()
+			.map(|path| path.to_string_lossy().into_owned()),
+	)
+}
+
+/// Moodleから学期を読めない場合、既知のコース学期を優先した後で現在時期を補う。
+fn current_term_for_save_path(course_year: Option<i64>) -> Option<String> {
+	use chrono::Datelike;
+
+	let now = chrono::Local::now();
+	let calendar_year = i64::from(now.year());
+	let current_academic_year = if now.month() < 4 {
+		calendar_year - 1
+	} else {
+		calendar_year
+	};
+	let academic_year = course_year.unwrap_or(current_academic_year);
+	let term = if (4..10).contains(&now.month()) {
+		"前期"
+	} else {
+		"後期"
+	};
+	Some(format!("{academic_year}{term}"))
 }
 
 fn begin_check_similar_file(

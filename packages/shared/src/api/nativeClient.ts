@@ -31,6 +31,7 @@ import type {
 	RuleViolationListItem,
 	SaveFilesRequest,
 	SaveFilesResult,
+	SaveRootPath,
 	SaveSuggestion,
 	SearchResult,
 	SearchScope,
@@ -365,6 +366,10 @@ export class NativeApiClient implements FuzzyApiClient {
 
 	openFile(request: OpenFileRequest): Promise<OpenFileResult> {
 		return this.send("openFile", request);
+	}
+
+	getSaveRoot(): Promise<SaveRootPath> {
+		return this.send("getSaveRoot", {});
 	}
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
