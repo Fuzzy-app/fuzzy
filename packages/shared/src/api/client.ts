@@ -26,6 +26,7 @@ import type {
 	RuleViolationListItem,
 	SaveFilesRequest,
 	SaveFilesResult,
+	SaveRootPath,
 	SaveSuggestion,
 	SearchResult,
 	SearchScope,
@@ -64,6 +65,9 @@ export interface FuzzyApiClient {
 
 	/** 検索結果の資料を利用者の明示操作で既定アプリへ開く */
 	openFile(request: OpenFileRequest): Promise<OpenFileResult>;
+
+	/** 初期設定で確定した保存ルートを取得する。 */
+	getSaveRoot(): Promise<SaveRootPath>;
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]>;
 

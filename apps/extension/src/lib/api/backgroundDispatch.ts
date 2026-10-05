@@ -52,6 +52,8 @@ export async function callBackgroundApi(
 			);
 		case "openFile":
 			return client.openFile(message.request as OpenFileRequest);
+		case "getSaveRoot":
+			return client.getSaveRoot();
 		case "suggestSavePath":
 			return client.suggestSavePath(message.request as SuggestSavePathRequest);
 		case "updateCourseFolderName":

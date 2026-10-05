@@ -32,12 +32,13 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 ### 1.2 コマンド一覧
 
-現在のNative Messaging契約バージョンは`8`とする。Moodle本文ブロック同期・検索結果の出典と遷移先・保存時の安全な衝突方針・コース内類似照合に加え、複数コースを1要求で絞り込む検索範囲を追加したため、契約バージョン`7`以前の拡張機能またはnative-hostは互換として扱わない。
+現在のNative Messaging契約バージョンは`9`とする。保存ルートを候補生成と独立して取得するコマンド、および学期未取得時の保存先提案を追加したため、契約バージョン`8`以前の拡張機能またはnative-hostは互換として扱わない。
 
 | command                    | 用途                      | payload → data（概要）                                  |
 |----------------------------|-------------------------|-----------------------------------------------------|
 | `ping`                     | native-hostの実接続判定             | `{}` → `{ version, protocolVersion }`               |
 | `reportExtensionRuntime`   | 拡張機能の実応答・バージョンをSQLiteへ記録 | `{ installationId, extensionVersion, protocolVersion }` → `ExtensionRuntimeObservation` |
+| `getSaveRoot`              | 設定済み保存ルートの取得             | `{}` → `string`                                  |
 | `suggestSavePath`          | 保存先候補の提案                | `{ course, fileMeta }` → `SaveSuggestion[]`         |
 | `beginSaveFiles`           | 取得済み資料の分割転送開始           | `{ transferId, targetPath, courseId, conflictPolicy: 'skip' \| 'rename', files: [{ fileId, fileName, mimeType, byteLength }] }` → `{ ok: true }` |
 | `appendSaveFileChunk`      | 取得済み資料のBase64チャンク追加      | `{ transferId, fileId, chunkIndex, dataBase64 }` → `{ ok: true }` |
@@ -73,7 +74,7 @@ DBスキーマは [`データベース設計.md`](../データベース設計.md
 
 `getDashboard`の`courses`要素には、保存資料から確定できた`academicYear`（年度）と`term`（学期）を含める。旧キャッシュとの互換性のため、クライアントはこれらが省略された場合を「学期未設定」として扱う。`fileCount`や`violationCount`など既存の集計値の意味は変更しない。
 
-`ping.protocolVersion`は現在の契約値`8`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。初回リリース前のため、過去世代との互換処理やマイグレーションは持たない。
+`ping.protocolVersion`は現在の契約値`9`とし、クライアントは一致した場合だけnative-hostを利用する。不一致、タイムアウト、切断時は接続を破棄して再判定できる状態へ戻す。初回リリース前のため、過去世代との互換処理やマイグレーションは持たない。
 
 `search.query`は前後の空白を除いた1〜256文字とする。検索結果は最大50件とし、SQLiteの`search_index_meta`に現在の索引完了記録があるファイルと、SQLiteの`moodle_text_blocks`にあるMoodle本文を返す。結果の`source`は`file`または`moodle_text`、Moodle本文では`moodleUrl`と`blockKey`を返す。`scope.folder`指定時はローカルファイルだけを対象にする。
 
@@ -176,7 +177,7 @@ interface SyncMoodleAssignmentsRequest {
 
 `AssignmentChange.field`は`"dueAt" | "title" | "submissionMode" | "dueAtStatus" | "submitted" | "submissionAvailability" | "moodleUrl" | "removedAt"`とする。完全スナップショットから課題が消えた場合は`removedAt`の`oldValue: null`、`newValue: syncedAt`を記録し、同じ安定IDが再び現れた場合は`oldValue: 以前のremovedAt`、`newValue: null`を記録する。削除は`removedAssignmentCount`だけ、復帰は`newAssignmentCount`だけへ計上し、`changedAssignmentCount`へ重複加算しない。したがって通知件数に用いる`newAssignmentCount + changedAssignmentCount + removedAssignmentCount`は、状態が変わった課題数と一致する。
 
-`suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。移行中は新規フィールドを省略可能とするが、拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。年度はDOM上の明示値を優先し、通常のコース名に年度がない場合はMoodleのホスト名またはURLパスから取得する。backendは`moodleCourseId`の完全一致を候補へ必ず含める。さらに既存コース名とのNFKC正規化、明確な補足除去、部分包含、文字bigram類似度、年度・学期の整合、保存済みファイルの実績を評価し、DBを自動統合せず確からしさ順の`SaveSuggestion[]`として最大5候補を返す。候補がない場合だけ新しい安定ID付きコースを登録する。`academicYear`は1900〜9999の整数または`null`とし、`term`から推測しない。
+`suggestSavePath.course`は、生のMoodle文脈`{ moodleCourseId?, name, academicYear?, term?, sectionTitle, breadcrumbs }`とする。拡張機能はMoodle安定コースID、年度、学期を取得できた場合に別フィールドで送り、コース名を加工しない。年度はDOM上の明示値を優先し、通常のコース名に年度がない場合はMoodleのホスト名またはURLパスから取得する。backendは`moodleCourseId`の完全一致を候補へ必ず含める。さらに既存コース名とのNFKC正規化、明確な補足除去、部分包含、文字bigram類似度、年度・学期の整合、保存済みファイルの実績を評価し、DBを自動統合せず確からしさ順の`SaveSuggestion[]`として最大5候補を返す。候補がない場合だけ新しい安定ID付きコースを登録する。`academicYear`は1900〜9999の整数または`null`とし、Moodleの`term`から年度を推測しない。Moodle・保存済みコース情報のどちらにも学期がない場合、保存先提案の間だけ現在のローカル日付から4〜9月を前期、10〜3月を後期として補う。保存済みコースに`3年後期`などの学期表記があればその値を優先し、推定した値をMoodle取得情報やコースの正本データとして保存しない。
 
 `SaveSuggestion`とコース保存名の型は次のとおりとする。
 
@@ -210,7 +211,7 @@ interface SaveSuggestion {
 
 `updateCourseFolderName.folderName`はユーザーが選んだ単一フォルダ名、`null`は自動提案へ戻す操作を表す。backendはNFKC後にWindows名と80 UTF-16コード単位の上限を検証し、全コースをトランザクション内で再解決する。別コースが現在使用中の実効名と同じ編集名、および再解決後に異なるコースの実効名が大文字・小文字を区別しない比較で同一になる更新は`RULE_CONFLICT`としてロールバックする。更新後の実効名を使った全保存済みファイルのルール適合注釈再計算も同じトランザクションで行い、再計算に失敗した場合はフォルダ名変更を残さない。編集によって別コースの現在の保存名を暗黙に変更しない。
 
-クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
+クライアントは資料ごとに`suggestSavePath`を呼び、選択資料の保存先が複数になった場合は同じ`path`の資料をまとめ、保存先ごとに`saveFiles`を1回ずつ呼ぶ。保存ルートは`getSaveRoot`で独立取得するため、候補が0件でも利用者は保存ルート以下の新しい相対フォルダーを入力して保存先にできる。手動指定は`relativePath`として検証し、絶対パス、UNCパス、`.`、`..`、Windowsの禁止文字・予約名を拒否する。
 
 #### 1.2.1 Moodle資料の確定・分割転送・実保存
 

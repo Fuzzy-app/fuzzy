@@ -69,6 +69,9 @@ export interface SaveSuggestion {
 	courseFolder: CourseFolderNameResolution;
 }
 
+/** SQLiteに保存された初期設定の保存ルートを示す絶対パス。 */
+export type SaveRootPath = string;
+
 /** 初期・再セットアップと常設ルール管理で共有する、表示用の構造化階層。 */
 export interface StructuredRuleSegment {
 	kind: "year" | "term" | "course" | "assignment" | "section" | "fixed";
@@ -326,4 +329,4 @@ export interface AssignmentChange {
 }
 
 /** 現在の拡張機能実応答APIの通信仕様バージョン。 */
-export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 8 as const;
+export const EXTENSION_RUNTIME_PROTOCOL_VERSION = 9 as const;

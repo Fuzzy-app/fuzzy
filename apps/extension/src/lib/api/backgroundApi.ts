@@ -28,6 +28,7 @@ import type {
 	ReconcileCourseFilesRequest,
 	RuleUpdateResult,
 	SaveFilesResult,
+	SaveRootPath,
 	SaveSuggestion,
 	SearchResult,
 	SearchScope,
@@ -51,6 +52,7 @@ const BACKGROUND_API_METHODS = [
 	"updateSubmissionStatus",
 	"search",
 	"openFile",
+	"getSaveRoot",
 	"suggestSavePath",
 	"updateCourseFolderName",
 	"checkSimilarFiles",
@@ -128,6 +130,8 @@ function isRequestForMethod(method: BackgroundApiMethod, request: unknown): bool
 				isPositiveInteger(request.fileId) &&
 				(request.page === undefined || request.page === null || isPositiveInteger(request.page))
 			);
+		case "getSaveRoot":
+			return isRecord(request) && Object.keys(request).length === 0;
 		case "suggestSavePath":
 			return (
 				isRecord(request) &&
@@ -462,6 +466,10 @@ export class BackgroundApiClient implements BackgroundApi {
 
 	openFile(request: OpenFileRequest): Promise<OpenFileResult> {
 		return this.#call("openFile", request);
+	}
+
+	getSaveRoot(): Promise<SaveRootPath> {
+		return this.#call("getSaveRoot", {});
 	}
 
 	suggestSavePath(request: SuggestSavePathRequest): Promise<SaveSuggestion[]> {
